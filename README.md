@@ -3,14 +3,34 @@
 GenericClient is a RuneLite plugin that displays client status, logs nearby NPC
 data, and uses the native mouse to click a random nearby ground tile.
 
-## Run
+## Install on Windows
+
+Close RuneLite, then run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The installer downloads `GenericClient.jar`, preserves RuneLite's original
+launch configuration as `config.stock.json`, and configures the normal Jagex
+Launcher **Play** action to start GenericClient. It does not use RuneLite
+development mode.
+
+To restore the original launch configuration:
+
+```powershell
+Copy-Item "$env:LOCALAPPDATA\RuneLite\config.stock.json" `
+  "$env:LOCALAPPDATA\RuneLite\config.json" -Force
+```
+
+## Run from source
 
 ```bash
 ./gradlew run
 ```
 
 This launches the current stock RuneLite release and loads `GenericClientPlugin`
-through `ExternalPluginManager.loadBuiltin`.
+through `ExternalPluginManager.loadBuiltin` without development mode.
 
 After logging in, open the GenericClient sidebar:
 
