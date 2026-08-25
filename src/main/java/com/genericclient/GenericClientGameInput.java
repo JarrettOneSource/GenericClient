@@ -11,6 +11,7 @@ import java.awt.event.InputEvent;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -52,7 +53,10 @@ final class GenericClientGameInput implements AutoCloseable
 	private volatile int expectedParam1;
 	private volatile int expectedWorldViewId;
 	private volatile int targetAttemptsRemaining;
+	private volatile SelectionMode selectionMode;
+	private volatile WorldPoint requestedWorldPoint;
 	private volatile Robot robot;
+	private volatile CompletableFuture<String> activeResult;
 
 	GenericClientGameInput(
 		Client client,
@@ -66,19 +70,42 @@ final class GenericClientGameInput implements AutoCloseable
 		this.reporter = reporter;
 	}
 
-	void walkToRandomTile()
+	CompletableFuture<String> walkToRandomTile()
 	{
+		return beginWalkClick(SelectionMode.RANDOM, null);
+	}
+
+	CompletableFuture<String> walkToTile(WorldPoint worldPoint)
+	{
+		if (worldPoint == null)
+		{
+			throw new IllegalArgumentException("Walk tile cannot be null");
+		}
+		return beginWalkClick(SelectionMode.SPECIFIED, worldPoint);
+	}
+
+	private CompletableFuture<String> beginWalkClick(SelectionMode mode, WorldPoint worldPoint)
+	{
+		CompletableFuture<String> result = new CompletableFuture<>();
 		if (!running.compareAndSet(false, true))
 		{
-			reporter.accept("WALK_CLICK_ALREADY_RUNNING");
-			return;
+			String message = "WALK_CLICK_ALREADY_RUNNING";
+			reporter.accept(message);
+			result.complete(message);
+			return result;
 		}
 
+		activeResult = result;
 		awaitingMenuResult = false;
 		targetWorldPoint = null;
+		selectionMode = mode;
+		requestedWorldPoint = worldPoint;
 		targetAttemptsRemaining = MAX_TARGET_ATTEMPTS;
-		reporter.accept("WALK_CLICK_SELECTING_TILE");
+		reporter.accept(mode == SelectionMode.RANDOM
+			? "WALK_CLICK_SELECTING_TILE"
+			: "WALK_TILE_SELECTING tile=" + worldPoint);
 		clientThread.invoke(this::selectTargetOnClientThread);
+		return result;
 	}
 
 	void onMenuOptionClicked(MenuOptionClicked event)
@@ -103,7 +130,8 @@ final class GenericClientGameInput implements AutoCloseable
 
 		awaitingMenuResult = false;
 		String result = String.format(
-			"WALK_CLICK_EXECUTED action=%s option=%s target=%s selectedTile=%s param0=%d param1=%d",
+			"%s action=%s option=%s target=%s selectedTile=%s param0=%d param1=%d",
+			selectionMode == SelectionMode.RANDOM ? "WALK_CLICK_EXECUTED" : "WALK_TILE_CLICK_EXECUTED",
 			event.getMenuAction(),
 			event.getMenuOption(),
 			event.getMenuTarget(),
@@ -111,6 +139,14 @@ final class GenericClientGameInput implements AutoCloseable
 			event.getParam0(),
 			event.getParam1());
 		finish(result);
+	}
+
+	void cancelWalkToTile()
+	{
+		if (running.get() && selectionMode == SelectionMode.SPECIFIED)
+		{
+			finish("WALK_TILE_CLICK_CANCELLED");
+		}
 	}
 
 	private void selectTargetOnClientThread()
@@ -132,7 +168,34 @@ final class GenericClientGameInput implements AutoCloseable
 			return;
 		}
 
-		Target target = chooseRandomVisibleTile(player);
+		Target target;
+		if (selectionMode == SelectionMode.SPECIFIED)
+		{
+			WorldPoint requested = requestedWorldPoint;
+			WorldPoint playerWorldPoint = player.getWorldLocation();
+			if (requested == null || playerWorldPoint == null ||
+				requested.getPlane() != playerWorldPoint.getPlane())
+			{
+				finish("WALK_TILE_CLICK_FAILED reason=target_plane_unavailable tile=" + requested);
+				return;
+			}
+			LocalPoint local = LocalPoint.fromWorld(player.getWorldView(), requested);
+			if (local == null)
+			{
+				finish("WALK_TILE_CLICK_FAILED reason=tile_not_in_scene tile=" + requested);
+				return;
+			}
+			target = targetForLocalPoint(local, requested);
+			if (target == null)
+			{
+				finish("WALK_TILE_CLICK_FAILED reason=tile_not_visible tile=" + requested);
+				return;
+			}
+		}
+		else
+		{
+			target = chooseRandomVisibleTile(player);
+		}
 		if (target == null)
 		{
 			finish("WALK_CLICK_FAILED reason=no_visible_nearby_tile");
@@ -173,22 +236,28 @@ final class GenericClientGameInput implements AutoCloseable
 				playerLocation.getX() + offset[0] * LOCAL_TILE_SIZE,
 				playerLocation.getY() + offset[1] * LOCAL_TILE_SIZE,
 				playerLocation.getWorldView());
-			Polygon polygon = Perspective.getCanvasTilePoly(client, local);
-			if (polygon == null)
-			{
-				continue;
-			}
-
-			java.awt.Point point = randomPointInside(polygon);
-			if (point == null)
-			{
-				continue;
-			}
-
 			WorldPoint worldPoint = WorldPoint.fromLocal(client, local);
-			return new Target(new net.runelite.api.Point(point.x, point.y), worldPoint);
+			Target target = targetForLocalPoint(local, worldPoint);
+			if (target != null)
+			{
+				return target;
+			}
 		}
 		return null;
+	}
+
+	private Target targetForLocalPoint(LocalPoint local, WorldPoint worldPoint)
+	{
+		Polygon polygon = Perspective.getCanvasTilePoly(client, local);
+		if (polygon == null)
+		{
+			return null;
+		}
+
+		java.awt.Point point = randomPointInside(polygon);
+		return point == null
+			? null
+			: new Target(new net.runelite.api.Point(point.x, point.y), worldPoint);
 	}
 
 	private java.awt.Point randomPointInside(Polygon polygon)
@@ -308,6 +377,12 @@ final class GenericClientGameInput implements AutoCloseable
 		MenuEntry topEntry = entries[entries.length - 1];
 		if (topEntry.getType() != MenuAction.WALK)
 		{
+			if (selectionMode == SelectionMode.SPECIFIED)
+			{
+				finish("WALK_TILE_CLICK_FAILED reason=not_walk_target action=" + topEntry.getType() +
+					" option=" + topEntry.getOption() + " tile=" + target.worldPoint);
+				return;
+			}
 			targetAttemptsRemaining--;
 			if (targetAttemptsRemaining > 0)
 			{
@@ -386,10 +461,19 @@ final class GenericClientGameInput implements AutoCloseable
 
 	private void finish(String result)
 	{
+		if (!running.getAndSet(false))
+		{
+			return;
+		}
 		awaitingMenuResult = false;
-		running.set(false);
 		cancelPending();
 		reporter.accept(result);
+		CompletableFuture<String> completion = activeResult;
+		activeResult = null;
+		if (completion != null)
+		{
+			completion.complete(result);
+		}
 	}
 
 	private void cancelPending()
@@ -404,7 +488,14 @@ final class GenericClientGameInput implements AutoCloseable
 	@Override
 	public void close()
 	{
-		finish("WALK_CLICK_STOPPED");
+		if (running.get())
+		{
+			finish("WALK_CLICK_STOPPED");
+		}
+		else
+		{
+			cancelPending();
+		}
 	}
 
 	private static final class Target
@@ -417,5 +508,11 @@ final class GenericClientGameInput implements AutoCloseable
 			this.canvasPoint = canvasPoint;
 			this.worldPoint = worldPoint;
 		}
+	}
+
+	private enum SelectionMode
+	{
+		RANDOM,
+		SPECIFIED
 	}
 }

@@ -6,6 +6,7 @@ import java.awt.Dimension;
 import java.awt.GridLayout;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -22,14 +23,24 @@ final class GenericClientPanel extends PluginPanel
 	private final JLabel npcValue = valueLabel("0");
 	private final JLabel statusValue = valueLabel("Waiting for plugin startup");
 	private final JTextArea npcDiagnostics = new JTextArea("No NPC snapshot captured yet.");
+	private final JLabel luaScriptValue = valueLabel("none");
+	private final JLabel luaStatusValue = valueLabel("IDLE");
+	private final JComboBox<String> luaScripts = new JComboBox<>();
+	private final JTextArea luaLogs = new JTextArea("No Lua output yet.");
+	private final GenericClientLuaHost luaHost;
 
-	GenericClientPanel(Runnable printDiagnostics, Runnable logNearbyNpcs, Runnable walkToRandomTile)
+	GenericClientPanel(
+		Runnable printDiagnostics,
+		Runnable logNearbyNpcs,
+		Runnable walkToRandomTile,
+		GenericClientLuaHost luaHost)
 	{
+		this.luaHost = luaHost;
 		JLabel title = new JLabel("<html><b>GenericClient</b></html>");
 		title.setForeground(Color.WHITE);
 		add(title);
 
-		JLabel explanation = new JLabel("<html>Client status and nearby NPC diagnostics.</html>");
+		JLabel explanation = new JLabel("<html>Client diagnostics and Lua scripts.</html>");
 		explanation.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		add(explanation);
 
@@ -52,6 +63,46 @@ final class GenericClientPanel extends PluginPanel
 		JButton clickButton = new JButton("Walk to random tile");
 		clickButton.addActionListener(event -> walkToRandomTile.run());
 		add(clickButton);
+
+		JPanel luaSection = section("Lua scripts");
+		luaSection.add(row("Active", luaScriptValue));
+		luaSection.add(row("Status", luaStatusValue));
+		luaSection.add(luaScripts);
+
+		JPanel luaButtons = new JPanel(new GridLayout(2, 2, 4, 4));
+		luaButtons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		JButton scanButton = new JButton("Scan");
+		scanButton.addActionListener(event -> refreshScripts());
+		luaButtons.add(scanButton);
+		JButton startButton = new JButton("Start");
+		startButton.addActionListener(event ->
+		{
+			Object selection = luaScripts.getSelectedItem();
+			if (selection != null)
+			{
+				luaHost.start(selection.toString());
+			}
+		});
+		luaButtons.add(startButton);
+		JButton reloadButton = new JButton("Reload");
+		reloadButton.addActionListener(event -> luaHost.reload());
+		luaButtons.add(reloadButton);
+		JButton stopButton = new JButton("Stop");
+		stopButton.addActionListener(event -> luaHost.stop());
+		luaButtons.add(stopButton);
+		luaSection.add(luaButtons);
+
+		luaLogs.setEditable(false);
+		luaLogs.setLineWrap(false);
+		luaLogs.setRows(8);
+		luaLogs.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		luaLogs.setForeground(Color.WHITE);
+		luaLogs.setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, 11));
+		JScrollPane luaScrollPane = new JScrollPane(luaLogs);
+		luaScrollPane.setPreferredSize(new Dimension(205, 150));
+		luaSection.add(luaScrollPane);
+		add(luaSection);
+		refreshScripts();
 
 		JPanel npcSection = section("Latest NPC snapshot");
 		npcDiagnostics.setEditable(false);
@@ -85,6 +136,35 @@ final class GenericClientPanel extends PluginPanel
 			npcDiagnostics.setText(diagnostics);
 			npcDiagnostics.setCaretPosition(0);
 		});
+	}
+
+	void updateLuaState(String script, String status, String logs)
+	{
+		runOnEdt(() ->
+		{
+			luaScriptValue.setText(script);
+			luaStatusValue.setText(status);
+			luaLogs.setText(logs.isEmpty() ? "No Lua output yet." : logs);
+			luaLogs.setCaretPosition(luaLogs.getDocument().getLength());
+		});
+	}
+
+	private void refreshScripts()
+	{
+		Object selected = luaScripts.getSelectedItem();
+		luaScripts.removeAllItems();
+		for (String script : luaHost.listScripts())
+		{
+			luaScripts.addItem(script);
+		}
+		if (selected != null)
+		{
+			luaScripts.setSelectedItem(selected);
+		}
+		if (luaScripts.getSelectedItem() == null && luaScripts.getItemCount() > 0)
+		{
+			luaScripts.setSelectedIndex(0);
+		}
 	}
 
 	private static JPanel section(String title)

@@ -50,6 +50,10 @@ final class GenericClientOverlay extends OverlayPanel
 			.right(Integer.toString(plugin.getNearbyNpcCount()))
 			.build());
 		panelComponent.getChildren().add(LineComponent.builder()
+			.left("Lua")
+			.right(shorten(plugin.getLuaScript() + " " + plugin.getLuaStatus(), 42))
+			.build());
+		panelComponent.getChildren().add(LineComponent.builder()
 			.left("Last result")
 			.right(shorten(plugin.getLastStatus(), 42))
 			.build());

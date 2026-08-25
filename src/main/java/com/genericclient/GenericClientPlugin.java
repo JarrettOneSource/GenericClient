@@ -7,23 +7,13 @@ import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.stream.Collectors;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
-import net.runelite.api.NPC;
-import net.runelite.api.NPCComposition;
 import net.runelite.api.Player;
-import net.runelite.api.WorldView;
-import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuOptionClicked;
@@ -40,8 +30,8 @@ import net.runelite.client.ui.overlay.OverlayManager;
 @Slf4j
 @PluginDescriptor(
 	name = "GenericClient",
-	description = "Logs client state and drives a native ground-tile click",
-	tags = {"genericclient", "diagnostics"},
+	description = "Runs Lua scripts over client snapshots and native game actions",
+	tags = {"genericclient", "diagnostics", "lua", "scripting"},
 	loadInSafeMode = false
 )
 public final class GenericClientPlugin extends Plugin
@@ -80,18 +70,32 @@ public final class GenericClientPlugin extends Plugin
 
 	private GenericClientPanel panel;
 	private GenericClientGameInput gameInput;
+	private GenericClientWalker walker;
+	private GenericClientLuaHost luaHost;
 	private NavigationButton navigationButton;
 
 	@Override
-	protected void startUp()
+	protected void startUp() throws Exception
 	{
 		startedAt = Instant.now();
 		lifecycle = "RUNNING";
 		gameStateName = client.getGameState().name();
 		lastStatus = "PLUGIN_STARTED stock RuneLite loaded GenericClient";
 		initialNpcSnapshotLogged = false;
+		GenericClientCollisionMap collisionMap = GenericClientCollisionMap.loadBundled();
 		gameInput = new GenericClientGameInput(client, clientThread, executor, this::publishResult);
-		panel = new GenericClientPanel(this::printDiagnostics, this::logNearbyNpcs, gameInput::walkToRandomTile);
+		walker = new GenericClientWalker(gameInput, collisionMap, this::publishResult);
+		luaHost = new GenericClientLuaHost(
+			net.runelite.client.RuneLite.RUNELITE_DIR.toPath().resolve("genericclient").resolve("scripts"),
+			gameInput::walkToRandomTile,
+			walker::walkTo,
+			walker::cancelActive,
+			this::publishResult);
+		panel = new GenericClientPanel(
+			this::printDiagnostics,
+			this::logNearbyNpcs,
+			() -> gameInput.walkToRandomTile(),
+			luaHost);
 		navigationButton = NavigationButton.builder()
 			.tooltip("GenericClient")
 			.icon(createIcon())
@@ -108,13 +112,29 @@ public final class GenericClientPlugin extends Plugin
 			RuneLiteProperties.getVersion(),
 			getClass().getClassLoader().getClass().getName(),
 			Thread.currentThread().getName());
+		log.info("{} COLLISION_MAP_LOADED regions={} revision={} sha256={}",
+			LOG_PREFIX,
+			collisionMap.getRegionCount(),
+			GenericClientCollisionMap.SOURCE_REVISION,
+			GenericClientCollisionMap.SOURCE_SHA256);
 		printDiagnostics();
+		luaHost.start(GenericClientLuaHost.DIAGNOSTIC_SCRIPT);
 	}
 
 	@Override
 	protected void shutDown()
 	{
 		lifecycle = "STOPPING";
+		if (luaHost != null)
+		{
+			luaHost.close();
+			luaHost = null;
+		}
+		if (walker != null)
+		{
+			walker.close();
+			walker = null;
+		}
 		if (gameInput != null)
 		{
 			gameInput.close();
@@ -146,7 +166,18 @@ public final class GenericClientPlugin extends Plugin
 	public void onGameTick(GameTick event)
 	{
 		tickCount++;
-		nearbyNpcCount = countNearbyNpcs(config.npcLogRadius());
+		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(client, tickCount);
+		nearbyNpcCount = snapshot.countNearbyNpcs(config.npcLogRadius());
+		GenericClientWalker activeWalker = walker;
+		if (activeWalker != null)
+		{
+			activeWalker.publishGameTick(snapshot);
+		}
+		GenericClientLuaHost scripts = luaHost;
+		if (scripts != null)
+		{
+			scripts.publishGameTick(snapshot);
+		}
 		if (!initialNpcSnapshotLogged && client.getLocalPlayer() != null)
 		{
 			logNearbyNpcsOnClientThread();
@@ -208,116 +239,25 @@ public final class GenericClientPlugin extends Plugin
 
 	private void logNearbyNpcsOnClientThread()
 	{
-		Player player = client.getLocalPlayer();
-		if (client.getGameState() != GameState.LOGGED_IN || player == null)
+		if (client.getGameState() != GameState.LOGGED_IN || client.getLocalPlayer() == null)
 		{
 			publishResult("NPC_SNAPSHOT_ABORTED player_not_logged_in");
 			return;
 		}
 
-		WorldPoint playerPoint = player.getWorldLocation();
-		WorldView worldView = player.getWorldView();
-		List<NPC> nearby = new ArrayList<>();
-		for (NPC npc : worldView.npcs())
-		{
-			if (npc != null && npc.getWorldLocation() != null &&
-				playerPoint.distanceTo(npc.getWorldLocation()) <= config.npcLogRadius())
-			{
-				nearby.add(npc);
-			}
-		}
-		nearby.sort(Comparator.comparingInt(npc -> playerPoint.distanceTo(npc.getWorldLocation())));
+		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(client, tickCount);
 		initialNpcSnapshotLogged = true;
-		nearbyNpcCount = nearby.size();
-
-		log.info("{} NPC_SNAPSHOT_BEGIN radius={} total={} playerLocation={} worldView={}",
-			LOG_PREFIX, config.npcLogRadius(), nearby.size(), playerPoint, worldView.getId());
-		StringBuilder panelOutput = new StringBuilder();
-		panelOutput.append("radius=").append(config.npcLogRadius())
-			.append(" total=").append(nearby.size())
-			.append("\nplayer=").append(playerPoint)
-			.append("\n\n");
-
-		int logged = Math.min(nearby.size(), NPC_LOG_LIMIT);
-		for (int i = 0; i < logged; i++)
-		{
-			NPC npc = nearby.get(i);
-			WorldPoint location = npc.getWorldLocation();
-			int distance = playerPoint.distanceTo(location);
-			String name = Objects.toString(npc.getName(), "<unnamed>");
-			String actions = getActions(npc);
-			log.info(
-				"{} NPC index={} id={} name={} location={} distance={} combatLevel={} animation={} interacting={} actions={}",
-				LOG_PREFIX,
-				npc.getIndex(),
-				npc.getId(),
-				name,
-				location,
-				distance,
-				npc.getCombatLevel(),
-				npc.getAnimation(),
-				npc.getInteracting() == null ? "none" : npc.getInteracting().getName(),
-				actions);
-			panelOutput.append(String.format(
-				"%02d %-18s id=%d idx=%d d=%d\n    at=%s combat=%d\n    actions=%s\n",
-				i + 1,
-				name,
-				npc.getId(),
-				npc.getIndex(),
-				distance,
-				location,
-				npc.getCombatLevel(),
-				actions));
-		}
-		if (nearby.size() > logged)
-		{
-			panelOutput.append("\n...").append(nearby.size() - logged).append(" additional NPCs omitted");
-		}
-
-		log.info("{} NPC_SNAPSHOT_END logged={} total={}", LOG_PREFIX, logged, nearby.size());
+		nearbyNpcCount = snapshot.countNearbyNpcs(config.npcLogRadius());
+		int logged = Math.min(nearbyNpcCount, NPC_LOG_LIMIT);
+		String panelOutput = snapshot.formatNpcDiagnostics(config.npcLogRadius(), NPC_LOG_LIMIT);
+		log.info("{} NPC_SNAPSHOT\n{}", LOG_PREFIX, panelOutput);
 		GenericClientPanel currentPanel = panel;
 		if (currentPanel != null)
 		{
-			currentPanel.updateNpcDiagnostics(panelOutput.toString());
+			currentPanel.updateNpcDiagnostics(panelOutput);
 		}
-		publishResult("NPC_SNAPSHOT_WRITTEN logged=" + logged + " total=" + nearby.size());
+		publishResult("NPC_SNAPSHOT_WRITTEN logged=" + logged + " total=" + nearbyNpcCount);
 		postChat("GenericClient logged " + logged + " nearby NPCs");
-	}
-
-	private int countNearbyNpcs(int radius)
-	{
-		Player player = client.getLocalPlayer();
-		if (player == null)
-		{
-			return 0;
-		}
-		WorldPoint playerPoint = player.getWorldLocation();
-		int count = 0;
-		for (NPC npc : player.getWorldView().npcs())
-		{
-			if (npc != null && npc.getWorldLocation() != null &&
-				playerPoint.distanceTo(npc.getWorldLocation()) <= radius)
-			{
-				count++;
-			}
-		}
-		return count;
-	}
-
-	private static String getActions(NPC npc)
-	{
-		NPCComposition composition = npc.getTransformedComposition();
-		if (composition == null)
-		{
-			composition = npc.getComposition();
-		}
-		if (composition == null || composition.getActions() == null)
-		{
-			return "[]";
-		}
-		return Arrays.stream(composition.getActions())
-			.filter(Objects::nonNull)
-			.collect(Collectors.joining(", ", "[", "]"));
 	}
 
 	private void publishResult(String result)
@@ -334,7 +274,9 @@ public final class GenericClientPlugin extends Plugin
 
 	private void postChat(String message)
 	{
-		if (config.chatNotifications() && client.getGameState() == GameState.LOGGED_IN)
+		if (config.chatNotifications() &&
+			client.getGameState() == GameState.LOGGED_IN &&
+			client.getLocalPlayer() != null)
 		{
 			client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null);
 		}
@@ -348,6 +290,11 @@ public final class GenericClientPlugin extends Plugin
 			return;
 		}
 		currentPanel.updateLiveState(lifecycle, gameStateName, tickCount, nearbyNpcCount, lastStatus);
+		GenericClientLuaHost scripts = luaHost;
+		if (scripts != null)
+		{
+			currentPanel.updateLuaState(scripts.getActiveScript(), scripts.getStatus(), scripts.getRecentLogs());
+		}
 	}
 
 	private static BufferedImage createIcon()
@@ -398,6 +345,18 @@ public final class GenericClientPlugin extends Plugin
 	String getLastStatus()
 	{
 		return lastStatus;
+	}
+
+	String getLuaStatus()
+	{
+		GenericClientLuaHost scripts = luaHost;
+		return scripts == null ? "IDLE" : scripts.getStatus();
+	}
+
+	String getLuaScript()
+	{
+		GenericClientLuaHost scripts = luaHost;
+		return scripts == null ? "none" : scripts.getActiveScript();
 	}
 
 	@Provides

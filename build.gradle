@@ -16,8 +16,16 @@ repositories {
 def runeLiteVersion = 'latest.release'
 def pluginMainClass = 'com.genericclient.GenericClientLauncher'
 
+configurations {
+	standaloneRuntime
+}
+
 dependencies {
 	compileOnly group: 'net.runelite', name:'client', version: runeLiteVersion
+	implementation 'party.iroiro.luajava:lua54:4.1.0'
+	runtimeOnly 'party.iroiro.luajava:lua54-platform:4.1.0:natives-desktop'
+	standaloneRuntime group: 'net.runelite', name:'client', version: runeLiteVersion
+	standaloneRuntime group: 'net.runelite', name:'jshell', version: runeLiteVersion
 
 	compileOnly 'org.projectlombok:lombok:1.18.30'
 	annotationProcessor 'org.projectlombok:lombok:1.18.30'
@@ -28,7 +36,7 @@ dependencies {
 }
 
 group = 'com.genericclient'
-version = '0.1.0'
+version = '0.2.0'
 
 tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'
@@ -37,7 +45,7 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 tasks.register('run', JavaExec) {
-	classpath = sourceSets.test.runtimeClasspath
+	classpath = sourceSets.main.runtimeClasspath + configurations.standaloneRuntime
 	mainClass = pluginMainClass
 
 	jvmArgs "-ea"
@@ -45,16 +53,15 @@ tasks.register('run', JavaExec) {
 }
 
 tasks.register('shadowJar', Jar) {
-	dependsOn configurations.testRuntimeClasspath
+	dependsOn configurations.runtimeClasspath, configurations.standaloneRuntime
 	manifest {
 		attributes('Main-Class': pluginMainClass, 'Multi-Release': true)
 	}
 
 	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 	from sourceSets.main.output
-	from sourceSets.test.output
 	from {
-		configurations.testRuntimeClasspath.collect { file ->
+		(configurations.runtimeClasspath + configurations.standaloneRuntime).collect { file ->
 			file.isDirectory() ? file : zipTree(file)
 		}
 	}
