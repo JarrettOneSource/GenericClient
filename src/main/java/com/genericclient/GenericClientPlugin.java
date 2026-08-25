@@ -76,6 +76,7 @@ public final class GenericClientPlugin extends Plugin
 	private volatile long tickCount;
 	private volatile int nearbyNpcCount;
 	private volatile Instant startedAt;
+	private boolean initialNpcSnapshotLogged;
 
 	private GenericClientPanel panel;
 	private GenericClientGameInput gameInput;
@@ -88,6 +89,7 @@ public final class GenericClientPlugin extends Plugin
 		lifecycle = "RUNNING";
 		gameStateName = client.getGameState().name();
 		lastStatus = "PLUGIN_STARTED stock RuneLite loaded GenericClient";
+		initialNpcSnapshotLogged = false;
 		gameInput = new GenericClientGameInput(client, clientThread, executor, this::publishResult);
 		panel = new GenericClientPanel(this::printDiagnostics, this::logNearbyNpcs, gameInput::walkToRandomTile);
 		navigationButton = NavigationButton.builder()
@@ -145,6 +147,10 @@ public final class GenericClientPlugin extends Plugin
 	{
 		tickCount++;
 		nearbyNpcCount = countNearbyNpcs(config.npcLogRadius());
+		if (!initialNpcSnapshotLogged && client.getLocalPlayer() != null)
+		{
+			logNearbyNpcsOnClientThread();
+		}
 		if (tickCount == 1)
 		{
 			log.info("{} FIRST_GAME_TICK state={} nearbyNpcCount={}",
@@ -221,6 +227,7 @@ public final class GenericClientPlugin extends Plugin
 			}
 		}
 		nearby.sort(Comparator.comparingInt(npc -> playerPoint.distanceTo(npc.getWorldLocation())));
+		initialNpcSnapshotLogged = true;
 		nearbyNpcCount = nearby.size();
 
 		log.info("{} NPC_SNAPSHOT_BEGIN radius={} total={} playerLocation={} worldView={}",

@@ -25,8 +25,6 @@ final class GenericClientPanel extends PluginPanel
 
 	GenericClientPanel(Runnable printDiagnostics, Runnable logNearbyNpcs, Runnable walkToRandomTile)
 	{
-		setLayout(new GridLayout(0, 1, 0, 8));
-
 		JLabel title = new JLabel("<html><b>GenericClient</b></html>");
 		title.setForeground(Color.WHITE);
 		add(title);
