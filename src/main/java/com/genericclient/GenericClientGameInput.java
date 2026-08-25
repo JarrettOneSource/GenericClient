@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -36,7 +37,7 @@ final class GenericClientGameInput implements AutoCloseable
 	private static final long MOVE_STEP_MILLIS = 18L;
 	private static final long HOVER_SETTLE_MILLIS = 250L;
 	private static final long CLICK_RESULT_TIMEOUT_MILLIS = 2500L;
-	private static final int MAX_TARGET_ATTEMPTS = 8;
+	private static final int MAX_TARGET_ATTEMPTS = 20;
 
 	private final Client client;
 	private final ClientThread clientThread;
@@ -178,16 +179,29 @@ final class GenericClientGameInput implements AutoCloseable
 				continue;
 			}
 
-			Rectangle bounds = polygon.getBounds();
-			int x = (int) bounds.getCenterX();
-			int y = (int) bounds.getCenterY();
-			if (!polygon.contains(x, y) || !insideViewport(x, y))
+			java.awt.Point point = randomPointInside(polygon);
+			if (point == null)
 			{
 				continue;
 			}
 
 			WorldPoint worldPoint = WorldPoint.fromLocal(client, local);
-			return new Target(new net.runelite.api.Point(x, y), worldPoint);
+			return new Target(new net.runelite.api.Point(point.x, point.y), worldPoint);
+		}
+		return null;
+	}
+
+	private java.awt.Point randomPointInside(Polygon polygon)
+	{
+		Rectangle bounds = polygon.getBounds();
+		for (int attempt = 0; attempt < 12; attempt++)
+		{
+			int x = ThreadLocalRandom.current().nextInt(bounds.x, bounds.x + Math.max(1, bounds.width));
+			int y = ThreadLocalRandom.current().nextInt(bounds.y, bounds.y + Math.max(1, bounds.height));
+			if (polygon.contains(x, y) && insideViewport(x, y))
+			{
+				return new java.awt.Point(x, y);
+			}
 		}
 		return null;
 	}
