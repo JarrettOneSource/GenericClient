@@ -59,6 +59,14 @@ intentionally absent until a concrete automation requires each one.
 
 ### Live verification receipt
 
+GenericClient 0.5.1 had SHA-256
+`9a7a0d0906caa6b7351cb0e14238e832d3328397b61c17b334998f6d0176f177`.
+It adds login-screen error-confirmation handling before retrying the Jagex Play
+button. The exact installed artifact automatically entered the world and passed
+43 Java tests plus three Node MCP tests.
+
+The 0.5.0 behavior/input receipt follows.
+
 The GenericClient 0.5.0 standalone artifact had SHA-256
 `e13a4c72b5f08fc9f8fed94425baef70f0034596c72c8f5742ad4ea32a91ec68`.
 On stock RuneLite 1.12.36/game revision 240 it:

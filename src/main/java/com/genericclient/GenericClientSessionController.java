@@ -47,6 +47,7 @@ final class GenericClientSessionController implements AutoCloseable
 
 	private CompletableFuture<String> activeOperation;
 	private boolean loginClickIssued;
+	private int loginScreenAttempt;
 	private boolean closed;
 
 	GenericClientSessionController(
@@ -187,6 +188,7 @@ final class GenericClientSessionController implements AutoCloseable
 			}
 			activeOperation = new CompletableFuture<>();
 			operation = activeOperation;
+			loginScreenAttempt = 0;
 		}
 		reporter.accept("SESSION_LOGIN_STARTED");
 		long deadline = System.currentTimeMillis() + timeoutMillis;
@@ -284,8 +286,11 @@ final class GenericClientSessionController implements AutoCloseable
 				failActive("Jagex Launcher session is unavailable");
 				return;
 			}
+			Point target = loginScreenAttempt++ % 2 == 0
+				? loginButtonPoint(view.canvasWidth(), view.canvasHeight())
+				: loginConfirmationPoint(view.canvasWidth(), view.canvasHeight());
 			loginClickIssued = true;
-			clickPoint(loginButtonPoint(view.canvasWidth(), view.canvasHeight())).whenComplete((ignored, error) ->
+			clickPoint(target).whenComplete((ignored, error) ->
 			{
 				if (error != null)
 				{
@@ -369,6 +374,13 @@ final class GenericClientSessionController implements AutoCloseable
 		return new Point(
 			Math.max(0, canvasWidth / 2),
 			Math.max(0, (int) Math.round(canvasHeight * 0.67)));
+	}
+
+	static Point loginConfirmationPoint(int canvasWidth, int canvasHeight)
+	{
+		return new Point(
+			Math.max(0, canvasWidth / 2),
+			Math.max(0, (int) Math.round(canvasHeight * 0.60)));
 	}
 
 	private void schedule(Runnable runnable, long delayMillis)

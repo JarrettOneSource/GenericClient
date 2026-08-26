@@ -99,6 +99,33 @@ public class GenericClientSessionControllerTest
 	}
 
 	@Test
+	public void dismissesALoginErrorBeforeRetryingTheJagexPlayButton() throws Exception
+	{
+		FakeView view = new FakeView();
+		view.gameState = GameState.LOGIN_SCREEN;
+		view.launcherDisplayName = "Player";
+		view.canvasWidth = 765;
+		view.canvasHeight = 503;
+		FakeInput input = new FakeInput();
+		input.onClick = () ->
+		{
+			if (input.clicks.get() == 3)
+			{
+				view.gameState = GameState.LOGGED_IN;
+			}
+		};
+
+		try (Fixture fixture = fixture(view, input))
+		{
+			assertEquals("SESSION_LOGGED_IN",
+				fixture.controller.ensureLoggedIn().get(5, TimeUnit.SECONDS));
+			assertEquals(new Point(382, 251), input.moves.get(0));
+			assertEquals(new Point(382, 302), input.moves.get(1));
+			assertEquals(new Point(382, 251), input.moves.get(2));
+		}
+	}
+
+	@Test
 	public void completesImmediatelyWhenAlreadyInTheWorld() throws Exception
 	{
 		FakeView view = new FakeView();
@@ -159,6 +186,8 @@ public class GenericClientSessionControllerTest
 		assertEquals(new Point(0, 0), GenericClientSessionController.loginButtonPoint(0, 0));
 		assertEquals(new Point(382, 337),
 			GenericClientSessionController.clickToPlayFallbackPoint(765, 503));
+		assertEquals(new Point(382, 302),
+			GenericClientSessionController.loginConfirmationPoint(765, 503));
 	}
 
 	private static Fixture fixture(FakeView view, FakeInput input)
@@ -170,7 +199,7 @@ public class GenericClientSessionControllerTest
 			executor,
 			message -> { },
 			10L,
-			2_000L);
+			5_000L);
 		return new Fixture(controller, executor);
 	}
 

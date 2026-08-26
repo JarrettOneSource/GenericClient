@@ -189,11 +189,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.5.0.jar`
-- `build/libs/GenericClient-0.5.0-all.jar`
+- `build/libs/generic-client-0.5.1.jar`
+- `build/libs/GenericClient-0.5.1-all.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.5.0-all.jar
+java -ea -jar build/libs/GenericClient-0.5.1-all.jar
 ```
