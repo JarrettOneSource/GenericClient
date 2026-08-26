@@ -9,7 +9,7 @@ Codex
   -> GenericClient MCP server (stdio)
       -> http://127.0.0.1:17343/rpc
           -> Lua host
-              -> snapshots, walker, and native mouse input
+              -> snapshots, behavior controller, walker, and synthetic input
 ```
 
 RuneLite must be running with GenericClient loaded. The sidebar and MCP tools
@@ -56,6 +56,10 @@ the same port in the MCP server configuration.
 | Tool | Purpose |
 | --- | --- |
 | `client_status` | Read player position, game state, Lua state, scripts, mouse profile, and recent logs. |
+| `behavior_profile` | Read the deterministic human-readable profile and numeric traits. |
+| `behavior_status` | Read the current break, countdown, long pressure, and break counts. |
+| `session_logout` | Deliberately log out through visible widgets with synthetic input. |
+| `session_login` | Restore the active Jagex Launcher session and enter the world. |
 | `lua_eval` | Execute an ad-hoc Lua snippet and receive its returned value. |
 | `lua_repl_reset` | Clear globals created by previous REPL calls. |
 | `script_list` | List scripts registered in the manifest. |
@@ -109,6 +113,25 @@ local result = gc.await {
 return result
 ```
 
+Actions use the account behavior profile by default. A time-sensitive parent
+action can bypass both break classes:
+
+```lua
+return gc.await {
+  action = { type = "walk.random" },
+  breaks = false,
+}
+```
+
+Major state transitions can request the profile's heavier evaluation:
+
+```lua
+return gc.phase("banking.complete")
+```
+
+`gc.read("behavior")` returns the same structured state exposed by
+`behavior_status`.
+
 ## Standalone scripts
 
 Standalone scripts live in:
@@ -149,6 +172,7 @@ Every file returns one root function. Inside that function, scripts use only:
 gc.read(subject, query)
 gc.await(request)
 gc.log(level, event, fields)
+gc.phase(name, options)
 ```
 
 The easiest programmatic path is `script_save`, which writes both the Lua file

@@ -54,6 +54,10 @@ final class GenericClientOverlay extends OverlayPanel
 			.right(shorten(plugin.getLuaScript() + " " + plugin.getLuaStatus(), 42))
 			.build());
 		panelComponent.getChildren().add(LineComponent.builder()
+			.left("Behavior")
+			.right(plugin.getBehaviorState())
+			.build());
+		panelComponent.getChildren().add(LineComponent.builder()
 			.left("Last result")
 			.right(shorten(plugin.getLastStatus(), 42))
 			.build());

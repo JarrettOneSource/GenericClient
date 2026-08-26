@@ -1,7 +1,8 @@
 # GenericClient
 
-GenericClient is a RuneLite plugin with a small Lua 5.4 scripting host over
-immutable client snapshots and native game actions.
+GenericClient is a RuneLite plugin with a Lua 5.4 scripting host over immutable
+client snapshots, seeded per-account behavior profiles, and synthetic
+client-only input.
 
 ## Install on Windows
 
@@ -38,12 +39,15 @@ After logging in, open the GenericClient sidebar:
   player location, classloader, thread, tick count, and uptime.
 - **Log nearby NPCs** logs each nearby NPC's name, ID, index, location,
   distance, combat level, animation, interaction target, and actions.
-- **Walk to random tile** moves the native cursor to a nearby ground tile,
+- **Walk to random tile** moves the synthetic client cursor to a nearby ground tile,
   follows the active recorded mouse profile to it, executes a left click when
   the selected action is `Walk here`, records the resulting
   `MenuOptionClicked`, and logs a fresh NPC snapshot.
 - **Lua scripts** can be scanned, started, reloaded, and stopped from the
   sidebar. Script output appears in the Lua log pane and `client.log`.
+- **Behavior profile** shows the account's stable attention style, short/long
+  break tendencies, current break, long pressure, idle edge, and plain-language
+  description.
 
 ## Lua scripts
 
@@ -59,7 +63,7 @@ manifest** after editing it manually.
 
 `npc-diagnostics.lua` starts with the plugin and logs nearby NPC snapshots every
 five game ticks. `walk-stress.lua` is a manual three-click stress script that
-uses the existing native ground-tile interaction. `lumbridge-varrock.lua` walks
+uses the existing ground-tile interaction. `lumbridge-varrock.lua` walks
 to Varrock and has been live-tested from Falador using the same public
 `walk.to` action.
 
@@ -69,14 +73,16 @@ The current scripting interface intentionally contains only:
 gc.read(subject, query)
 gc.await(request)
 gc.log(level, event, fields)
+gc.phase(name, options)
 ```
 
-Implemented reads are `runtime`, `player`, and `npcs`. Implemented waits are
+Implemented reads are `runtime`, `player`, `npcs`, and `behavior`. Implemented waits are
 game ticks, tick counts, `walk.random`, and `walk.to`. New snapshot subjects and
 semantic actions are added when an automation actually needs them.
 
 `walk.to` plans ordinary ground routes against a pinned global collision map
-and follows them with real-mouse canvas, context-menu, and minimap clicks:
+and follows them with template-generated synthetic canvas, context-menu, and
+minimap clicks without moving the operating-system cursor:
 
 ```lua
 local result = gc.await {
@@ -87,6 +93,22 @@ local result = gc.await {
   },
   timeout = { game_ticks = 600 },
 }
+```
+
+Automated actions roll the seeded behavior profile by default. A time-sensitive
+sequence can bypass both micro and long breaks for one parent action:
+
+```lua
+local result = gc.await {
+  action = { type = "walk.random" },
+  breaks = false,
+}
+```
+
+Major completed states can request a heavier profile-shaped evaluation:
+
+```lua
+gc.phase("banking.complete")
 ```
 
 This first slice supports one-tile, same-plane, non-instanced ground movement.
@@ -111,11 +133,16 @@ The active design is documented in
 [`docs/lua-scripting-design.md`](docs/lua-scripting-design.md). The packet-driven
 headless design is saved separately and remains deferred.
 
+The seeded profile, active-time hazard, persistence, phase weighting,
+off-canvas idle, logout/re-login flow, and numeric envelopes are documented in
+[`docs/behavior-system.md`](docs/behavior-system.md).
+
 ## MCP control
 
-The included stdio MCP server lets Codex read live state, execute Lua snippets,
-save and register scripts, and run scripts on demand. GenericClient exposes its
-control bridge only on `127.0.0.1`; the default port is `17343`.
+The included stdio MCP server lets Codex read live and behavior state, execute
+Lua snippets, save and run scripts, and control the Jagex-backed game session.
+GenericClient exposes its control bridge only on `127.0.0.1`; the default port
+is `17343`.
 
 ```bash
 cd mcp
@@ -133,7 +160,8 @@ workflow are documented in
 ## Mouse profiles
 
 Mouse movement uses a local Template Match implementation with the bundled
-6,069-trajectory recorded profile. Profiles live in:
+6,069-trajectory recorded profile. Generated paths are injected into RuneLite's
+canvas; only manual profile recording reads the real cursor. Profiles live in:
 
 ```text
 ~/.runelite/genericclient/mouse-profiles/
@@ -161,11 +189,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.4.0.jar`
-- `build/libs/GenericClient-0.4.0-all.jar`
+- `build/libs/generic-client-0.5.0.jar`
+- `build/libs/GenericClient-0.5.0-all.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.4.0-all.jar
+java -ea -jar build/libs/GenericClient-0.5.0-all.jar
 ```

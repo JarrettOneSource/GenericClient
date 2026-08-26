@@ -18,6 +18,9 @@ gc.await(request)       -- yield for a tick, event, or semantic action receipt
 gc.log(level, event, fields)
 ```
 
+`gc.phase(name, options)` is a Lua convenience wrapper over `gc.await`; it does
+not add another host callback.
+
 Reactive streams and a declarative reconciliation DSL were explored as radically different interfaces. Both can later be implemented as Lua libraries over these primitives. Neither belongs in the host interface.
 
 ### Implemented vertical slice
@@ -26,9 +29,11 @@ The current checkout implements:
 
 - LuaJava 4.1.0 with native PUC Lua 5.4 in the standalone fat JAR;
 - one active standalone script plus one persistent REPL state on one scheduler thread;
-- `gc.read` subjects `runtime`, `player`, and bounded `npcs` queries;
-- `gc.await` for `game.tick`, tick counts, the real `walk.random` native mouse
-  action, and the same-plane `walk.to` ground-route action;
+- `gc.read` subjects `runtime`, `player`, `behavior`, and bounded `npcs` queries;
+- `gc.await` for `game.tick`, tick counts, the synthetic `walk.random` action,
+  and the same-plane `walk.to` ground-route action;
+- per-action `breaks=false`, phase transitions, and a seeded account behavior
+  controller that pauses coroutine action progression without blocking control;
 - `gc.log` to `client.log` and the GenericClient sidebar;
 - manifest-registered one-file scripts with start/reload/stop controls and automatic NPC diagnostics;
 - a loopback control bridge and stdio MCP server for live status, REPL evaluation,
@@ -37,6 +42,11 @@ The current checkout implements:
 - a live-tested `lumbridge-varrock.lua` static-ground route;
 - per-resume instruction/deadline interruption and pinned-frame reads;
 - focused tests for NPC queries, coroutine/action flow, pinned frames, and infinite-loop termination.
+
+Every automated movement and click now runs through the recorded template
+matcher and synthetic canvas input. The operating-system pointer is not read or
+moved. The complete behavior contract is in
+[`behavior-system.md`](behavior-system.md).
 
 The MCP and manifest interface is documented in
 [`mcp-lua-control.md`](mcp-lua-control.md).
@@ -48,6 +58,22 @@ normalized dialog, target references, and additional semantic actions remain
 intentionally absent until a concrete automation requires each one.
 
 ### Live verification receipt
+
+The GenericClient 0.5.0 standalone artifact had SHA-256
+`e13a4c72b5f08fc9f8fed94425baef70f0034596c72c8f5742ad4ea32a91ec68`.
+On stock RuneLite 1.12.36/game revision 240 it:
+
+- derived the same account profile after restart without exposing the account hash;
+- exposed 13 MCP tools plus `gc.read("behavior")` and `gc.phase` receipts;
+- executed synthetic canvas, minimap, and covered-tile context-menu walking;
+- left the Windows pointer byte-for-byte at the same screen coordinates across actions;
+- executed post-action and phase-heavy micro breaks, moved to the profile's right edge,
+  and preserved counts/long pressure across restarts;
+- deliberately logged out through visible widgets, pressed the Jagex-session Play
+  button, dismissed the welcome screen, and resumed in the world;
+- passed 42 Java tests and three Node MCP tests.
+
+The prior 0.4.0 receipt is retained below as the MCP/manifest baseline.
 
 The GenericClient 0.4.0 standalone artifact deployed through the existing Jagex
 Launcher configuration had SHA-256

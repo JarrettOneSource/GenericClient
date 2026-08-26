@@ -2,6 +2,7 @@
 
 return function()
   gc.await { event = "game.tick" }
+  gc.phase("diagnostics.walk-stress", { breaks = false })
 
   for attempt = 1, 3 do
     local receipt = gc.await {
@@ -11,6 +12,7 @@ return function()
       timeout = {
         game_ticks = 8,
       },
+      breaks = false,
     }
 
     gc.log("info", "walk-attempt", {

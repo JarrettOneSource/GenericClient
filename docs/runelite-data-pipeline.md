@@ -276,7 +276,7 @@ Use one game client per JVM. The injected client and RuneLite contain substantia
 ## Implementation sequence
 
 1. Extract the smallest immutable player/NPC/inventory/widget/dialog frame from the current plugin and add epoch/generation references.
-2. Add a client-thread `ActionDispatcher` that re-resolves references and uses `Client.menuAction`; preserve the current native-mouse adapter as an optional visible-mode implementation.
+2. Add a client-thread `ActionDispatcher` that re-resolves references and uses `Client.menuAction`; preserve the current template-generated synthetic canvas adapter as an optional visible-mode implementation.
 3. Embed LuaJava 4.1.0 plus PUC Lua 5.4, the three-function interface, one scheduler thread, one state/root coroutine per script, hidden instruction/deadline hooks, structured logs, and atomic one-file reload.
 4. Prove one vertical script that logs nearby NPCs, interacts with a selected target, handles dialog, and never blocks RuneLite's client thread.
 5. Add a compact frame/event/intent/receipt journal and replay that script without RuneLite.

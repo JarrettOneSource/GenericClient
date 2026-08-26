@@ -26,6 +26,8 @@ final class GenericClientControlServer implements AutoCloseable
 
 	private final int requestedPort;
 	private final GenericClientLuaHost luaHost;
+	private final Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction;
+	private final Supplier<java.util.concurrent.CompletableFuture<String>> loginAction;
 	private final Supplier<Map<String, Object>> statusSupplier;
 	private final Consumer<String> reporter;
 	private final Gson gson = new Gson();
@@ -35,11 +37,15 @@ final class GenericClientControlServer implements AutoCloseable
 	GenericClientControlServer(
 		int port,
 		GenericClientLuaHost luaHost,
+		Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction,
+		Supplier<java.util.concurrent.CompletableFuture<String>> loginAction,
 		Supplier<Map<String, Object>> statusSupplier,
 		Consumer<String> reporter)
 	{
 		this.requestedPort = port;
 		this.luaHost = luaHost;
+		this.logoutAction = logoutAction;
+		this.loginAction = loginAction;
 		this.statusSupplier = statusSupplier;
 		this.reporter = reporter;
 	}
@@ -149,6 +155,15 @@ final class GenericClientControlServer implements AutoCloseable
 		{
 			case "status":
 				return statusSupplier.get();
+			case "behavior.status":
+				return behaviorStatus();
+			case "behavior.profile":
+				Object behavior = behaviorStatus();
+				return behavior instanceof Map ? ((Map<?, ?>) behavior).get("profile") : null;
+			case "session.logout":
+				return logoutAction.get().get(30, TimeUnit.SECONDS);
+			case "session.login":
+				return loginAction.get().get(30, TimeUnit.SECONDS);
 			case "lua.eval":
 				return luaHost.evaluate(stringParameter(parameters, "code"))
 					.get(LUA_TIMEOUT_SECONDS, TimeUnit.SECONDS);
@@ -174,6 +189,11 @@ final class GenericClientControlServer implements AutoCloseable
 			default:
 				throw new IllegalArgumentException("Unknown RPC method: " + method);
 		}
+	}
+
+	private Object behaviorStatus()
+	{
+		return statusSupplier.get().get("behavior");
 	}
 
 	private static String stringParameter(Map<String, Object> parameters, String name)

@@ -20,6 +20,8 @@ try {
   await client.connect(transport);
   const tools = await client.listTools();
   const status = await call("client_status");
+  const behaviorProfile = await call("behavior_profile");
+  const behaviorStatus = await call("behavior_status");
   const lua = await call("lua_eval", {
     code: 'return { player = gc.read("player"), runtime = gc.read("runtime"), npcs = gc.read("npcs", { within = 8, limit = 5 }) }',
   });
@@ -31,7 +33,10 @@ try {
   });
   const interaction = await call("lua_eval", {
     code:
-      'return gc.await { action = { type = "walk.random" }, timeout = { game_ticks = 12 } }',
+      'return gc.await { action = { type = "walk.random" }, timeout = { game_ticks = 12 }, breaks = false }',
+  });
+  const phase = await call("lua_eval", {
+    code: 'return gc.phase("diagnostics.mcp-smoke", { breaks = false })',
   });
   const saved = await call("script_save", {
     id: "mcp-location-check",
@@ -55,10 +60,13 @@ try {
       {
         tools: tools.tools.map((tool) => tool.name),
         status,
+        behavior_profile: behaviorProfile,
+        behavior_status: behaviorStatus,
         lua,
         repl_first: replFirst,
         repl_second: replSecond,
         interaction,
+        phase,
         saved,
         started,
         after_script: afterScript,

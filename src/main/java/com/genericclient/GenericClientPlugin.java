@@ -12,12 +12,15 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Player;
+import net.runelite.api.events.AccountHashChanged;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuOptionClicked;
@@ -35,8 +38,8 @@ import net.runelite.client.ui.overlay.OverlayManager;
 @Slf4j
 @PluginDescriptor(
 	name = "GenericClient",
-	description = "Runs Lua and MCP tools over client snapshots, recorded mouse profiles, and native game actions",
-	tags = {"genericclient", "diagnostics", "lua", "scripting", "mouse", "mcp"},
+	description = "Runs Lua and MCP tools with seeded behavior profiles and synthetic client input",
+	tags = {"genericclient", "diagnostics", "lua", "scripting", "mouse", "mcp", "behavior"},
 	loadInSafeMode = false
 )
 public final class GenericClientPlugin extends Plugin
@@ -79,6 +82,9 @@ public final class GenericClientPlugin extends Plugin
 	private GenericClientPanel panel;
 	private GenericClientControlServer controlServer;
 	private GenericClientGameInput gameInput;
+	private GenericClientSyntheticMouse syntheticMouse;
+	private GenericClientSessionController sessionController;
+	private GenericClientBehaviorController behaviorController;
 	private GenericClientMouseRecorder mouseRecorder;
 	private GenericClientWalker walker;
 	private GenericClientLuaHost luaHost;
@@ -86,6 +92,7 @@ public final class GenericClientPlugin extends Plugin
 	private Path mouseProfilesDirectory;
 	private volatile GenericClientMouseProfile mouseProfile;
 	private volatile GenericClientSnapshot latestSnapshot;
+	private ScheduledFuture<?> panelRefreshFuture;
 
 	@Override
 	protected void startUp() throws Exception
@@ -101,24 +108,70 @@ public final class GenericClientPlugin extends Plugin
 		GenericClientMouseProfile.installDefault(mouseProfilesDirectory);
 		loadConfiguredMouseProfile();
 		GenericClientCollisionMap collisionMap = GenericClientCollisionMap.loadBundled();
+		net.runelite.api.Point mousePosition = client.getMouseCanvasPosition();
+		syntheticMouse = new GenericClientSyntheticMouse(
+			client.getCanvas(),
+			executor,
+			() -> mouseProfile,
+			config::mouseDurationMillis,
+			new java.awt.Point(mousePosition.getX(), mousePosition.getY()),
+			this::publishResult);
 		gameInput = new GenericClientGameInput(
 			client,
 			clientThread,
 			executor,
-			() -> mouseProfile,
-			config::mouseDurationMillis,
+			syntheticMouse,
 			this::publishResult);
-		mouseRecorder = new GenericClientMouseRecorder(client.getCanvas(), gameInput::isRunning);
+		mouseRecorder = new GenericClientMouseRecorder(
+			client.getCanvas(),
+			() -> gameInput.isRunning() || syntheticMouse.isMoving());
 		walker = new GenericClientWalker(gameInput, collisionMap, this::publishResult);
+		sessionController = new GenericClientSessionController(
+			GenericClientSessionController.runeliteView(client, clientThread),
+			GenericClientSessionController.syntheticInput(syntheticMouse),
+			executor,
+			this::publishResult);
+		behaviorController = new GenericClientBehaviorController(
+			new GenericClientBehaviorStore(net.runelite.client.RuneLite.RUNELITE_DIR.toPath()
+				.resolve("genericclient")
+				.resolve("behavior")),
+			new GenericClientBehaviorController.BreakEffects()
+			{
+				@Override
+				public java.util.concurrent.CompletableFuture<String> moveOffscreen(
+					GenericClientBehaviorProfile.Edge edge)
+				{
+					return syntheticMouse.moveOffscreen(edge);
+				}
+
+				@Override
+				public java.util.concurrent.CompletableFuture<String> logout()
+				{
+					return sessionController.logout();
+				}
+
+				@Override
+				public java.util.concurrent.CompletableFuture<String> ensureLoggedIn()
+				{
+					return sessionController.ensureLoggedIn();
+				}
+			},
+			GenericClientBehaviorController.scheduledTimer(executor),
+			GenericClientBehaviorController.systemClock(),
+			GenericClientBehaviorController.secureRandom(),
+			this::publishResult);
 		luaHost = new GenericClientLuaHost(
 			net.runelite.client.RuneLite.RUNELITE_DIR.toPath().resolve("genericclient").resolve("scripts"),
 			gameInput::walkToRandomTile,
 			walker::walkTo,
 			walker::cancelActive,
+			behaviorController,
 			this::publishResult);
 		controlServer = new GenericClientControlServer(
 			config.controlPort(),
 			luaHost,
+			sessionController::logout,
+			sessionController::ensureLoggedIn,
 			this::controlStatus,
 			this::publishResult);
 		controlServer.start();
@@ -140,6 +193,7 @@ public final class GenericClientPlugin extends Plugin
 		overlayManager.add(overlay);
 		clientToolbar.addNavigation(navigationButton);
 		refreshPanel();
+		panelRefreshFuture = executor.scheduleAtFixedRate(this::refreshPanel, 1L, 1L, TimeUnit.SECONDS);
 
 		log.info("{} PLUGIN_STARTED runeliteVersion={} classLoader={} thread={}",
 			LOG_PREFIX,
@@ -157,6 +211,11 @@ public final class GenericClientPlugin extends Plugin
 			mouseProfile.getProfileId(),
 			mouseProfile.getTemplateCount());
 		printDiagnostics();
+		behaviorController.setLoggedIn(client.getGameState() == GameState.LOGGED_IN);
+		if (client.getGameState() == GameState.LOGGED_IN)
+		{
+			activateBehaviorProfile();
+		}
 		luaHost.start(GenericClientLuaHost.DIAGNOSTIC_SCRIPT);
 	}
 
@@ -164,6 +223,11 @@ public final class GenericClientPlugin extends Plugin
 	protected void shutDown()
 	{
 		lifecycle = "STOPPING";
+		if (panelRefreshFuture != null)
+		{
+			panelRefreshFuture.cancel(false);
+			panelRefreshFuture = null;
+		}
 		if (controlServer != null)
 		{
 			controlServer.close();
@@ -174,10 +238,20 @@ public final class GenericClientPlugin extends Plugin
 			luaHost.close();
 			luaHost = null;
 		}
+		if (behaviorController != null)
+		{
+			behaviorController.close();
+			behaviorController = null;
+		}
 		if (walker != null)
 		{
 			walker.close();
 			walker = null;
+		}
+		if (sessionController != null)
+		{
+			sessionController.close();
+			sessionController = null;
 		}
 		if (mouseRecorder != null)
 		{
@@ -188,6 +262,11 @@ public final class GenericClientPlugin extends Plugin
 		{
 			gameInput.close();
 			gameInput = null;
+		}
+		if (syntheticMouse != null)
+		{
+			syntheticMouse.close();
+			syntheticMouse = null;
 		}
 		overlayManager.remove(overlay);
 		if (navigationButton != null)
@@ -203,11 +282,26 @@ public final class GenericClientPlugin extends Plugin
 	public void onGameStateChanged(GameStateChanged event)
 	{
 		gameStateName = event.getGameState().name();
+		GenericClientBehaviorController behaviors = behaviorController;
+		if (behaviors != null)
+		{
+			behaviors.setLoggedIn(event.getGameState() == GameState.LOGGED_IN);
+		}
 		publishResult("GAME_STATE_CHANGED state=" + gameStateName);
 		if (event.getGameState() == GameState.LOGGED_IN)
 		{
+			activateBehaviorProfile();
 			postChat("GenericClient loaded");
 			logNearbyNpcsOnClientThread();
+		}
+	}
+
+	@Subscribe
+	public void onAccountHashChanged(AccountHashChanged event)
+	{
+		if (client.getGameState() == GameState.LOGGED_IN)
+		{
+			activateBehaviorProfile();
 		}
 	}
 
@@ -218,6 +312,11 @@ public final class GenericClientPlugin extends Plugin
 		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(client, tickCount);
 		latestSnapshot = snapshot;
 		nearbyNpcCount = snapshot.countNearbyNpcs(config.npcLogRadius());
+		GenericClientBehaviorController behaviors = behaviorController;
+		if (behaviors != null)
+		{
+			behaviors.publishActiveTick();
+		}
 		GenericClientWalker activeWalker = walker;
 		if (activeWalker != null)
 		{
@@ -423,6 +522,29 @@ public final class GenericClientPlugin extends Plugin
 		}
 	}
 
+	private void activateBehaviorProfile()
+	{
+		GenericClientBehaviorController behaviors = behaviorController;
+		if (behaviors == null)
+		{
+			return;
+		}
+		long accountHash = client.getAccountHash();
+		if (accountHash == -1L)
+		{
+			publishResult("BEHAVIOR_PROFILE_WAITING account_hash_unavailable");
+			return;
+		}
+		try
+		{
+			behaviors.activateAccount(accountHash);
+		}
+		catch (IOException | RuntimeException exception)
+		{
+			publishResult("BEHAVIOR_PROFILE_FAILED message=" + exception.getMessage());
+		}
+	}
+
 	private Map<String, Object> controlStatus()
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
@@ -445,6 +567,8 @@ public final class GenericClientPlugin extends Plugin
 		}
 		GenericClientLuaHost host = luaHost;
 		value.put("lua", host == null ? null : host.controlState());
+		GenericClientBehaviorController behaviors = behaviorController;
+		value.put("behavior", behaviors == null ? null : behaviors.status());
 		GenericClientControlServer bridge = controlServer;
 		value.put("control_url", bridge == null ? null : bridge.getUrl());
 		return value;
@@ -458,6 +582,8 @@ public final class GenericClientPlugin extends Plugin
 			return;
 		}
 		currentPanel.updateLiveState(lifecycle, gameStateName, tickCount, nearbyNpcCount, lastStatus);
+		GenericClientBehaviorController behaviors = behaviorController;
+		currentPanel.updateBehaviorState(behaviors == null ? null : behaviors.status());
 		GenericClientLuaHost scripts = luaHost;
 		if (scripts != null)
 		{
@@ -532,6 +658,17 @@ public final class GenericClientPlugin extends Plugin
 	{
 		GenericClientLuaHost scripts = luaHost;
 		return scripts == null ? "none" : scripts.getActiveScript();
+	}
+
+	String getBehaviorState()
+	{
+		GenericClientBehaviorController behaviors = behaviorController;
+		if (behaviors == null)
+		{
+			return "unavailable";
+		}
+		Object state = behaviors.status().get("state");
+		return state == null ? "unavailable" : String.valueOf(state);
 	}
 
 	@Provides

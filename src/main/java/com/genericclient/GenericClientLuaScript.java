@@ -34,6 +34,7 @@ final class GenericClientLuaScript implements AutoCloseable
 	private GenericClientSnapshot pinnedSnapshot;
 	private Wait wait;
 	private long nextRequestId;
+	private String currentPhase;
 
 	GenericClientLuaScript(GenericClientLuaHost host, String name, String source)
 	{
@@ -56,7 +57,7 @@ final class GenericClientLuaScript implements AutoCloseable
 	void activate()
 	{
 		activated = true;
-		dispatchActionIfReady();
+		dispatchWaitIfReady();
 	}
 
 	void onGameTick(GenericClientSnapshot snapshot)
@@ -83,6 +84,10 @@ final class GenericClientLuaScript implements AutoCloseable
 				}
 				break;
 			case ACTION:
+				if (host.isBehaviorPaused())
+				{
+					break;
+				}
 				wait.remainingTicks--;
 				if (wait.remainingTicks == 0)
 				{
@@ -93,12 +98,24 @@ final class GenericClientLuaScript implements AutoCloseable
 					resume(valueResponse(receipt));
 				}
 				break;
+			case PHASE:
+				break;
 		}
 	}
 
 	void completeAction(long requestId, Map<String, Object> receipt, GenericClientSnapshot snapshot)
 	{
 		if (finished || wait == null || wait.kind != WaitKind.ACTION || wait.requestId != requestId)
+		{
+			return;
+		}
+		pinnedSnapshot = snapshot;
+		resume(valueResponse(receipt));
+	}
+
+	void completePhase(long requestId, Map<String, Object> receipt, GenericClientSnapshot snapshot)
+	{
+		if (finished || wait == null || wait.kind != WaitKind.PHASE || wait.requestId != requestId)
 		{
 			return;
 		}
@@ -144,6 +161,7 @@ final class GenericClientLuaScript implements AutoCloseable
 		returnValue = null;
 		wait = null;
 		nextRequestId = 0;
+		currentPhase = null;
 
 		try
 		{
@@ -212,6 +230,11 @@ final class GenericClientLuaScript implements AutoCloseable
 			"  if response and response.host_error then error(response.host_error, 2) end\n" +
 			"  return response and response.value or nil\n" +
 			"end\n" +
+			"gc.phase = function(name, options)\n" +
+			"  local request = { phase = name }\n" +
+			"  if options and options.breaks ~= nil then request.breaks = options.breaks end\n" +
+			"  return gc.await(request)\n" +
+			"end\n" +
 			"java = nil\n" +
 			"package = nil\n" +
 			"io = nil\n" +
@@ -238,7 +261,7 @@ final class GenericClientLuaScript implements AutoCloseable
 				throw new IllegalArgumentException("gc.read requires a subject string");
 			}
 			Map<?, ?> query = state.getTop() >= 2 && state.isTable(2) ? state.toMap(2) : null;
-			Object value = pinnedSnapshot == null ? null : pinnedSnapshot.read(subject, query);
+			Object value = host.readSnapshot(pinnedSnapshot, subject, query);
 			pushValue(state, value);
 			return 1;
 		}
@@ -308,7 +331,7 @@ final class GenericClientLuaScript implements AutoCloseable
 			Object yieldedValue = coroutine.toObject(-1);
 			coroutine.pop(1);
 			wait = parseWait(yieldedValue);
-			dispatchActionIfReady();
+			dispatchWaitIfReady();
 		}
 		catch (RuntimeException exception)
 		{
@@ -333,6 +356,12 @@ final class GenericClientLuaScript implements AutoCloseable
 		}
 
 		Map<?, ?> request = (Map<?, ?>) envelope.get("request");
+		if (request.containsKey("breaks") && !(request.get("breaks") instanceof Boolean))
+		{
+			throw new IllegalArgumentException("breaks must be true or false");
+		}
+		boolean breaksEnabled = !(request.get("breaks") instanceof Boolean) ||
+			(Boolean) request.get("breaks");
 		if (request.get("ticks") instanceof Number)
 		{
 			int ticks = ((Number) request.get("ticks")).intValue();
@@ -377,7 +406,7 @@ final class GenericClientLuaScript implements AutoCloseable
 
 			if ("walk.random".equals(type))
 			{
-				return Wait.randomAction(++nextRequestId, timeout);
+				return Wait.randomAction(++nextRequestId, timeout, breaksEnabled);
 			}
 			if ("walk.to".equals(type))
 			{
@@ -404,28 +433,63 @@ final class GenericClientLuaScript implements AutoCloseable
 					++nextRequestId,
 					timeout,
 					new WorldPoint(x, y, plane),
-					within);
+					within,
+					breaksEnabled);
 			}
 			throw new IllegalArgumentException("Unsupported action: " + type);
 		}
 
-		throw new IllegalArgumentException("Await request must contain ticks, event, or action");
+		if (request.get("phase") instanceof String)
+		{
+			String phase = ((String) request.get("phase")).trim();
+			if (!phase.matches("[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}"))
+			{
+				throw new IllegalArgumentException(
+					"Phase name must be 1-64 letters, numbers, dots, underscores, or hyphens");
+			}
+			return Wait.phase(++nextRequestId, phase, breaksEnabled);
+		}
+
+		throw new IllegalArgumentException("Await request must contain ticks, event, action, or phase");
 	}
 
-	private void dispatchActionIfReady()
+	private void dispatchWaitIfReady()
 	{
-		if (!activated || finished || wait == null || wait.kind != WaitKind.ACTION || wait.dispatched)
+		if (!activated || finished || wait == null || wait.dispatched)
+		{
+			return;
+		}
+		if (wait.kind != WaitKind.ACTION && wait.kind != WaitKind.PHASE)
 		{
 			return;
 		}
 		wait.dispatched = true;
-		if ("walk.random".equals(wait.actionType))
+		if (wait.kind == WaitKind.PHASE)
 		{
-			host.submitWalkRandom(this, wait.requestId);
+			if (wait.phaseName.equals(currentPhase))
+			{
+				Map<String, Object> receipt = new LinkedHashMap<>();
+				receipt.put("status", "unchanged");
+				receipt.put("phase", currentPhase);
+				completePhase(wait.requestId, receipt, pinnedSnapshot);
+				return;
+			}
+			currentPhase = wait.phaseName;
+			host.submitPhase(this, wait.requestId, wait.phaseName, wait.breaksEnabled);
+		}
+		else if ("walk.random".equals(wait.actionType))
+		{
+			host.submitWalkRandom(this, wait.requestId, wait.breaksEnabled);
 		}
 		else
 		{
-			host.submitWalkTo(this, wait.requestId, wait.destination, wait.within, wait.remainingTicks);
+			host.submitWalkTo(
+				this,
+				wait.requestId,
+				wait.destination,
+				wait.within,
+				wait.remainingTicks,
+				wait.breaksEnabled);
 		}
 	}
 
@@ -577,7 +641,8 @@ final class GenericClientLuaScript implements AutoCloseable
 	{
 		GAME_TICK,
 		TICKS,
-		ACTION
+		ACTION,
+		PHASE
 	}
 
 	private static final class Wait
@@ -587,6 +652,8 @@ final class GenericClientLuaScript implements AutoCloseable
 		private final String actionType;
 		private final WorldPoint destination;
 		private final int within;
+		private final boolean breaksEnabled;
+		private final String phaseName;
 		private int remainingTicks;
 		private boolean dispatched;
 
@@ -596,7 +663,9 @@ final class GenericClientLuaScript implements AutoCloseable
 			int remainingTicks,
 			String actionType,
 			WorldPoint destination,
-			int within)
+			int within,
+			boolean breaksEnabled,
+			String phaseName)
 		{
 			this.kind = kind;
 			this.requestId = requestId;
@@ -604,30 +673,40 @@ final class GenericClientLuaScript implements AutoCloseable
 			this.actionType = actionType;
 			this.destination = destination;
 			this.within = within;
+			this.breaksEnabled = breaksEnabled;
+			this.phaseName = phaseName;
 		}
 
 		private static Wait gameTick()
 		{
-			return new Wait(WaitKind.GAME_TICK, 0, 0, null, null, 0);
+			return new Wait(WaitKind.GAME_TICK, 0, 0, null, null, 0, true, null);
 		}
 
 		private static Wait ticks(int ticks)
 		{
-			return new Wait(WaitKind.TICKS, 0, ticks, null, null, 0);
+			return new Wait(WaitKind.TICKS, 0, ticks, null, null, 0, true, null);
 		}
 
-		private static Wait randomAction(long requestId, int timeoutTicks)
+		private static Wait randomAction(long requestId, int timeoutTicks, boolean breaksEnabled)
 		{
-			return new Wait(WaitKind.ACTION, requestId, timeoutTicks, "walk.random", null, 0);
+			return new Wait(
+				WaitKind.ACTION, requestId, timeoutTicks, "walk.random", null, 0, breaksEnabled, null);
 		}
 
 		private static Wait walkAction(
 			long requestId,
 			int timeoutTicks,
 			WorldPoint destination,
-			int within)
+			int within,
+			boolean breaksEnabled)
 		{
-			return new Wait(WaitKind.ACTION, requestId, timeoutTicks, "walk.to", destination, within);
+			return new Wait(
+				WaitKind.ACTION, requestId, timeoutTicks, "walk.to", destination, within, breaksEnabled, null);
+		}
+
+		private static Wait phase(long requestId, String name, boolean breaksEnabled)
+		{
+			return new Wait(WaitKind.PHASE, requestId, 0, null, null, 0, breaksEnabled, name);
 		}
 	}
 }

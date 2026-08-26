@@ -1,13 +1,9 @@
 package com.genericclient;
 
-import java.awt.AWTException;
 import java.awt.Canvas;
-import java.awt.MouseInfo;
-import java.awt.PointerInfo;
 import java.awt.Polygon;
 import java.awt.Rectangle;
-import java.awt.Robot;
-import java.awt.event.InputEvent;
+import java.awt.event.MouseEvent;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -19,9 +15,6 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
-import java.util.function.IntSupplier;
-import java.util.function.Supplier;
-import javax.swing.SwingUtilities;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
@@ -46,8 +39,7 @@ final class GenericClientGameInput implements AutoCloseable
 	private final ClientThread clientThread;
 	private final ScheduledExecutorService executor;
 	private final Consumer<String> reporter;
-	private final Supplier<GenericClientMouseProfile> mouseProfile;
-	private final IntSupplier mouseDurationMillis;
+	private final GenericClientSyntheticMouse syntheticMouse;
 	private final AtomicBoolean running = new AtomicBoolean();
 	private final List<ScheduledFuture<?>> pending = new CopyOnWriteArrayList<>();
 
@@ -60,22 +52,19 @@ final class GenericClientGameInput implements AutoCloseable
 	private volatile TargetSurface targetSurface;
 	private volatile SelectionMode selectionMode;
 	private volatile WorldPoint requestedWorldPoint;
-	private volatile Robot robot;
 	private volatile CompletableFuture<String> activeResult;
 
 	GenericClientGameInput(
 		Client client,
 		ClientThread clientThread,
 		ScheduledExecutorService executor,
-		Supplier<GenericClientMouseProfile> mouseProfile,
-		IntSupplier mouseDurationMillis,
+		GenericClientSyntheticMouse syntheticMouse,
 		Consumer<String> reporter)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
 		this.executor = executor;
-		this.mouseProfile = mouseProfile;
-		this.mouseDurationMillis = mouseDurationMillis;
+		this.syntheticMouse = syntheticMouse;
 		this.reporter = reporter;
 	}
 
@@ -223,7 +212,7 @@ final class GenericClientGameInput implements AutoCloseable
 			" surface=" + target.surface +
 			" canvas=" + target.canvasPoint.getX() + "," + target.canvasPoint.getY());
 		Target selectedTarget = target;
-		SwingUtilities.invokeLater(() -> beginNativeMouseMove(selectedTarget));
+		beginSyntheticMouseMove(selectedTarget);
 	}
 
 	private Target chooseRandomVisibleTile(Player player)
@@ -313,7 +302,7 @@ final class GenericClientGameInput implements AutoCloseable
 		return x >= left && x <= right && y >= top && y <= bottom;
 	}
 
-	private void beginNativeMouseMove(Target target)
+	private void beginSyntheticMouseMove(Target target)
 	{
 		if (!running.get())
 		{
@@ -326,90 +315,18 @@ final class GenericClientGameInput implements AutoCloseable
 			return;
 		}
 
-		try
+		java.awt.Point destination = new java.awt.Point(
+			target.canvasPoint.getX(),
+			target.canvasPoint.getY());
+		syntheticMouse.move(destination).whenComplete((result, error) ->
 		{
-			java.awt.Point canvasOrigin = canvas.getLocationOnScreen();
-			java.awt.Point destination = new java.awt.Point(
-				canvasOrigin.x + target.canvasPoint.getX(),
-				canvasOrigin.y + target.canvasPoint.getY());
-			PointerInfo pointerInfo = MouseInfo.getPointerInfo();
-			if (pointerInfo == null)
+			if (error != null)
 			{
-				finish("WALK_CLICK_FAILED reason=mouse_pointer_unavailable");
+				finish("WALK_CLICK_FAILED reason=synthetic_mouse_move message=" + error.getMessage());
 				return;
 			}
-			Rectangle viewport = new Rectangle(
-				canvasOrigin.x,
-				canvasOrigin.y,
-				canvas.getWidth(),
-				canvas.getHeight());
-			animateMouse(
-				pointerInfo.getLocation(),
-				destination,
-				viewport,
-				() -> clientThread.invoke(() -> verifyHoverAndClick(target)));
-		}
-		catch (RuntimeException exception)
-		{
-			finish("WALK_CLICK_FAILED reason=canvas_position message=" + exception.getMessage());
-		}
-	}
-
-	private void animateMouse(
-		java.awt.Point start,
-		java.awt.Point destination,
-		Rectangle viewport,
-		Runnable completion)
-	{
-		final Robot nativeRobot;
-		try
-		{
-			nativeRobot = getRobot();
-		}
-		catch (AWTException | SecurityException exception)
-		{
-			finish("WALK_CLICK_FAILED reason=robot_unavailable message=" + exception.getMessage());
-			return;
-		}
-
-		GenericClientMouseProfile profile = mouseProfile.get();
-		if (profile == null)
-		{
-			finish("WALK_CLICK_FAILED reason=mouse_profile_unavailable");
-			return;
-		}
-		int durationMillis = Math.max(25, mouseDurationMillis.getAsInt());
-		List<GenericClientMouseMatcher.PathPoint> path;
-		try
-		{
-			path = GenericClientMouseMatcher.generate(
-				profile,
-				start,
-				destination,
-				viewport,
-				durationMillis,
-				ThreadLocalRandom.current());
-		}
-		catch (RuntimeException exception)
-		{
-			finish("WALK_CLICK_FAILED reason=mouse_profile_generation message=" + exception.getMessage());
-			return;
-		}
-
-		reporter.accept("MOUSE_PATH_GENERATED profile=" + profile.getProfileId() +
-			" templates=" + profile.getTemplateCount() + " points=" + path.size() +
-			" durationMs=" + durationMillis);
-		for (int index = 1; index < path.size(); index++)
-		{
-			GenericClientMouseMatcher.PathPoint point = path.get(index);
-			schedule(() ->
-			{
-				nativeRobot.mouseMove((int) Math.round(point.x), (int) Math.round(point.y));
-			}, Math.round(point.timeMillis));
-		}
-
-		long verificationDelay = durationMillis + HOVER_SETTLE_MILLIS;
-		schedule(completion, verificationDelay);
+			schedule(() -> clientThread.invoke(() -> verifyHoverAndClick(target)), HOVER_SETTLE_MILLIS);
+		});
 	}
 
 	boolean isRunning()
@@ -496,20 +413,13 @@ final class GenericClientGameInput implements AutoCloseable
 	private void dispatchMinimapClick(Target target)
 	{
 		reporter.accept("WALK_CLICK_DISPATCH tile=" + target.worldPoint + " surface=minimap");
-		executor.execute(() ->
+		syntheticMouse.click(MouseEvent.BUTTON1).whenComplete((result, error) ->
 		{
-			if (!running.get())
+			if (error != null)
 			{
+				finish("WALK_TILE_CLICK_FAILED reason=synthetic_click message=" + error.getMessage());
 				return;
 			}
-			Robot nativeRobot = robot;
-			if (nativeRobot == null)
-			{
-				finish("WALK_CLICK_FAILED reason=robot_unavailable_before_click");
-				return;
-			}
-			nativeRobot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
-			nativeRobot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
 			finish("WALK_TILE_CLICK_EXECUTED surface=minimap selectedTile=" + target.worldPoint);
 		});
 	}
@@ -525,20 +435,14 @@ final class GenericClientGameInput implements AutoCloseable
 			" action=" + entry.getType() + " option=" + entry.getOption() +
 			" param0=" + expectedParam0 + " param1=" + expectedParam1 +
 			" worldView=" + expectedWorldViewId);
-		executor.execute(() ->
+		syntheticMouse.click(MouseEvent.BUTTON1).whenComplete((result, error) ->
 		{
-			if (!running.get())
+			if (error != null)
 			{
+				awaitingMenuResult = false;
+				finish("WALK_CLICK_FAILED reason=synthetic_click message=" + error.getMessage());
 				return;
 			}
-			Robot nativeRobot = robot;
-			if (nativeRobot == null)
-			{
-				finish("WALK_CLICK_FAILED reason=robot_unavailable_before_click");
-				return;
-			}
-			nativeRobot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
-			nativeRobot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
 		});
 		schedule(() ->
 		{
@@ -555,17 +459,15 @@ final class GenericClientGameInput implements AutoCloseable
 		reporter.accept("WALK_CONTEXT_OPEN tile=" + target.worldPoint +
 			" coveredBy=" + coveredEntry.getOption() +
 			" walkParam0=" + walkEntry.getParam0() + " walkParam1=" + walkEntry.getParam1());
-		executor.execute(() ->
+		syntheticMouse.click(MouseEvent.BUTTON3).whenComplete((result, error) ->
 		{
-			Robot nativeRobot = robot;
-			if (!running.get() || nativeRobot == null)
+			if (error != null)
 			{
+				finish("WALK_TILE_CLICK_FAILED reason=synthetic_context_open message=" + error.getMessage());
 				return;
 			}
-			nativeRobot.mousePress(InputEvent.BUTTON3_DOWN_MASK);
-			nativeRobot.mouseRelease(InputEvent.BUTTON3_DOWN_MASK);
+			schedule(() -> clientThread.invoke(() -> moveToContextMenuWalk(target)), CONTEXT_MENU_SETTLE_MILLIS);
 		});
-		schedule(() -> clientThread.invoke(() -> moveToContextMenuWalk(target)), CONTEXT_MENU_SETTLE_MILLIS);
 	}
 
 	private void moveToContextMenuWalk(Target target)
@@ -589,28 +491,16 @@ final class GenericClientGameInput implements AutoCloseable
 		int menuX = client.getMenu().getMenuX() + client.getMenu().getMenuWidth() / 2;
 		int menuY = client.getMenu().getMenuY() + headerHeight +
 			rowFromTop * CONTEXT_MENU_ENTRY_HEIGHT + CONTEXT_MENU_ENTRY_HEIGHT / 2;
-		Canvas canvas = client.getCanvas();
-		try
+		java.awt.Point destination = new java.awt.Point(menuX, menuY);
+		syntheticMouse.move(destination).whenComplete((result, error) ->
 		{
-			java.awt.Point origin = canvas.getLocationOnScreen();
-			java.awt.Point destination = new java.awt.Point(origin.x + menuX, origin.y + menuY);
-			PointerInfo pointer = MouseInfo.getPointerInfo();
-			if (pointer == null)
+			if (error != null)
 			{
-				finish("WALK_CLICK_FAILED reason=mouse_pointer_unavailable");
+				finish("WALK_TILE_CLICK_FAILED reason=synthetic_context_move message=" + error.getMessage());
 				return;
 			}
-			Rectangle viewport = new Rectangle(origin.x, origin.y, canvas.getWidth(), canvas.getHeight());
-			SwingUtilities.invokeLater(() -> animateMouse(
-				pointer.getLocation(),
-				destination,
-				viewport,
-				() -> clientThread.invoke(() -> clickContextMenuWalk(target))));
-		}
-		catch (RuntimeException exception)
-		{
-			finish("WALK_TILE_CLICK_FAILED reason=context_menu_position message=" + exception.getMessage());
-		}
+			schedule(() -> clientThread.invoke(() -> clickContextMenuWalk(target)), HOVER_SETTLE_MILLIS);
+		});
 	}
 
 	private void clickContextMenuWalk(Target target)
@@ -645,23 +535,6 @@ final class GenericClientGameInput implements AutoCloseable
 			}
 		}
 		return -1;
-	}
-
-	private Robot getRobot() throws AWTException
-	{
-		Robot existing = robot;
-		if (existing != null)
-		{
-			return existing;
-		}
-		synchronized (this)
-		{
-			if (robot == null)
-			{
-				robot = new Robot();
-			}
-			return robot;
-		}
 	}
 
 	private void schedule(Runnable runnable, long delayMillis)

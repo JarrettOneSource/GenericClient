@@ -90,7 +90,7 @@ final class GenericClientMouseRecorder implements AutoCloseable
 
 	private synchronized void captureMove(MouseEvent event)
 	{
-		if (!recording)
+		if (!recording || event instanceof GenericClientSyntheticMouseEvent)
 		{
 			return;
 		}
@@ -115,7 +115,8 @@ final class GenericClientMouseRecorder implements AutoCloseable
 
 	private synchronized void captureClick(MouseEvent event)
 	{
-		if (!recording || event.getButton() != MouseEvent.BUTTON1)
+		if (!recording || event instanceof GenericClientSyntheticMouseEvent ||
+			event.getButton() != MouseEvent.BUTTON1)
 		{
 			return;
 		}

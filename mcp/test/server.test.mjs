@@ -27,6 +27,10 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
   const names = tools.tools.map((tool) => tool.name);
   assert.deepEqual(names, [
     "client_status",
+    "behavior_profile",
+    "behavior_status",
+    "session_logout",
+    "session_login",
     "lua_eval",
     "lua_repl_reset",
     "script_list",

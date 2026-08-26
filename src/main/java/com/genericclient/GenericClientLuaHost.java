@@ -32,6 +32,7 @@ final class GenericClientLuaHost implements AutoCloseable
 	private final Supplier<CompletableFuture<String>> walkRandomAction;
 	private final WalkToAction walkToAction;
 	private final Consumer<String> cancelWalkAction;
+	private final GenericClientBehaviorController behavior;
 	private final Consumer<String> statusSink;
 	private final ExecutorService scheduler;
 	private final ArrayDeque<String> recentLogs = new ArrayDeque<>();
@@ -50,12 +51,14 @@ final class GenericClientLuaHost implements AutoCloseable
 		Supplier<CompletableFuture<String>> walkRandomAction,
 		WalkToAction walkToAction,
 		Consumer<String> cancelWalkAction,
+		GenericClientBehaviorController behavior,
 		Consumer<String> statusSink) throws IOException
 	{
 		this.registry = new GenericClientScriptRegistry(scriptsDirectory);
 		this.walkRandomAction = walkRandomAction;
 		this.walkToAction = walkToAction;
 		this.cancelWalkAction = cancelWalkAction;
+		this.behavior = behavior;
 		this.statusSink = statusSink;
 		this.scheduler = Executors.newSingleThreadExecutor(runnable ->
 		{
@@ -74,6 +77,15 @@ final class GenericClientLuaHost implements AutoCloseable
 	long getManifestRevision()
 	{
 		return registry.getRevision();
+	}
+
+	Object readSnapshot(GenericClientSnapshot snapshot, String subject, Map<?, ?> query)
+	{
+		if ("behavior".equals(subject))
+		{
+			return behavior.status();
+		}
+		return snapshot == null ? null : snapshot.read(subject, query);
 	}
 
 	CompletableFuture<String> start(String scriptId)
@@ -175,38 +187,30 @@ final class GenericClientLuaHost implements AutoCloseable
 		});
 	}
 
-	void submitWalkRandom(GenericClientLuaScript script, long requestId)
+	boolean isBehaviorPaused()
 	{
-		walkRandomAction.get().whenComplete((result, error) ->
+		return behavior.isPaused();
+	}
+
+	void submitWalkRandom(GenericClientLuaScript script, long requestId, boolean breaksEnabled)
+	{
+		behavior.beforeAction(breaksEnabled).thenCompose(before ->
 		{
-			if (closed)
+			Map<String, Object> receipt = new LinkedHashMap<>();
+			receipt.put("behavior_before", before);
+			return walkRandomAction.get().handle((result, error) ->
 			{
-				return;
-			}
-			try
-			{
-				scheduler.execute(() ->
+				if (error != null)
 				{
-					Map<String, Object> receipt = new LinkedHashMap<>();
-					if (error != null)
-					{
-						receipt.put("status", "rejected");
-						receipt.put("result", error.getMessage());
-					}
-					else
-					{
-						receipt.put("status", result.startsWith("WALK_CLICK_EXECUTED") ? "dispatched" : "rejected");
-						receipt.put("result", result);
-					}
-					script.completeAction(requestId, receipt, currentSnapshot);
-					reconcileScript(script);
-				});
-			}
-			catch (java.util.concurrent.RejectedExecutionException ignored)
-			{
-				// The host completed shutdown between the closed check and queue submission.
-			}
-		});
+					receipt.put("status", "rejected");
+					receipt.put("result", rootMessage(error));
+					return new ActionOutcome(receipt, false);
+				}
+				receipt.put("status", result.startsWith("WALK_CLICK_EXECUTED") ? "dispatched" : "rejected");
+				receipt.put("result", result);
+				return new ActionOutcome(receipt, true);
+			}).thenCompose(outcome -> finishBehavior(outcome, breaksEnabled));
+		}).whenComplete((receipt, error) -> completeAction(script, requestId, receipt, error));
 	}
 
 	void submitWalkTo(
@@ -214,34 +218,126 @@ final class GenericClientLuaHost implements AutoCloseable
 		long requestId,
 		WorldPoint destination,
 		int within,
-		int timeoutTicks)
+		int timeoutTicks,
+		boolean breaksEnabled)
 	{
-		walkToAction.walkTo(destination, within, timeoutTicks).whenComplete((receipt, error) ->
+		behavior.beforeAction(breaksEnabled).thenCompose(before ->
 		{
-			if (closed)
+			return walkToAction.walkTo(destination, within, timeoutTicks).handle((receipt, error) ->
 			{
-				return;
-			}
-			try
-			{
-				scheduler.execute(() ->
+				Map<String, Object> result = receipt == null
+					? new LinkedHashMap<>()
+					: new LinkedHashMap<>(receipt);
+				result.put("behavior_before", before);
+				if (error != null)
 				{
-					Map<String, Object> result = receipt;
-					if (error != null)
-					{
-						result = new LinkedHashMap<>();
-						result.put("status", "rejected");
-						result.put("reason", error.getMessage());
-					}
-					script.completeAction(requestId, result, currentSnapshot);
-					reconcileScript(script);
-				});
-			}
-			catch (java.util.concurrent.RejectedExecutionException ignored)
-			{
-				// The host completed shutdown between the closed check and queue submission.
-			}
+					result.put("status", "rejected");
+					result.put("reason", rootMessage(error));
+					return new ActionOutcome(result, false);
+				}
+				return new ActionOutcome(result, true);
+			}).thenCompose(outcome -> finishBehavior(outcome, breaksEnabled));
+		}).whenComplete((receipt, error) -> completeAction(script, requestId, receipt, error));
+	}
+
+	void submitPhase(
+		GenericClientLuaScript script,
+		long requestId,
+		String phase,
+		boolean breaksEnabled)
+	{
+		behavior.enterPhase(phase, breaksEnabled).whenComplete((receipt, error) ->
+			completePhase(script, requestId, phase, receipt, error));
+	}
+
+	private CompletableFuture<Map<String, Object>> finishBehavior(
+		ActionOutcome outcome,
+		boolean breaksEnabled)
+	{
+		if (!outcome.completedNormally)
+		{
+			return CompletableFuture.completedFuture(outcome.receipt);
+		}
+		return behavior.afterAction(breaksEnabled).thenApply(after ->
+		{
+			outcome.receipt.put("behavior_after", after);
+			return outcome.receipt;
 		});
+	}
+
+	private void completeAction(
+		GenericClientLuaScript script,
+		long requestId,
+		Map<String, Object> receipt,
+		Throwable error)
+	{
+		if (closed)
+		{
+			return;
+		}
+		try
+		{
+			scheduler.execute(() ->
+			{
+				Map<String, Object> result = receipt;
+				if (error != null)
+				{
+					result = new LinkedHashMap<>();
+					result.put("status", "rejected");
+					result.put("reason", rootMessage(error));
+				}
+				script.completeAction(requestId, result, currentSnapshot);
+				reconcileScript(script);
+			});
+		}
+		catch (java.util.concurrent.RejectedExecutionException ignored)
+		{
+			// The host completed shutdown between the closed check and queue submission.
+		}
+	}
+
+	private void completePhase(
+		GenericClientLuaScript script,
+		long requestId,
+		String phase,
+		Map<String, Object> receipt,
+		Throwable error)
+	{
+		if (closed)
+		{
+			return;
+		}
+		try
+		{
+			scheduler.execute(() ->
+			{
+				Map<String, Object> result = receipt == null
+					? new LinkedHashMap<>()
+					: new LinkedHashMap<>(receipt);
+				result.put("phase", phase);
+				if (error != null)
+				{
+					result.put("status", "rejected");
+					result.put("reason", rootMessage(error));
+				}
+				script.completePhase(requestId, result, currentSnapshot);
+				reconcileScript(script);
+			});
+		}
+		catch (java.util.concurrent.RejectedExecutionException ignored)
+		{
+			// The host completed shutdown between the closed check and queue submission.
+		}
+	}
+
+	private static String rootMessage(Throwable error)
+	{
+		Throwable current = error;
+		while (current.getCause() != null)
+		{
+			current = current.getCause();
+		}
+		return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
 	}
 
 	void scriptLog(String scriptName, String level, String event, Object fields)
@@ -536,5 +632,17 @@ final class GenericClientLuaHost implements AutoCloseable
 			WorldPoint destination,
 			int within,
 			int timeoutTicks);
+	}
+
+	private static final class ActionOutcome
+	{
+		private final Map<String, Object> receipt;
+		private final boolean completedNormally;
+
+		private ActionOutcome(Map<String, Object> receipt, boolean completedNormally)
+		{
+			this.receipt = receipt;
+			this.completedNormally = completedNormally;
+		}
 	}
 }

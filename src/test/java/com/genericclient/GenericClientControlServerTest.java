@@ -30,14 +30,23 @@ public class GenericClientControlServerTest
 			() -> CompletableFuture.completedFuture("unused"),
 			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("control-behavior").toPath()),
 			message -> { });
 		GenericClientControlServer server = new GenericClientControlServer(
 			0,
 			host,
+			() -> CompletableFuture.completedFuture("SESSION_LOGGED_OUT"),
+			() -> CompletableFuture.completedFuture("SESSION_LOGGED_IN"),
 			() ->
 			{
 				Map<String, Object> status = new LinkedHashMap<>();
 				status.put("game_state", "LOGGED_IN");
+				Map<String, Object> behavior = new LinkedHashMap<>();
+				Map<String, Object> profile = new LinkedHashMap<>();
+				profile.put("title", "Frequent multitasking; regular long breaks");
+				behavior.put("state", "ready");
+				behavior.put("profile", profile);
+				status.put("behavior", behavior);
 				return status;
 			},
 			message -> { });
@@ -64,6 +73,16 @@ public class GenericClientControlServerTest
 
 			Map<String, Object> listed = post(server, "scripts.list", new LinkedHashMap<>());
 			assertTrue(((java.util.List<?>) listed.get("result")).size() >= 4);
+
+			Map<String, Object> behaviorStatus = post(server, "behavior.status", new LinkedHashMap<>());
+			assertEquals("ready", ((Map<String, Object>) behaviorStatus.get("result")).get("state"));
+			Map<String, Object> behaviorProfile = post(server, "behavior.profile", new LinkedHashMap<>());
+			assertEquals("Frequent multitasking; regular long breaks",
+				((Map<String, Object>) behaviorProfile.get("result")).get("title"));
+			assertEquals("SESSION_LOGGED_OUT",
+				post(server, "session.logout", new LinkedHashMap<>()).get("result"));
+			assertEquals("SESSION_LOGGED_IN",
+				post(server, "session.login", new LinkedHashMap<>()).get("result"));
 		}
 		finally
 		{

@@ -32,6 +32,7 @@ public class GenericClientLuaHostTest
 			},
 			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("behavior").toPath()),
 			message -> { });
 		try
 		{
@@ -43,7 +44,7 @@ public class GenericClientLuaHostTest
 				"  gc.await { event = 'game.tick' }\n" +
 				"  local npcs = gc.read('npcs', { within = 15, limit = 1 })\n" +
 				"  gc.log('info', 'npc-count', { count = #npcs })\n" +
-				"  local receipt = gc.await { action = { type = 'walk.random' } }\n" +
+				"  local receipt = gc.await { action = { type = 'walk.random' }, breaks = false }\n" +
 				"  gc.log('info', 'walk-result', receipt)\n" +
 				"end\n").get(2, TimeUnit.SECONDS);
 
@@ -70,6 +71,7 @@ public class GenericClientLuaHostTest
 			() -> CompletableFuture.completedFuture("unused"),
 			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("pinned-behavior").toPath()),
 			message -> { });
 		try
 		{
@@ -106,6 +108,7 @@ public class GenericClientLuaHostTest
 			() -> CompletableFuture.completedFuture("unused"),
 			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("fault-behavior").toPath()),
 			message -> { });
 		try
 		{
@@ -132,6 +135,41 @@ public class GenericClientLuaHostTest
 	}
 
 	@Test
+	public void rejectsANonBooleanBreakPolicyDuringInitialization() throws Exception
+	{
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("invalid-break-scripts").toPath(),
+			() -> CompletableFuture.completedFuture("unused"),
+			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("invalid-break-behavior").toPath()),
+			message -> { });
+		try
+		{
+			host.saveScript(
+				"invalid-breaks",
+				"Invalid breaks",
+				"Exercise break policy validation.",
+				"return function() gc.await { action = { type = 'walk.random' }, breaks = 'no' } end\n")
+				.get(2, TimeUnit.SECONDS);
+			try
+			{
+				host.start("invalid-breaks").get(2, TimeUnit.SECONDS);
+				throw new AssertionError("Expected invalid breaks value to fail");
+			}
+			catch (ExecutionException expected)
+			{
+				assertTrue(expected.getCause().getMessage().contains("initialization"));
+				assertTrue(host.getRecentLogs().contains("breaks must be true or false"));
+			}
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
 	@SuppressWarnings("unchecked")
 	public void replKeepsGlobalsAndReturnsStructuredValues() throws Exception
 	{
@@ -140,6 +178,7 @@ public class GenericClientLuaHostTest
 			() -> CompletableFuture.completedFuture("unused"),
 			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("repl-behavior").toPath()),
 			message -> { });
 		try
 		{
@@ -170,6 +209,49 @@ public class GenericClientLuaHostTest
 	}
 
 	@Test
+	public void phaseAndActionCanBypassBreaksForATimeSensitiveSequence() throws Exception
+	{
+		AtomicInteger walkRequests = new AtomicInteger();
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("phase-scripts").toPath(),
+			() ->
+			{
+				walkRequests.incrementAndGet();
+				return CompletableFuture.completedFuture("WALK_CLICK_EXECUTED phase-test");
+			},
+			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("phase-behavior").toPath()),
+			message -> { });
+		try
+		{
+			host.saveScript(
+				"phase-test",
+				"Phase test",
+				"Exercise phase and action bypasses.",
+				"return function()\n" +
+					"  local first = gc.phase('banking.complete', { breaks = false })\n" +
+					"  local second = gc.phase('banking.complete', { breaks = false })\n" +
+					"  local action = gc.await { action = { type = 'walk.random' }, breaks = false }\n" +
+					"  gc.log('info', 'phase-bypass', { first = first.status, second = second.status, " +
+					"action = action.status })\n" +
+					"end\n").get(2, TimeUnit.SECONDS);
+
+			host.start("phase-test").get(2, TimeUnit.SECONDS);
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals(1, walkRequests.get());
+			assertTrue(host.getRecentLogs().contains("first=bypassed"));
+			assertTrue(host.getRecentLogs().contains("second=unchanged"));
+			assertTrue(host.getRecentLogs().contains("action=dispatched"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
 	public void completesAPendingReplCallWhenTheHostCloses() throws Exception
 	{
 		GenericClientLuaHost host = new GenericClientLuaHost(
@@ -177,6 +259,7 @@ public class GenericClientLuaHostTest
 			() -> CompletableFuture.completedFuture("unused"),
 			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("closing-repl-behavior").toPath()),
 			message -> { });
 		try
 		{

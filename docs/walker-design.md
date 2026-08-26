@@ -126,7 +126,7 @@ The implementation has four narrow pieces:
 Lua gc.await
     -> GenericClientWalker (lifecycle and receipt)
         -> GenericClientPathfinder (static-map A*)
-        -> GenericClientGameInput (real mouse canvas/minimap click)
+        -> GenericClientGameInput (synthetic canvas/minimap click)
 ```
 
 ### Exact supported scope
@@ -214,7 +214,7 @@ the Falador garden trees: canvas points were either outside the viewport or had
 `Chop down` as the top action. After adding minimap projection and context-menu
 walking, the route completed from `2996,3392` to `3209,3427` in one plan, 172
 game ticks, 56 clicks, and 278 path tiles. Every click had a preceding
-`MOUSE_PATH_GENERATED profile=default-2dc51a50 templates=6069 points=128`
+`SYNTHETIC_MOUSE_PATH_GENERATED profile=default-2dc51a50 points=128`
 receipt. A second return from north Varrock reached `3213,3427` in one plan, 26
 game ticks, and nine clicks.
 

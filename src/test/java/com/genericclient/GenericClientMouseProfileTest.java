@@ -107,6 +107,19 @@ public class GenericClientMouseProfileTest
 			MouseMotionListener motion = canvas.getMouseMotionListeners()[0];
 			for (int index = 0; index < 10; index++)
 			{
+				motion.mouseMoved(new GenericClientSyntheticMouseEvent(
+					canvas,
+					MouseEvent.MOUSE_MOVED,
+					System.currentTimeMillis(),
+					0,
+					500 + index * 20,
+					100,
+					0,
+					false,
+					MouseEvent.NOBUTTON));
+			}
+			for (int index = 0; index < 10; index++)
+			{
 				motion.mouseMoved(mouseEvent(canvas, MouseEvent.MOUSE_MOVED, 100 + index * 25, 200 + index * 5));
 				Thread.sleep(1);
 			}

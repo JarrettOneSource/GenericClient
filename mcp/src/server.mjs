@@ -5,7 +5,7 @@ import * as z from "zod/v4";
 
 import { GenericClientBridge } from "./bridge.mjs";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 function result(value) {
   return {
@@ -26,6 +26,7 @@ export function createServer(bridge = new GenericClientBridge()) {
         "GenericClient controls the live RuneLite client through Lua. Call client_status first. " +
         "Use lua_eval for ad-hoc exploration; its code is the body of a persistent Lua function, so return a value to receive it. " +
         "Available Lua primitives are gc.read(subject, query), gc.await(request), and gc.log(level, event, fields). " +
+        "Actions use the seeded behavior profile unless breaks=false; gc.phase(name) performs a heavier phase evaluation. " +
         "Use script_save for reusable standalone scripts, then script_run by id. Only one manifest script and one REPL execution run at a time.",
     },
   );
@@ -35,7 +36,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Read GenericClient status",
       description:
-        "Read the live player position, game state, Lua state, registered scripts, mouse profile, and recent logs. Call this before exploring or interacting.",
+        "Read the live player position, game state, Lua state, behavior state/profile, registered scripts, mouse profile, and recent logs. Call this before exploring or interacting.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: true,
@@ -45,6 +46,74 @@ export function createServer(bridge = new GenericClientBridge()) {
       },
     },
     async () => result(await bridge.call("status")),
+  );
+
+  server.registerTool(
+    "behavior_profile",
+    {
+      title: "Read behavior profile",
+      description:
+        "Read the active account's deterministic human-readable behavior profile, break tendencies, durations, phase sensitivity, long-break preference, and idle edge.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => result(await bridge.call("behavior.profile")),
+  );
+
+  server.registerTool(
+    "behavior_status",
+    {
+      title: "Read behavior status",
+      description:
+        "Read current break state, remaining time, active long-break pressure, break counts, and the active behavior profile.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => result(await bridge.call("behavior.status")),
+  );
+
+  server.registerTool(
+    "session_logout",
+    {
+      title: "Log out the game session",
+      description:
+        "Deliberately log out through the visible RuneLite widgets using synthetic client input.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async () => result(await bridge.call("session.logout")),
+  );
+
+  server.registerTool(
+    "session_login",
+    {
+      title: "Restore the Jagex game session",
+      description:
+        "Use the active Jagex Launcher session to press Play Now and dismiss click-to-play with synthetic client input.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async () => result(await bridge.call("session.login")),
   );
 
   server.registerTool(

@@ -5,6 +5,7 @@ import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.GridLayout;
+import java.util.Map;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
@@ -24,6 +25,13 @@ final class GenericClientPanel extends PluginPanel
 	private final JLabel tickValue = valueLabel("0");
 	private final JLabel npcValue = valueLabel("0");
 	private final JLabel statusValue = valueLabel("Waiting for plugin startup");
+	private final JLabel behaviorTitleValue = valueLabel("Waiting for account");
+	private final JLabel behaviorStateValue = valueLabel("unavailable");
+	private final JLabel behaviorRemainingValue = valueLabel("0s");
+	private final JLabel behaviorEdgeValue = valueLabel("unknown");
+	private final JLabel behaviorPressureValue = valueLabel("0%");
+	private final JLabel behaviorCountsValue = valueLabel("0 micro / 0 long");
+	private final JTextArea behaviorSummary = new JTextArea("Behavior profile loads after account login.");
 	private final JTextArea npcDiagnostics = new JTextArea("No NPC snapshot captured yet.");
 	private final JLabel mouseProfileValue = valueLabel("loading");
 	private final JLabel mouseTemplateValue = valueLabel("0");
@@ -65,6 +73,24 @@ final class GenericClientPanel extends PluginPanel
 		state.add(row("Nearby NPCs", npcValue));
 		state.add(row("Last result", statusValue));
 		add(state);
+
+		JPanel behaviorSection = section("Behavior profile");
+		behaviorSection.add(row("Profile", behaviorTitleValue));
+		behaviorSection.add(row("State", behaviorStateValue));
+		behaviorSection.add(row("Remaining", behaviorRemainingValue));
+		behaviorSection.add(row("Idle edge", behaviorEdgeValue));
+		behaviorSection.add(row("Long pressure", behaviorPressureValue));
+		behaviorSection.add(row("Breaks", behaviorCountsValue));
+		behaviorSummary.setEditable(false);
+		behaviorSummary.setRows(5);
+		behaviorSummary.setLineWrap(true);
+		behaviorSummary.setWrapStyleWord(true);
+		behaviorSummary.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		behaviorSummary.setForeground(Color.WHITE);
+		JScrollPane behaviorScroll = new JScrollPane(behaviorSummary);
+		behaviorScroll.setPreferredSize(new Dimension(205, 105));
+		behaviorSection.add(behaviorScroll);
+		add(behaviorSection);
 
 		JButton diagnosticsButton = new JButton("Print diagnostics");
 		diagnosticsButton.addActionListener(event -> printDiagnostics.run());
@@ -202,6 +228,38 @@ final class GenericClientPanel extends PluginPanel
 		});
 	}
 
+	@SuppressWarnings("unchecked")
+	void updateBehaviorState(Map<String, Object> behavior)
+	{
+		runOnEdt(() ->
+		{
+			if (behavior == null || !Boolean.TRUE.equals(behavior.get("available")))
+			{
+				behaviorTitleValue.setText("Waiting for account");
+				behaviorStateValue.setText(behavior == null
+					? "unavailable"
+					: String.valueOf(behavior.get("state")));
+				behaviorSummary.setText("Behavior profile loads after account login.");
+				return;
+			}
+
+			Map<String, Object> profile = (Map<String, Object>) behavior.get("profile");
+			behaviorTitleValue.setText(String.valueOf(profile.get("title")));
+			behaviorStateValue.setText(String.valueOf(behavior.get("state")));
+			long remaining = number(behavior.get("break_remaining_millis")).longValue();
+			behaviorRemainingValue.setText(formatDuration(remaining));
+			behaviorEdgeValue.setText(String.valueOf(profile.get("idle_edge")));
+			double hazard = number(behavior.get("long_hazard")).doubleValue();
+			double budget = number(behavior.get("long_hazard_budget")).doubleValue();
+			double pressure = budget <= 0.0 ? 0.0 : Math.min(999.0, 100.0 * hazard / budget);
+			behaviorPressureValue.setText(String.format(java.util.Locale.ROOT, "%.0f%%", pressure));
+			behaviorCountsValue.setText(number(behavior.get("micro_break_count")).longValue() +
+				" micro / " + number(behavior.get("long_break_count")).longValue() + " long");
+			behaviorSummary.setText(String.valueOf(profile.get("summary")));
+			behaviorSummary.setCaretPosition(0);
+		});
+	}
+
 	void updateNpcDiagnostics(String diagnostics)
 	{
 		runOnEdt(() ->
@@ -307,6 +365,21 @@ final class GenericClientPanel extends PluginPanel
 		JLabel label = new JLabel(text);
 		label.setForeground(Color.WHITE);
 		return label;
+	}
+
+	private static Number number(Object value)
+	{
+		return value instanceof Number ? (Number) value : 0L;
+	}
+
+	private static String formatDuration(long millis)
+	{
+		long seconds = Math.max(0L, millis / 1_000L);
+		if (seconds < 60L)
+		{
+			return seconds + "s";
+		}
+		return seconds / 60L + "m " + seconds % 60L + "s";
 	}
 
 	private static void runOnEdt(Runnable runnable)
