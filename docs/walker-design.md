@@ -171,13 +171,16 @@ route:
 1. Complete `arrived` when the player is on the correct plane and within the requested radius.
 2. Match the player to a nearby point on the active route; replan when more than
    three tiles off route.
-3. Click at most five path tiles ahead. Prefer a visible canvas polygon; use a
+3. Click at most ten path tiles ahead. Prefer a visible canvas polygon; use a
    minimap projection when the tile is outside the 3D viewport.
 4. If an object owns the canvas left-click, right-click and move to the exposed
    `Walk here` row. Confirm canvas selections through `MenuOptionClicked`;
    confirm minimap dispatch through subsequent player progress.
-5. Wait two game ticks between clicks, replan after eight ticks without player
-   movement, and reduce click distance after a rejected canvas target.
+5. Retain the accepted waypoint until the player is within two tiles of it or
+   has passed its route index. Retain the final waypoint until arrival instead
+   of re-clicking the same endpoint. Keep a two-game-tick minimum between
+   clicks, replan after eight ticks without player movement, and reduce click
+   distance after a rejected canvas target.
 6. Finish after five consecutive click failures, six replans, the requested
    timeout, logout/plane change, explicit script cancellation, no route, or arrival.
 
@@ -204,6 +207,16 @@ Console and `client.log` receive `WALK_REQUESTED`, `WALK_PLANNING`,
 `WALK_COMPLETED` records. The Lua script receives only the terminal receipt.
 
 ## Live verification
+
+GenericClient 0.6.1 changed route pacing from a two-tick-only gate to retained
+waypoints. The exact release artifact completed the Grand-Exchange-to-Varrock
+leg in 42 game ticks with eight clicks, one plan, and no rejected clicks. Six
+handoffs occurred one or two tiles from the accepted waypoint; one occurred at
+three tiles only after the player had passed that waypoint's route index. The
+76-tile return completed in 52 ticks with nine clicks and one plan, leaving the
+account at the Grand Exchange. The final waypoint was never re-clicked. The
+comparable pre-fix walk used 15 clicks over 48 ticks and could replace a
+waypoint from four tiles away.
 
 The bundled [`lumbridge-varrock.lua`](../src/main/resources/com/genericclient/scripts/lumbridge-varrock.lua)
 targets `{ x = 3210, y = 3424, plane = 0 }` with a three-tile arrival

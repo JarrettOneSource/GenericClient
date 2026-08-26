@@ -59,6 +59,12 @@ intentionally absent until a concrete automation requires each one.
 
 ### Live verification receipt
 
+GenericClient 0.6.1 had SHA-256
+`11b8bbb3f3d72f4a463ec5f980f94964d57becc6cb7fdaa8a4698958edf75dbe`.
+The exact installed artifact completed the retained-waypoint walker receipt in
+[`walker-design.md`](walker-design.md) and passed 55 Java tests plus three Node
+MCP tests.
+
 GenericClient 0.6.0 had SHA-256
 `4e98bb8cc3c29f5aaede1dfcfda0d48b6d123541f96e1574567de20f43f3ceb7`.
 The exact self-contained artifact loaded through the Jagex Launcher into stock

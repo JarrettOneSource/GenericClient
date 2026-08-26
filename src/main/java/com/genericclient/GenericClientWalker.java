@@ -13,13 +13,14 @@ import net.runelite.api.coords.WorldPoint;
 final class GenericClientWalker implements AutoCloseable
 {
 	private static final int MAX_REPLANS = 6;
-	private static final int MAX_CLICK_AHEAD = 5;
+	private static final int MAX_CLICK_AHEAD = 10;
 	private static final int MAX_CLICK_FAILURES = 5;
 	private static final int OFF_ROUTE_RADIUS = 3;
 	private static final int STALL_TICKS = 8;
 	private static final int CLICK_COOLDOWN_TICKS = 2;
+	private static final int WAYPOINT_ADVANCE_RADIUS = 2;
 
-	private final GenericClientGameInput gameInput;
+	private final WalkInput gameInput;
 	private final GenericClientPathfinder pathfinder;
 	private final Consumer<String> reporter;
 	private final ExecutorService plannerExecutor;
@@ -30,6 +31,27 @@ final class GenericClientWalker implements AutoCloseable
 
 	GenericClientWalker(
 		GenericClientGameInput gameInput,
+		GenericClientCollisionMap collisionMap,
+		Consumer<String> reporter)
+	{
+		this(new WalkInput()
+		{
+			@Override
+			public CompletableFuture<String> walkToTile(WorldPoint target)
+			{
+				return gameInput.walkToTile(target);
+			}
+
+			@Override
+			public void cancelWalkToTile()
+			{
+				gameInput.cancelWalkToTile();
+			}
+		}, collisionMap, reporter);
+	}
+
+	GenericClientWalker(
+		WalkInput gameInput,
 		GenericClientCollisionMap collisionMap,
 		Consumer<String> reporter)
 	{
@@ -165,6 +187,22 @@ final class GenericClientWalker implements AutoCloseable
 			{
 				return;
 			}
+			if (walk.clickTarget != null)
+			{
+				int targetDistance = distance(player, walk.clickTarget);
+				boolean finalWaypoint = walk.clickTargetIndex == walk.path.size() - 1;
+				boolean passedTarget = !finalWaypoint && nearest > walk.clickTargetIndex;
+				int advanceRadius = finalWaypoint ? 0 : WAYPOINT_ADVANCE_RADIUS;
+				if (targetDistance > advanceRadius && !passedTarget)
+				{
+					return;
+				}
+				reporter.accept("WALK_WAYPOINT_REACHED plan=" + walk.planRevision +
+					" tile=" + player + " target=" + walk.clickTarget +
+					" distance=" + targetDistance + " passed=" + passedTarget);
+				walk.clickTarget = null;
+				walk.clickTargetIndex = -1;
+			}
 
 			int clickAhead = Math.max(1, MAX_CLICK_AHEAD - walk.consecutiveClickFailures);
 			int clickIndex = Math.min(walk.path.size() - 1, nearest + clickAhead);
@@ -176,6 +214,8 @@ final class GenericClientWalker implements AutoCloseable
 
 			clickWalk = walk;
 			clickTarget = walk.path.get(clickIndex);
+			walk.clickTarget = clickTarget;
+			walk.clickTargetIndex = clickIndex;
 			walk.clickInFlight = true;
 			walk.clicks++;
 			reporter.accept("WALK_CLICK plan=" + walk.planRevision + " from=" + player +
@@ -220,6 +260,8 @@ final class GenericClientWalker implements AutoCloseable
 				}
 
 				walk.consecutiveClickFailures++;
+				walk.clickTarget = null;
+				walk.clickTargetIndex = -1;
 				String detail = error == null ? String.valueOf(result) : error.getMessage();
 				reporter.accept("WALK_CLICK_REJECTED target=" + target + " failures=" +
 					walk.consecutiveClickFailures + " result=" + detail);
@@ -247,6 +289,8 @@ final class GenericClientWalker implements AutoCloseable
 		}
 
 		walk.planning = true;
+		walk.clickTarget = null;
+		walk.clickTargetIndex = -1;
 		walk.plans++;
 		int revision = ++walk.planRevision;
 		reporter.accept("WALK_PLANNING plan=" + revision + " reason=" + reason +
@@ -444,6 +488,13 @@ final class GenericClientWalker implements AutoCloseable
 		plannerExecutor.shutdownNow();
 	}
 
+	interface WalkInput
+	{
+		CompletableFuture<String> walkToTile(WorldPoint target);
+
+		void cancelWalkToTile();
+	}
+
 	private static final class ActiveWalk
 	{
 		private final WorldPoint destination;
@@ -461,9 +512,11 @@ final class GenericClientWalker implements AutoCloseable
 		private int clicks;
 		private int consecutiveClickFailures;
 		private int pathIndex;
+		private int clickTargetIndex = -1;
 		private int pathTiles;
 		private int expandedNodes;
 		private List<WorldPoint> path;
+		private WorldPoint clickTarget;
 
 		private ActiveWalk(
 			WorldPoint destination,
