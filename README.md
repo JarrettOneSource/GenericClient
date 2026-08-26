@@ -55,9 +55,9 @@ Editable scripts are installed in:
 
 `npc-diagnostics.lua` starts with the plugin and logs nearby NPC snapshots every
 five game ticks. `walk-stress.lua` is a manual three-click stress script that
-uses the existing native ground-tile interaction. `lumbridge-varrock.lua` is a
-manual ground-route script prepared for its first test; start it outdoors in
-Lumbridge and select it in the sidebar.
+uses the existing native ground-tile interaction. `lumbridge-varrock.lua` walks
+to Varrock and has been live-tested from Falador using the same public
+`walk.to` action.
 
 The current scripting interface intentionally contains only:
 
@@ -72,7 +72,7 @@ game ticks, tick counts, `walk.random`, and `walk.to`. New snapshot subjects and
 semantic actions are added when an automation actually needs them.
 
 `walk.to` plans ordinary ground routes against a pinned global collision map
-and follows them with confirmed real-mouse clicks:
+and follows them with real-mouse canvas, context-menu, and minimap clicks:
 
 ```lua
 local result = gc.await {
@@ -88,7 +88,7 @@ local result = gc.await {
 This first slice supports one-tile, same-plane, non-instanced ground movement.
 It does not yet execute doors, stairs, ships, teleports, dialogues, or widgets,
 and it does not yet overlay the loaded scene's dynamic collision. Exact design,
-map provenance, diagnostics, receipts, and the first-test handoff are in
+map provenance, diagnostics, and live receipts are in
 [`docs/walker-design.md`](docs/walker-design.md).
 
 Each Lua file returns one root coroutine function:
@@ -138,11 +138,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.3.0.jar`
-- `build/libs/GenericClient-0.3.0-all.jar`
+- `build/libs/generic-client-0.3.1.jar`
+- `build/libs/GenericClient-0.3.1-all.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.3.0-all.jar
+java -ea -jar build/libs/GenericClient-0.3.1-all.jar
 ```

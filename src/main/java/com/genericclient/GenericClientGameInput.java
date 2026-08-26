@@ -37,7 +37,9 @@ final class GenericClientGameInput implements AutoCloseable
 {
 	private static final int LOCAL_TILE_SIZE = Perspective.LOCAL_TILE_SIZE;
 	private static final long HOVER_SETTLE_MILLIS = 250L;
+	private static final long CONTEXT_MENU_SETTLE_MILLIS = 150L;
 	private static final long CLICK_RESULT_TIMEOUT_MILLIS = 2500L;
+	private static final int CONTEXT_MENU_ENTRY_HEIGHT = 15;
 	private static final int MAX_TARGET_ATTEMPTS = 20;
 
 	private final Client client;
@@ -55,6 +57,7 @@ final class GenericClientGameInput implements AutoCloseable
 	private volatile int expectedParam1;
 	private volatile int expectedWorldViewId;
 	private volatile int targetAttemptsRemaining;
+	private volatile TargetSurface targetSurface;
 	private volatile SelectionMode selectionMode;
 	private volatile WorldPoint requestedWorldPoint;
 	private volatile Robot robot;
@@ -104,6 +107,7 @@ final class GenericClientGameInput implements AutoCloseable
 		activeResult = result;
 		awaitingMenuResult = false;
 		targetWorldPoint = null;
+		targetSurface = null;
 		selectionMode = mode;
 		requestedWorldPoint = worldPoint;
 		targetAttemptsRemaining = MAX_TARGET_ATTEMPTS;
@@ -136,8 +140,9 @@ final class GenericClientGameInput implements AutoCloseable
 
 		awaitingMenuResult = false;
 		String result = String.format(
-			"%s action=%s option=%s target=%s selectedTile=%s param0=%d param1=%d",
+			"%s surface=%s action=%s option=%s target=%s selectedTile=%s param0=%d param1=%d",
 			selectionMode == SelectionMode.RANDOM ? "WALK_CLICK_EXECUTED" : "WALK_TILE_CLICK_EXECUTED",
+			targetSurface,
 			event.getMenuAction(),
 			event.getMenuOption(),
 			event.getMenuTarget(),
@@ -194,8 +199,12 @@ final class GenericClientGameInput implements AutoCloseable
 			target = targetForLocalPoint(local, requested);
 			if (target == null)
 			{
-				finish("WALK_TILE_CLICK_FAILED reason=tile_not_visible tile=" + requested);
-				return;
+				target = targetForMinimap(local, requested);
+				if (target == null)
+				{
+					finish("WALK_TILE_CLICK_FAILED reason=no_clickable_projection tile=" + requested);
+					return;
+				}
 			}
 		}
 		else
@@ -209,9 +218,12 @@ final class GenericClientGameInput implements AutoCloseable
 		}
 
 		targetWorldPoint = target.worldPoint;
+		targetSurface = target.surface;
 		reporter.accept("WALK_CLICK_TARGET tile=" + target.worldPoint +
+			" surface=" + target.surface +
 			" canvas=" + target.canvasPoint.getX() + "," + target.canvasPoint.getY());
-		SwingUtilities.invokeLater(() -> beginNativeMouseMove(target));
+		Target selectedTarget = target;
+		SwingUtilities.invokeLater(() -> beginNativeMouseMove(selectedTarget));
 	}
 
 	private Target chooseRandomVisibleTile(Player player)
@@ -263,7 +275,18 @@ final class GenericClientGameInput implements AutoCloseable
 		java.awt.Point point = randomPointInside(polygon);
 		return point == null
 			? null
-			: new Target(new net.runelite.api.Point(point.x, point.y), worldPoint);
+			: new Target(new net.runelite.api.Point(point.x, point.y), worldPoint, TargetSurface.CANVAS);
+	}
+
+	private Target targetForMinimap(LocalPoint local, WorldPoint worldPoint)
+	{
+		net.runelite.api.Point point = Perspective.localToMinimap(client, local);
+		if (point == null || point.getX() < 0 || point.getY() < 0 ||
+			point.getX() >= client.getCanvasWidth() || point.getY() >= client.getCanvasHeight())
+		{
+			return null;
+		}
+		return new Target(point, worldPoint, TargetSurface.MINIMAP);
 	}
 
 	private java.awt.Point randomPointInside(Polygon polygon)
@@ -320,7 +343,11 @@ final class GenericClientGameInput implements AutoCloseable
 				canvasOrigin.y,
 				canvas.getWidth(),
 				canvas.getHeight());
-			animateMouse(pointerInfo.getLocation(), destination, viewport, target);
+			animateMouse(
+				pointerInfo.getLocation(),
+				destination,
+				viewport,
+				() -> clientThread.invoke(() -> verifyHoverAndClick(target)));
 		}
 		catch (RuntimeException exception)
 		{
@@ -332,7 +359,7 @@ final class GenericClientGameInput implements AutoCloseable
 		java.awt.Point start,
 		java.awt.Point destination,
 		Rectangle viewport,
-		Target target)
+		Runnable completion)
 	{
 		final Robot nativeRobot;
 		try
@@ -382,7 +409,7 @@ final class GenericClientGameInput implements AutoCloseable
 		}
 
 		long verificationDelay = durationMillis + HOVER_SETTLE_MILLIS;
-		schedule(() -> clientThread.invoke(() -> verifyHoverAndClick(target)), verificationDelay);
+		schedule(completion, verificationDelay);
 	}
 
 	boolean isRunning()
@@ -410,6 +437,11 @@ final class GenericClientGameInput implements AutoCloseable
 				mouse.getX() + "," + mouse.getY());
 			return;
 		}
+		if (target.surface == TargetSurface.MINIMAP)
+		{
+			dispatchMinimapClick(target);
+			return;
+		}
 
 		MenuEntry[] entries = client.getMenu().getMenuEntries();
 		if (entries.length == 0)
@@ -420,10 +452,28 @@ final class GenericClientGameInput implements AutoCloseable
 		MenuEntry topEntry = entries[entries.length - 1];
 		if (topEntry.getType() != MenuAction.WALK)
 		{
+			MenuEntry walkEntry = findWalkEntry(entries);
+			if (walkEntry != null)
+			{
+				openContextMenu(target, topEntry, walkEntry);
+				return;
+			}
 			if (selectionMode == SelectionMode.SPECIFIED)
 			{
-				finish("WALK_TILE_CLICK_FAILED reason=not_walk_target action=" + topEntry.getType() +
-					" option=" + topEntry.getOption() + " tile=" + target.worldPoint);
+				targetAttemptsRemaining--;
+				if (targetAttemptsRemaining > 0)
+				{
+					reporter.accept("WALK_TILE_POINT_RETRY action=" + topEntry.getType() +
+						" option=" + topEntry.getOption() + " tile=" + target.worldPoint +
+						" attemptsRemaining=" + targetAttemptsRemaining);
+					clientThread.invoke(this::selectTargetOnClientThread);
+				}
+				else
+				{
+					finish("WALK_TILE_CLICK_FAILED reason=not_walk_target action=" + topEntry.getType() +
+						" option=" + topEntry.getOption() + " tile=" + target.worldPoint +
+						" attempts=" + MAX_TARGET_ATTEMPTS);
+				}
 				return;
 			}
 			targetAttemptsRemaining--;
@@ -440,12 +490,39 @@ final class GenericClientGameInput implements AutoCloseable
 			return;
 		}
 
+		dispatchCanvasWalk(target, topEntry, "left_click");
+	}
+
+	private void dispatchMinimapClick(Target target)
+	{
+		reporter.accept("WALK_CLICK_DISPATCH tile=" + target.worldPoint + " surface=minimap");
+		executor.execute(() ->
+		{
+			if (!running.get())
+			{
+				return;
+			}
+			Robot nativeRobot = robot;
+			if (nativeRobot == null)
+			{
+				finish("WALK_CLICK_FAILED reason=robot_unavailable_before_click");
+				return;
+			}
+			nativeRobot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
+			nativeRobot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
+			finish("WALK_TILE_CLICK_EXECUTED surface=minimap selectedTile=" + target.worldPoint);
+		});
+	}
+
+	private void dispatchCanvasWalk(Target target, MenuEntry entry, String dispatch)
+	{
 		awaitingMenuResult = true;
-		expectedParam0 = topEntry.getParam0();
-		expectedParam1 = topEntry.getParam1();
-		expectedWorldViewId = topEntry.getWorldViewId();
+		expectedParam0 = entry.getParam0();
+		expectedParam1 = entry.getParam1();
+		expectedWorldViewId = entry.getWorldViewId();
 		reporter.accept("WALK_CLICK_DISPATCH tile=" + target.worldPoint +
-			" action=" + topEntry.getType() + " option=" + topEntry.getOption() +
+			" surface=canvas dispatch=" + dispatch +
+			" action=" + entry.getType() + " option=" + entry.getOption() +
 			" param0=" + expectedParam0 + " param1=" + expectedParam1 +
 			" worldView=" + expectedWorldViewId);
 		executor.execute(() ->
@@ -471,6 +548,103 @@ final class GenericClientGameInput implements AutoCloseable
 				finish("WALK_CLICK_FAILED reason=menu_event_timeout");
 			}
 		}, CLICK_RESULT_TIMEOUT_MILLIS);
+	}
+
+	private void openContextMenu(Target target, MenuEntry coveredEntry, MenuEntry walkEntry)
+	{
+		reporter.accept("WALK_CONTEXT_OPEN tile=" + target.worldPoint +
+			" coveredBy=" + coveredEntry.getOption() +
+			" walkParam0=" + walkEntry.getParam0() + " walkParam1=" + walkEntry.getParam1());
+		executor.execute(() ->
+		{
+			Robot nativeRobot = robot;
+			if (!running.get() || nativeRobot == null)
+			{
+				return;
+			}
+			nativeRobot.mousePress(InputEvent.BUTTON3_DOWN_MASK);
+			nativeRobot.mouseRelease(InputEvent.BUTTON3_DOWN_MASK);
+		});
+		schedule(() -> clientThread.invoke(() -> moveToContextMenuWalk(target)), CONTEXT_MENU_SETTLE_MILLIS);
+	}
+
+	private void moveToContextMenuWalk(Target target)
+	{
+		if (!running.get() || !client.isMenuOpen())
+		{
+			finish("WALK_TILE_CLICK_FAILED reason=context_menu_did_not_open tile=" + target.worldPoint);
+			return;
+		}
+		MenuEntry[] entries = client.getMenu().getMenuEntries();
+		int walkIndex = findWalkEntryIndex(entries);
+		if (walkIndex < 0)
+		{
+			finish("WALK_TILE_CLICK_FAILED reason=context_menu_has_no_walk tile=" + target.worldPoint);
+			return;
+		}
+
+		int headerHeight = Math.max(0,
+			client.getMenu().getMenuHeight() - entries.length * CONTEXT_MENU_ENTRY_HEIGHT);
+		int rowFromTop = entries.length - 1 - walkIndex;
+		int menuX = client.getMenu().getMenuX() + client.getMenu().getMenuWidth() / 2;
+		int menuY = client.getMenu().getMenuY() + headerHeight +
+			rowFromTop * CONTEXT_MENU_ENTRY_HEIGHT + CONTEXT_MENU_ENTRY_HEIGHT / 2;
+		Canvas canvas = client.getCanvas();
+		try
+		{
+			java.awt.Point origin = canvas.getLocationOnScreen();
+			java.awt.Point destination = new java.awt.Point(origin.x + menuX, origin.y + menuY);
+			PointerInfo pointer = MouseInfo.getPointerInfo();
+			if (pointer == null)
+			{
+				finish("WALK_CLICK_FAILED reason=mouse_pointer_unavailable");
+				return;
+			}
+			Rectangle viewport = new Rectangle(origin.x, origin.y, canvas.getWidth(), canvas.getHeight());
+			SwingUtilities.invokeLater(() -> animateMouse(
+				pointer.getLocation(),
+				destination,
+				viewport,
+				() -> clientThread.invoke(() -> clickContextMenuWalk(target))));
+		}
+		catch (RuntimeException exception)
+		{
+			finish("WALK_TILE_CLICK_FAILED reason=context_menu_position message=" + exception.getMessage());
+		}
+	}
+
+	private void clickContextMenuWalk(Target target)
+	{
+		if (!running.get() || !client.isMenuOpen())
+		{
+			finish("WALK_TILE_CLICK_FAILED reason=context_menu_closed tile=" + target.worldPoint);
+			return;
+		}
+		MenuEntry walkEntry = findWalkEntry(client.getMenu().getMenuEntries());
+		if (walkEntry == null)
+		{
+			finish("WALK_TILE_CLICK_FAILED reason=context_menu_has_no_walk tile=" + target.worldPoint);
+			return;
+		}
+		dispatchCanvasWalk(target, walkEntry, "context_menu");
+	}
+
+	private static MenuEntry findWalkEntry(MenuEntry[] entries)
+	{
+		int index = findWalkEntryIndex(entries);
+		return index < 0 ? null : entries[index];
+	}
+
+	private static int findWalkEntryIndex(MenuEntry[] entries)
+	{
+		for (int index = entries.length - 1; index >= 0; index--)
+		{
+			if (entries[index].getType() == MenuAction.WALK)
+			{
+				return index;
+			}
+		}
+		return -1;
 	}
 
 	private Robot getRobot() throws AWTException
@@ -545,12 +719,23 @@ final class GenericClientGameInput implements AutoCloseable
 	{
 		private final net.runelite.api.Point canvasPoint;
 		private final WorldPoint worldPoint;
+		private final TargetSurface surface;
 
-		private Target(net.runelite.api.Point canvasPoint, WorldPoint worldPoint)
+		private Target(
+			net.runelite.api.Point canvasPoint,
+			WorldPoint worldPoint,
+			TargetSurface surface)
 		{
 			this.canvasPoint = canvasPoint;
 			this.worldPoint = worldPoint;
+			this.surface = surface;
 		}
+	}
+
+	private enum TargetSurface
+	{
+		CANVAS,
+		MINIMAP
 	}
 
 	private enum SelectionMode

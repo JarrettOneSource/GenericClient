@@ -1,7 +1,7 @@
 # Walker design: static ground routes first
 
-Status: implemented and ready for its first live test. It has not been executed
-or tested yet. This work does not start the deferred headless mode.
+Status: implemented and live-tested from Falador to Varrock on 2026-08-25.
+This work does not start the deferred headless mode.
 
 Source snapshots:
 
@@ -27,10 +27,11 @@ local receipt = gc.await {
 `GenericClientCollisionMap` loads the pinned, packaged world map.
 `GenericClientPathfinder` runs bounded deterministic A* over its eight-directional
 ground edges. `GenericClientWalker` follows the result five tiles at a time
-through `GenericClientGameInput`, which moves the real cursor, verifies the
-top menu entry is `Walk here`, clicks, and confirms the matching
-`MenuOptionClicked`. Arrival is based on later player snapshots, not click
-dispatch.
+through `GenericClientGameInput`. Each cursor leg uses the active recorded mouse
+profile. A visible ground tile uses the canvas; an occluding object is bypassed
+by right-clicking and selecting `Walk here`; a tile outside the 3D viewport uses
+RuneLite's minimap projection. Arrival is based on later player snapshots, not
+click dispatch.
 
 A reliable whole-world walker also needs explicit semantic edges for doors,
 stairs, ships, teleports, and other discontinuities. Those are deliberately not
@@ -43,7 +44,7 @@ Therefore:
 
 - Do not build or depend on an online “web-walker node” now.
 - Do not hand-author ordinary road/path waypoints.
-- Test this static ground walker against Lumbridge to Varrock first.
+- Keep the Falador-to-Varrock live receipt as the ground-walker regression route.
 - Overlay the loaded scene's live collision flags when a real failure shows the
   static data is stale around a dynamic object.
 - Add transition definitions and handlers one real route at a time instead of importing every possible transport flow.
@@ -56,10 +57,9 @@ Its [`src/main/resources/collision-map.zip`](https://github.com/Skretzo/shortest
 
 The reproducible update path is [`osrs-pathfinding/shortest-path-tooling`](https://github.com/osrs-pathfinding/shortest-path-tooling), pinned here at [`d37d53c129d61dc8e2bb8456eb39801688a000c2`](https://github.com/osrs-pathfinding/shortest-path-tooling/tree/d37d53c129d61dc8e2bb8456eb39801688a000c2). Its collision workflow downloads a selected OSRS cache and XTEA keys from [OpenRS2's archive](https://archive.openrs2.org/caches), runs `CollisionMapDumper` through RuneLite's cache module, and produces the replacement `collision-map.zip` ([workflow](https://github.com/osrs-pathfinding/shortest-path-tooling/blob/d37d53c129d61dc8e2bb8456eb39801688a000c2/collision-map-update/README.md), [dumper](https://github.com/osrs-pathfinding/shortest-path-tooling/blob/d37d53c129d61dc8e2bb8456eb39801688a000c2/collision-map-update/CollisionMapDumper.java)).
 
-The static archive supplies unloaded-world terrain. This first implementation
-uses it as-is. A live RuneLite scene overlay is the next navigation correction
-to add after the first route test; until then, current doors and other dynamic
-collision can disagree with the planned route.
+The static archive supplies unloaded-world terrain. This implementation uses it
+as-is. A live RuneLite scene overlay remains a future correction for routes
+where current doors or dynamic collision disagree with the static plan.
 
 ## What stock RuneLite actually provides
 
@@ -75,7 +75,7 @@ The scene is local by definition. `Scene.getTiles()` is 4 by 104 by 104, and its
 
 RuneLite exposes `MenuAction.WALK`, `Client.menuAction(...)`, and the client's current local destination ([`MenuAction.WALK`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/MenuAction.java#L135-L139), [`Client.menuAction`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/Client.java#L2064-L2073), [`getLocalDestinationLocation`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/Client.java#L1077-L1084)). The injected Jagex client remains responsible for the short local route resulting from a walk click. Our planner selects safe, globally directed click targets; it does not need to replace the client's per-click movement engine.
 
-For longer local steps, `Perspective.localToMinimap` projects a `LocalPoint` into the minimap and deliberately caps the default projection to about twenty tiles, accounting for minimap zoom and camera yaw ([source](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/Perspective.java#L509-L618)). The current first slice can stay on the existing canvas-click path and choose shorter visible route points. A minimap click adapter is a later measured optimization, not a pathfinding prerequisite.
+For longer local steps, `Perspective.localToMinimap` projects a `LocalPoint` into the minimap and deliberately caps the default projection to about twenty tiles, accounting for minimap zoom and camera yaw ([source](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/Perspective.java#L509-L618)). GenericClient uses this projection whenever the selected route tile has no safe canvas polygon.
 
 ### Data that looks relevant but is not a route graph
 
@@ -126,7 +126,7 @@ The implementation has four narrow pieces:
 Lua gc.await
     -> GenericClientWalker (lifecycle and receipt)
         -> GenericClientPathfinder (static-map A*)
-        -> GenericClientGameInput (real mouse/canvas click)
+        -> GenericClientGameInput (real mouse canvas/minimap click)
 ```
 
 ### Exact supported scope
@@ -144,9 +144,7 @@ Lua gc.await
 - There is no straight-line or random fallback. A failure is returned in the
   action receipt.
 
-The static map can be stale around changed or dynamic game objects. This slice
-does not claim to solve those cases before its first live route has identified
-which correction is actually needed.
+The static map can still be stale around changed or dynamic game objects.
 
 ### Planning
 
@@ -173,8 +171,11 @@ route:
 1. Complete `arrived` when the player is on the correct plane and within the requested radius.
 2. Match the player to a nearby point on the active route; replan when more than
    three tiles off route.
-3. Click at most five path tiles ahead through the existing real cursor path.
-4. Require the matching `MenuOptionClicked` event before counting a dispatch as successful.
+3. Click at most five path tiles ahead. Prefer a visible canvas polygon; use a
+   minimap projection when the tile is outside the 3D viewport.
+4. If an object owns the canvas left-click, right-click and move to the exposed
+   `Walk here` row. Confirm canvas selections through `MenuOptionClicked`;
+   confirm minimap dispatch through subsequent player progress.
 5. Wait two game ticks between clicks, replan after eight ticks without player
    movement, and reduce click distance after a rejected canvas target.
 6. Finish after five consecutive click failures, six replans, the requested
@@ -202,32 +203,37 @@ Console and `client.log` receive `WALK_REQUESTED`, `WALK_PLANNING`,
 `WALK_PLANNED`, `WALK_CLICK`, `WALK_PROGRESS`, `WALK_CLICK_REJECTED`, and
 `WALK_COMPLETED` records. The Lua script receives only the terminal receipt.
 
-## Prepared first test
+## Live verification
 
 The bundled [`lumbridge-varrock.lua`](../src/main/resources/com/genericclient/scripts/lumbridge-varrock.lua)
 targets `{ x = 3210, y = 3424, plane = 0 }` with a three-tile arrival
-radius and a 600-game-tick timeout. Start it from outdoor ground in Lumbridge;
-starting behind a door is outside this slice's supported behavior.
+radius and a 600-game-tick timeout.
 
-This handoff intentionally contains no test result. When testing begins, first
-verify the map startup line, one planned path, multiple confirmed tile clicks,
-progress records, and a terminal receipt. Preserve the entire log if it fails;
-the first real failure determines whether the next change is live-collision
-overlay, a minimap click adapter, or the first semantic transition.
+The first attempt from Falador (`3007,3394`) reproduced an execution failure at
+the Falador garden trees: canvas points were either outside the viewport or had
+`Chop down` as the top action. After adding minimap projection and context-menu
+walking, the route completed from `2996,3392` to `3209,3427` in one plan, 172
+game ticks, 56 clicks, and 278 path tiles. Every click had a preceding
+`MOUSE_PATH_GENERATED profile=default-2dc51a50 templates=6069 points=128`
+receipt. A second return from north Varrock reached `3213,3427` in one plan, 26
+game ticks, and nine clicks.
+
+Four bounded canvas stress runs separately exercised the right-click branch.
+`Chop down` and `Search` covered several selected points; each produced
+`WALK_CONTEXT_OPEN`, a template-generated move to the context row,
+`dispatch=context_menu action=WALK option=Walk here`, and a completed script.
 
 ## Expansion sequence driven by real automations
 
 1. **Live scene overlay.** Overlay current RuneLite collision onto the static
    region data when the first stale/dynamic tile requires it.
-2. **Clickable minimap waypoint.** Add only if canvas projection is the measured
-   failure or throughput bottleneck. Keep the same `walk.to` contract.
-3. **First required transition.** Add one edge containing origin, destination,
+2. **First required transition.** Add one edge containing origin, destination,
    semantic action, prerequisites, completion observation, and cost. Implement
    only the handler demanded by the route under test.
-4. **Further transports.** Grow the catalog from observed route failures. Keep
+3. **Further transports.** Grow the catalog from observed route failures. Keep
    doors, ladders, network widgets, and item/spell teleports as separate
    executors because their confirmation contracts differ.
-5. **Optional distribution service.** If maintaining several installations on
+4. **Optional distribution service.** If maintaining several installations on
    one revision becomes burdensome, distribute signed/versioned bundles. Route
    execution and success confirmation remain local.
 

@@ -299,7 +299,6 @@ final class GenericClientWalker implements AutoCloseable
 					walk.path = result.getPath();
 					walk.pathIndex = 0;
 					walk.pathTiles = walk.path.size();
-					walk.consecutiveClickFailures = 0;
 					reporter.accept("WALK_PLANNED plan=" + revision + " pathTiles=" +
 						walk.pathTiles + " expandedNodes=" + walk.expandedNodes + " start=" + start +
 						" reachedGoal=" + walk.path.get(walk.path.size() - 1));
