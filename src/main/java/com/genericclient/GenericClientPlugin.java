@@ -116,20 +116,10 @@ public final class GenericClientPlugin extends Plugin
 			client.getCanvas(),
 			executor,
 			() -> mouseProfile,
-			config::mouseDurationMillis,
+			this::mouseMoveDurationMillis,
 			new java.awt.Point(mousePosition.getX(), mousePosition.getY()),
 			mouseEffectOverlay,
 			this::publishResult);
-		gameInput = new GenericClientGameInput(
-			client,
-			clientThread,
-			executor,
-			syntheticMouse,
-			this::publishResult);
-		mouseRecorder = new GenericClientMouseRecorder(
-			client.getCanvas(),
-			() -> gameInput.isRunning() || syntheticMouse.isMoving());
-		walker = new GenericClientWalker(gameInput, collisionMap, this::publishResult);
 		sessionController = new GenericClientSessionController(
 			GenericClientSessionController.runeliteView(client, clientThread),
 			GenericClientSessionController.syntheticInput(syntheticMouse),
@@ -164,6 +154,17 @@ public final class GenericClientPlugin extends Plugin
 			GenericClientBehaviorController.systemClock(),
 			GenericClientBehaviorController.secureRandom(),
 			this::publishResult);
+		gameInput = new GenericClientGameInput(
+			client,
+			clientThread,
+			executor,
+			syntheticMouse,
+			behaviorController,
+			this::publishResult);
+		mouseRecorder = new GenericClientMouseRecorder(
+			client.getCanvas(),
+			() -> gameInput.isRunning() || syntheticMouse.isMoving());
+		walker = new GenericClientWalker(gameInput, collisionMap, this::publishResult);
 		luaHost = new GenericClientLuaHost(
 			net.runelite.client.RuneLite.RUNELITE_DIR.toPath().resolve("genericclient").resolve("scripts"),
 			gameInput::walkToRandomTile,
@@ -389,7 +390,7 @@ public final class GenericClientPlugin extends Plugin
 				client.getRevision(),
 				profile == null ? "unavailable" : profile.getProfileId(),
 				profile == null ? 0 : profile.getTemplateCount(),
-				config.mouseDurationMillis(),
+				mouseMoveDurationMillis(),
 				getClass().getClassLoader().getClass().getName(),
 				codeSource,
 				Thread.currentThread().getName(),
@@ -567,19 +568,13 @@ public final class GenericClientPlugin extends Plugin
 			@Override
 			public void walkToRandomTile()
 			{
-				gameInput.walkToRandomTile();
+				gameInput.walkToRandomTile(false);
 			}
 
 			@Override
 			public void setMouseProfile(String file)
 			{
 				configManager.setConfiguration(GenericClientConfig.GROUP, "mouseProfileFile", file);
-			}
-
-			@Override
-			public void setMouseDuration(int milliseconds)
-			{
-				configManager.setConfiguration(GenericClientConfig.GROUP, "mouseDurationMillis", milliseconds);
 			}
 
 			@Override
@@ -678,7 +673,7 @@ public final class GenericClientPlugin extends Plugin
 			Map<String, Object> mouse = new LinkedHashMap<>();
 			mouse.put("profile", profile.getProfileId());
 			mouse.put("templates", (long) profile.getTemplateCount());
-			mouse.put("duration_ms", (long) config.mouseDurationMillis());
+			mouse.put("duration_ms", (long) mouseMoveDurationMillis());
 			value.put("mouse", mouse);
 		}
 		GenericClientLuaHost host = luaHost;
@@ -713,10 +708,17 @@ public final class GenericClientPlugin extends Plugin
 		currentPanel.updateMouseState(
 			config.mouseProfileFile(),
 			listMouseProfiles(),
-			config.mouseDurationMillis(),
 			config.mouseEffect(),
 			recorder != null && recorder.isRecording(),
 			recorder == null ? 0 : recorder.getTemplateCount());
+	}
+
+	private int mouseMoveDurationMillis()
+	{
+		GenericClientBehaviorController behaviors = behaviorController;
+		return behaviors == null
+			? GenericClientBehaviorProfile.DEFAULT_MOUSE_MOVE_DURATION_MILLIS
+			: behaviors.mouseMoveDurationMillis();
 	}
 
 	private static BufferedImage createIcon()

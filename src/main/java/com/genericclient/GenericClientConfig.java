@@ -42,18 +42,6 @@ public interface GenericClientConfig extends Config
 		return GenericClientMouseProfile.DEFAULT_FILE_NAME;
 	}
 
-	@Range(min = 25, max = 5000)
-	@ConfigItem(
-		keyName = "mouseDurationMillis",
-		name = "Mouse move duration",
-		description = "Milliseconds used to play each matched mouse trajectory",
-		hidden = true
-	)
-	default int mouseDurationMillis()
-	{
-		return 432;
-	}
-
 	@ConfigItem(
 		keyName = "mouseEffect",
 		name = "Mouse effect",

@@ -27,8 +27,8 @@ public class GenericClientControlServerTest
 	{
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("control-scripts").toPath(),
-			() -> CompletableFuture.completedFuture("unused"),
-			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("control-behavior").toPath()),
 			message -> { });

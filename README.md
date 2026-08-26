@@ -74,9 +74,11 @@ Implemented reads are `runtime`, `player`, `npcs`, and `behavior`. Implemented w
 game ticks, tick counts, `walk.random`, and `walk.to`. New snapshot subjects and
 semantic actions are added when an automation actually needs them.
 
-`walk.to` plans ordinary ground routes against a pinned global collision map
-and follows them with template-generated synthetic canvas, context-menu, and
-minimap clicks without moving the operating-system cursor:
+`walk.to` plans ordinary ground routes against a pinned global collision map.
+For each leg it turns the client camera, selects the farthest currently
+projectable route tile, and follows it with a template-generated synthetic
+canvas, context-menu, or minimap click without moving the operating-system
+cursor:
 
 ```lua
 local result = gc.await {
@@ -89,8 +91,10 @@ local result = gc.await {
 }
 ```
 
-Automated actions roll the seeded behavior profile by default. A time-sensitive
-sequence can bypass both micro and long breaks for one parent action:
+Every composite mouse-movement-and-click interaction rolls the seeded behavior
+profile by default. A multi-click walk therefore rolls after every route click.
+A time-sensitive sequence can bypass both micro and long breaks for all of its
+interactions:
 
 ```lua
 local result = gc.await {
@@ -163,6 +167,9 @@ effect. Profiles live in:
 ~/.runelite/genericclient/mouse-profiles/
 ```
 
+The active behavior profile supplies the account's mouse movement duration;
+Settings can save a manual duration as part of that account-specific profile.
+
 Select, reload, and record profiles from the dashboard's Settings tab. The
 matcher, profile schema, recording flow, effects, and source data hashes are documented in
 [`docs/mouse-profiles.md`](docs/mouse-profiles.md).
@@ -183,11 +190,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.6.1.jar`
-- `build/libs/GenericClient-0.6.1-all.jar`
+- `build/libs/generic-client-0.7.0.jar`
+- `build/libs/GenericClient-0.7.0-all.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.6.1-all.jar
+java -ea -jar build/libs/GenericClient-0.7.0-all.jar
 ```

@@ -10,8 +10,6 @@ interface GenericClientDashboardActions
 
 	void setMouseProfile(String file);
 
-	void setMouseDuration(int milliseconds);
-
 	void setMouseEffect(GenericClientMouseEffect effect);
 
 	void reloadMouseProfile();

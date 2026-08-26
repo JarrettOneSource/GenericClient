@@ -218,18 +218,22 @@ public class GenericClientBehaviorControllerTest
 				3.5,
 				GenericClientBehaviorProfile.LongBreakMode.LOGOUT,
 				0.25,
-				GenericClientBehaviorProfile.Edge.TOP));
+				GenericClientBehaviorProfile.Edge.TOP,
+				650));
 
 			Map<String, Object> custom = (Map<String, Object>) fixture.controller.status().get("profile");
 			assertTrue((Boolean) custom.get("customized"));
 			assertEquals(0.95, (Double) custom.get("short_release_probability"), 0.0);
 			assertEquals("top", custom.get("idle_edge"));
+			assertEquals(650, fixture.controller.mouseMoveDurationMillis());
 
 			fixture.controller.resetOverrides();
 			Map<String, Object> restored = (Map<String, Object>) fixture.controller.status().get("profile");
 			assertFalse((Boolean) restored.get("customized"));
 			assertEquals(seeded.get("short_release_probability"), restored.get("short_release_probability"));
 			assertEquals(seeded.get("idle_edge"), restored.get("idle_edge"));
+			assertEquals(((Long) seeded.get("mouse_move_duration_millis")).intValue(),
+				fixture.controller.mouseMoveDurationMillis());
 		}
 		finally
 		{
@@ -251,7 +255,8 @@ public class GenericClientBehaviorControllerTest
 			3.2,
 			GenericClientBehaviorProfile.LongBreakMode.AFK,
 			0.18,
-			GenericClientBehaviorProfile.Edge.RIGHT);
+			GenericClientBehaviorProfile.Edge.RIGHT,
+			375);
 		GenericClientBehaviorController first = controller(directory);
 		first.activateAccount(8080L);
 		first.saveOverrides(overrides);
@@ -265,6 +270,7 @@ public class GenericClientBehaviorControllerTest
 			assertTrue((Boolean) profile.get("customized"));
 			assertEquals(0.88, (Double) profile.get("short_release_probability"), 0.0);
 			assertEquals(300.0, (Double) profile.get("long_cadence_minutes"), 0.0);
+			assertEquals(375, second.mouseMoveDurationMillis());
 		}
 		finally
 		{

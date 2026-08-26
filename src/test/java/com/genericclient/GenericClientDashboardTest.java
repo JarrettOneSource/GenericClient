@@ -34,8 +34,8 @@ public class GenericClientDashboardTest
 	{
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("scripts").toPath(),
-			() -> CompletableFuture.completedFuture("unused"),
-			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("behavior").toPath()),
 			message -> { });
@@ -56,6 +56,7 @@ public class GenericClientDashboardTest
 
 			List<String> labels = labels(dashboard);
 			assertTrue(labels.contains("Micro chance %"));
+			assertTrue(labels.contains("Mouse move ms"));
 			assertTrue(labels.contains("Effect"));
 			assertFalse(labels.contains("Game ticks"));
 			assertFalse(labels.contains("Long pressure"));
@@ -247,7 +248,6 @@ public class GenericClientDashboardTest
 		@Override public void logNearbyNpcs() { }
 		@Override public void walkToRandomTile() { }
 		@Override public void setMouseProfile(String file) { }
-		@Override public void setMouseDuration(int milliseconds) { }
 		@Override public void setMouseEffect(GenericClientMouseEffect effect) { }
 		@Override public void reloadMouseProfile() { }
 		@Override public void startMouseRecording() { }

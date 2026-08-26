@@ -1,6 +1,7 @@
 package com.genericclient;
 
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -13,7 +14,6 @@ import net.runelite.api.coords.WorldPoint;
 final class GenericClientWalker implements AutoCloseable
 {
 	private static final int MAX_REPLANS = 6;
-	private static final int MAX_CLICK_AHEAD = 10;
 	private static final int MAX_CLICK_FAILURES = 5;
 	private static final int OFF_ROUTE_RADIUS = 3;
 	private static final int STALL_TICKS = 8;
@@ -37,9 +37,11 @@ final class GenericClientWalker implements AutoCloseable
 		this(new WalkInput()
 		{
 			@Override
-			public CompletableFuture<String> walkToTile(WorldPoint target)
+			public CompletableFuture<GenericClientInteractionResult> walkToFarthest(
+				List<WorldPoint> candidates,
+				boolean breaksEnabled)
 			{
-				return gameInput.walkToTile(target);
+				return gameInput.walkToFarthest(candidates, breaksEnabled);
 			}
 
 			@Override
@@ -69,7 +71,8 @@ final class GenericClientWalker implements AutoCloseable
 	synchronized CompletableFuture<Map<String, Object>> walkTo(
 		WorldPoint destination,
 		int within,
-		int timeoutTicks)
+		int timeoutTicks,
+		boolean breaksEnabled)
 	{
 		if (destination == null)
 		{
@@ -109,7 +112,7 @@ final class GenericClientWalker implements AutoCloseable
 					destination, start, within));
 		}
 
-		ActiveWalk walk = new ActiveWalk(destination, within, timeoutTicks, tick, start);
+		ActiveWalk walk = new ActiveWalk(destination, within, timeoutTicks, tick, start, breaksEnabled);
 		active = walk;
 		reporter.accept("WALK_REQUESTED start=" + start + " destination=" + destination +
 			" within=" + within + " timeoutTicks=" + timeoutTicks);
@@ -121,7 +124,7 @@ final class GenericClientWalker implements AutoCloseable
 	{
 		latestSnapshot = snapshot;
 		ActiveWalk clickWalk = null;
-		WorldPoint clickTarget = null;
+		List<WorldPoint> clickCandidates = null;
 
 		synchronized (this)
 		{
@@ -145,10 +148,15 @@ final class GenericClientWalker implements AutoCloseable
 			}
 			if (distance(player, walk.destination) <= walk.within)
 			{
+				if (walk.clickInFlight)
+				{
+					return;
+				}
 				finish(walk, "arrived", "arrival_radius", player, tick);
 				return;
 			}
-			if (tick - walk.startedAtTick >= walk.timeoutTicks)
+			if (!walk.clickInFlight &&
+				tick - walk.startedAtTick - walk.pausedInteractionTicks >= walk.timeoutTicks)
 			{
 				finish(walk, "timed_out", "game_tick_timeout", player, tick);
 				return;
@@ -177,13 +185,7 @@ final class GenericClientWalker implements AutoCloseable
 					" pathIndex=" + nearest + " remaining=" + (walk.path.size() - 1 - nearest));
 			}
 
-			if (walk.clicks > 0 && tick - walk.lastMovedTick >= STALL_TICKS)
-			{
-				walk.lastMovedTick = tick;
-				requestPlan(walk, player, "stalled");
-				return;
-			}
-			if (walk.clickInFlight || tick < walk.nextClickTick)
+			if (walk.clickInFlight)
 			{
 				return;
 			}
@@ -195,6 +197,17 @@ final class GenericClientWalker implements AutoCloseable
 				int advanceRadius = finalWaypoint ? 0 : WAYPOINT_ADVANCE_RADIUS;
 				if (targetDistance > advanceRadius && !passedTarget)
 				{
+					if (tick - walk.lastMovedTick >= STALL_TICKS)
+					{
+						int attemptedLeg = Math.max(1, walk.clickTargetIndex - nearest);
+						walk.maximumLegTiles = Math.min(
+							walk.maximumLegTiles,
+							Math.max(3, attemptedLeg - 3));
+						reporter.accept("WALK_LEG_BACKOFF attempted=" + attemptedLeg +
+							" maximum=" + walk.maximumLegTiles + " target=" + walk.clickTarget);
+						walk.lastMovedTick = tick;
+						requestPlan(walk, player, "stalled");
+					}
 					return;
 				}
 				reporter.accept("WALK_WAYPOINT_REACHED plan=" + walk.planRevision +
@@ -202,27 +215,45 @@ final class GenericClientWalker implements AutoCloseable
 					" distance=" + targetDistance + " passed=" + passedTarget);
 				walk.clickTarget = null;
 				walk.clickTargetIndex = -1;
+				walk.lastMovedTick = tick;
+				if (walk.maximumLegTiles != Integer.MAX_VALUE)
+				{
+					walk.maximumLegTiles++;
+				}
+			}
+			else if (walk.clicks > 0 && tick - walk.lastMovedTick >= STALL_TICKS)
+			{
+				walk.lastMovedTick = tick;
+				requestPlan(walk, player, "stalled_without_target");
+				return;
+			}
+			if (tick < walk.nextClickTick)
+			{
+				return;
 			}
 
-			int clickAhead = Math.max(1, MAX_CLICK_AHEAD - walk.consecutiveClickFailures);
-			int clickIndex = Math.min(walk.path.size() - 1, nearest + clickAhead);
-			if (clickIndex <= nearest)
+			if (nearest >= walk.path.size() - 1)
 			{
 				requestPlan(walk, player, "path_exhausted_before_arrival");
 				return;
 			}
 
 			clickWalk = walk;
-			clickTarget = walk.path.get(clickIndex);
-			walk.clickTarget = clickTarget;
-			walk.clickTargetIndex = clickIndex;
+			int candidateEnd = walk.maximumLegTiles == Integer.MAX_VALUE
+				? walk.path.size() - 1
+				: Math.min(walk.path.size() - 1, nearest + walk.maximumLegTiles);
+			clickCandidates = new ArrayList<>(candidateEnd - nearest);
+			for (int index = candidateEnd; index > nearest; index--)
+			{
+				clickCandidates.add(walk.path.get(index));
+			}
 			walk.clickInFlight = true;
-			walk.clicks++;
-			reporter.accept("WALK_CLICK plan=" + walk.planRevision + " from=" + player +
-				" target=" + clickTarget + " pathIndex=" + clickIndex);
+			walk.clickStartedTick = tick;
+			reporter.accept("WALK_CLICK_REQUEST plan=" + walk.planRevision + " from=" + player +
+				" candidates=" + clickCandidates.size() + " farthest=" + clickCandidates.get(0));
 		}
 
-		dispatchClick(clickWalk, clickTarget);
+		dispatchClick(clickWalk, clickCandidates);
 	}
 
 	synchronized void cancelActive(String reason)
@@ -238,9 +269,9 @@ final class GenericClientWalker implements AutoCloseable
 		finish(walk, "cancelled", reason, reached, tick);
 	}
 
-	private void dispatchClick(ActiveWalk walk, WorldPoint target)
+	private void dispatchClick(ActiveWalk walk, List<WorldPoint> candidates)
 	{
-		gameInput.walkToTile(target).whenComplete((result, error) ->
+		gameInput.walkToFarthest(candidates, walk.breaksEnabled).whenComplete((result, error) ->
 		{
 			synchronized (GenericClientWalker.this)
 			{
@@ -252,18 +283,30 @@ final class GenericClientWalker implements AutoCloseable
 				walk.clickInFlight = false;
 				GenericClientSnapshot snapshot = latestSnapshot;
 				long tick = snapshot == null ? walk.startedAtTick : snapshot.getGameTick();
+				walk.pausedInteractionTicks += Math.max(0L, tick - walk.clickStartedTick);
 				walk.nextClickTick = tick + CLICK_COOLDOWN_TICKS;
-				if (error == null && result != null && result.startsWith("WALK_TILE_CLICK_EXECUTED"))
+				if (result != null && result.isClickDispatched())
+				{
+					walk.clicks++;
+				}
+				if (error == null && result != null && result.isWalkExecuted() && result.getTarget() != null)
 				{
 					walk.consecutiveClickFailures = 0;
+					walk.clickTarget = result.getTarget();
+					walk.clickTargetIndex = routeIndex(walk, result.getTarget());
+					WorldPoint from = snapshot == null ? null : snapshot.getPlayerWorldPoint();
+					reporter.accept("WALK_CLICK plan=" + walk.planRevision + " from=" + from +
+						" target=" + walk.clickTarget + " pathIndex=" + walk.clickTargetIndex);
 					return;
 				}
 
 				walk.consecutiveClickFailures++;
 				walk.clickTarget = null;
 				walk.clickTargetIndex = -1;
-				String detail = error == null ? String.valueOf(result) : error.getMessage();
-				reporter.accept("WALK_CLICK_REJECTED target=" + target + " failures=" +
+				String detail = error == null
+					? result == null ? "null" : result.getDetail()
+					: error.getMessage();
+				reporter.accept("WALK_CLICK_REJECTED failures=" +
 					walk.consecutiveClickFailures + " result=" + detail);
 				if (walk.consecutiveClickFailures >= MAX_CLICK_FAILURES)
 				{
@@ -377,6 +420,18 @@ final class GenericClientWalker implements AutoCloseable
 		return bestDistance <= OFF_ROUTE_RADIUS ? bestIndex : -1;
 	}
 
+	private static int routeIndex(ActiveWalk walk, WorldPoint target)
+	{
+		for (int index = walk.path.size() - 1; index >= 0; index--)
+		{
+			if (target.equals(walk.path.get(index)))
+			{
+				return index;
+			}
+		}
+		throw new IllegalStateException("Selected walk target is not on the active route: " + target);
+	}
+
 	private void finish(
 		ActiveWalk walk,
 		String status,
@@ -414,6 +469,7 @@ final class GenericClientWalker implements AutoCloseable
 		receipt.put("reached", worldMap(reached));
 		receipt.put("within", (long) walk.within);
 		receipt.put("game_ticks", Math.max(0, tick - walk.startedAtTick));
+		receipt.put("active_game_ticks", Math.max(0, tick - walk.startedAtTick - walk.pausedInteractionTicks));
 		receipt.put("plans", (long) walk.plans);
 		receipt.put("clicks", (long) walk.clicks);
 		receipt.put("path_tiles", (long) walk.pathTiles);
@@ -435,6 +491,7 @@ final class GenericClientWalker implements AutoCloseable
 		receipt.put("reached", worldMap(reached));
 		receipt.put("within", (long) within);
 		receipt.put("game_ticks", 0L);
+		receipt.put("active_game_ticks", 0L);
 		receipt.put("plans", 0L);
 		receipt.put("clicks", 0L);
 		receipt.put("path_tiles", 0L);
@@ -490,7 +547,9 @@ final class GenericClientWalker implements AutoCloseable
 
 	interface WalkInput
 	{
-		CompletableFuture<String> walkToTile(WorldPoint target);
+		CompletableFuture<GenericClientInteractionResult> walkToFarthest(
+			List<WorldPoint> candidates,
+			boolean breaksEnabled);
 
 		void cancelWalkToTile();
 	}
@@ -500,11 +559,14 @@ final class GenericClientWalker implements AutoCloseable
 		private final WorldPoint destination;
 		private final int within;
 		private final int timeoutTicks;
+		private final boolean breaksEnabled;
 		private final long startedAtTick;
 		private final CompletableFuture<Map<String, Object>> completion = new CompletableFuture<>();
 		private WorldPoint lastPlayer;
 		private long lastMovedTick;
 		private long nextClickTick;
+		private long clickStartedTick;
+		private long pausedInteractionTicks;
 		private boolean planning;
 		private boolean clickInFlight;
 		private int planRevision;
@@ -515,6 +577,7 @@ final class GenericClientWalker implements AutoCloseable
 		private int clickTargetIndex = -1;
 		private int pathTiles;
 		private int expandedNodes;
+		private int maximumLegTiles = Integer.MAX_VALUE;
 		private List<WorldPoint> path;
 		private WorldPoint clickTarget;
 
@@ -523,11 +586,13 @@ final class GenericClientWalker implements AutoCloseable
 			int within,
 			int timeoutTicks,
 			long startedAtTick,
-			WorldPoint start)
+			WorldPoint start,
+			boolean breaksEnabled)
 		{
 			this.destination = destination;
 			this.within = within;
 			this.timeoutTicks = timeoutTicks;
+			this.breaksEnabled = breaksEnabled;
 			this.startedAtTick = startedAtTick;
 			this.lastPlayer = start;
 			this.lastMovedTick = startedAtTick;

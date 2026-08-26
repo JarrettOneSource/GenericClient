@@ -15,11 +15,14 @@ final class GenericClientBehaviorProfile
 	static final double SHORT_DURATION_MAX_SECONDS = 120.0;
 	static final double LONG_DURATION_MIN_MINUTES = 3.0;
 	static final double LONG_DURATION_MAX_MINUTES = 60.0;
+	static final int DEFAULT_MOUSE_MOVE_DURATION_MILLIS = 432;
+	static final int MOUSE_MOVE_DURATION_MIN_MILLIS = 150;
+	static final int MOUSE_MOVE_DURATION_MAX_MILLIS = 1_200;
 
 	private static final String DOMAIN = "genericclient.behavior.v1";
 	private static final double[] SHORT_QUANTILES = {0.0, 0.10, 0.25, 0.50, 0.75, 0.90, 1.0};
 	private static final double[] SHORT_PROBABILITIES = {0.02, 0.05, 0.12, 0.35, 0.65, 0.85, 1.0};
-	private static final double REFERENCE_ELIGIBLE_ACTIONS_PER_HOUR = 36.0;
+	private static final double REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR = 36.0;
 
 	private final String id;
 	private final double shortReleaseProbability;
@@ -34,6 +37,7 @@ final class GenericClientBehaviorProfile
 	private final LongBreakMode favoredLongBreakMode;
 	private final double oppositeLongBreakProbability;
 	private final Edge idleEdge;
+	private final int mouseMoveDurationMillis;
 	private final String title;
 	private final String summary;
 	private final double referenceDowntimePercent;
@@ -53,6 +57,7 @@ final class GenericClientBehaviorProfile
 		LongBreakMode favoredLongBreakMode,
 		double oppositeLongBreakProbability,
 		Edge idleEdge,
+		int mouseMoveDurationMillis,
 		boolean customized)
 	{
 		this.id = id;
@@ -68,6 +73,7 @@ final class GenericClientBehaviorProfile
 		this.favoredLongBreakMode = favoredLongBreakMode;
 		this.oppositeLongBreakProbability = oppositeLongBreakProbability;
 		this.idleEdge = idleEdge;
+		this.mouseMoveDurationMillis = mouseMoveDurationMillis;
 		this.customized = customized;
 		this.referenceDowntimePercent = calculateReferenceDowntimePercent();
 		this.title = buildTitle();
@@ -87,6 +93,7 @@ final class GenericClientBehaviorProfile
 		double longQuantile = correlatedUnit(accountHash, "long.cadence", styleZ, 0.40);
 		double phaseQuantile = correlatedUnit(accountHash, "phase.sensitivity", styleZ, 0.50);
 		double longDurationQuantile = unit(accountHash, "long.duration");
+		double mouseDurationQuantile = correlatedUnit(accountHash, "mouse.duration", styleZ, 0.35);
 
 		double longCadence = 300.0 * Math.exp(-2.015 * longQuantile);
 		double longRefractory = clamp(0.30 * longCadence, 10.0, 60.0);
@@ -109,6 +116,7 @@ final class GenericClientBehaviorProfile
 			favorite,
 			0.02 + 0.13 * oppositeUnit * oppositeUnit,
 			Edge.values()[(int) Math.floor(unit(accountHash, "idle.edge") * Edge.values().length)],
+			roundToStep(300.0 + 350.0 * mouseDurationQuantile, 25),
 			false);
 	}
 
@@ -132,6 +140,9 @@ final class GenericClientBehaviorProfile
 			overrides.getFavoredLongBreakMode(),
 			overrides.getOppositeLongBreakProbability(),
 			overrides.getIdleEdge(),
+			overrides.getMouseMoveDurationMillis() == 0
+				? mouseMoveDurationMillis
+				: overrides.getMouseMoveDurationMillis(),
 			true);
 	}
 
@@ -200,6 +211,11 @@ final class GenericClientBehaviorProfile
 		return idleEdge;
 	}
 
+	int getMouseMoveDurationMillis()
+	{
+		return mouseMoveDurationMillis;
+	}
+
 	String getTitle()
 	{
 		return title;
@@ -248,7 +264,8 @@ final class GenericClientBehaviorProfile
 		value.put("favored_long_break_mode", favoredLongBreakMode.name().toLowerCase(Locale.ROOT));
 		value.put("opposite_long_break_probability", oppositeLongBreakProbability);
 		value.put("idle_edge", idleEdge.name().toLowerCase(Locale.ROOT));
-		value.put("reference_eligible_actions_per_hour", REFERENCE_ELIGIBLE_ACTIONS_PER_HOUR);
+		value.put("mouse_move_duration_millis", (long) mouseMoveDurationMillis);
+		value.put("reference_eligible_interactions_per_hour", REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR);
 		value.put("reference_forced_downtime_percent", referenceDowntimePercent);
 		return value;
 	}
@@ -278,10 +295,11 @@ final class GenericClientBehaviorProfile
 	private String buildSummary()
 	{
 		return String.format(Locale.ROOT,
-			"Releases client focus after about %.0f%% of eligible parent actions. " +
+			"Releases client focus after about %.0f%% of composite client interactions. " +
 				"Typical forced pauses center near %.1f seconds, with a %.0f%% chance of a 12-120 second tail. " +
 				"Long breaks average about %.0f active minutes apart and center near %.1f minutes; usually %s, " +
 				"with the opposite choice about %.0f%% of the time. Major phases apply %.1f ordinary short-break chances. " +
+				"Recorded mouse paths play over %d milliseconds. " +
 				"At %.0f eligible actions per hour, estimated forced downtime is %.0f%%.",
 			shortReleaseProbability * 100.0,
 			shortBodyMedianSeconds,
@@ -291,7 +309,8 @@ final class GenericClientBehaviorProfile
 			favoredLongBreakMode == LongBreakMode.AFK ? "remains AFK" : "logs out",
 			oppositeLongBreakProbability * 100.0,
 			phaseShortChances,
-			REFERENCE_ELIGIBLE_ACTIONS_PER_HOUR,
+			mouseMoveDurationMillis,
+			REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR,
 			referenceDowntimePercent);
 	}
 
@@ -301,7 +320,7 @@ final class GenericClientBehaviorProfile
 		double tailMeanSeconds = 108.0 / Math.log(10.0);
 		double shortMeanSeconds = (1.0 - shortTailProbability) * bodyMeanSeconds +
 			shortTailProbability * tailMeanSeconds;
-		double shortMinutes = REFERENCE_ELIGIBLE_ACTIONS_PER_HOUR * shortReleaseProbability *
+		double shortMinutes = REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR * shortReleaseProbability *
 			shortMeanSeconds / 60.0;
 		double longMeanMinutes = 3.0 + (longMedianMinutes - 3.0) * Math.exp(0.125);
 		double longMinutes = 60.0 / longCadenceMinutes * longMeanMinutes;
@@ -335,6 +354,11 @@ final class GenericClientBehaviorProfile
 			}
 		}
 		return ys[ys.length - 1];
+	}
+
+	private static int roundToStep(double value, int step)
+	{
+		return (int) Math.round(value / step) * step;
 	}
 
 	private static double unit(long accountHash, String label)

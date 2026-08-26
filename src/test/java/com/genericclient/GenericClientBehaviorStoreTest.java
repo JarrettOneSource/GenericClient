@@ -109,7 +109,8 @@ public class GenericClientBehaviorStoreTest
 			3.0,
 			GenericClientBehaviorProfile.LongBreakMode.LOGOUT,
 			0.15,
-			GenericClientBehaviorProfile.Edge.LEFT);
+			GenericClientBehaviorProfile.Edge.LEFT,
+			525);
 
 		store.saveOverrides(profile.getId(), overrides);
 		assertEquals(overrides.toMap(), store.loadOverrides(profile.getId()).toMap());

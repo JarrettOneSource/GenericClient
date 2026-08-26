@@ -5,7 +5,7 @@ import * as z from "zod/v4";
 
 import { GenericClientBridge } from "./bridge.mjs";
 
-const VERSION = "0.6.1";
+const VERSION = "0.7.0";
 
 function result(value) {
   return {
@@ -26,7 +26,7 @@ export function createServer(bridge = new GenericClientBridge()) {
         "GenericClient controls the live RuneLite client through Lua. Call client_status first. " +
         "Use lua_eval for ad-hoc exploration; its code is the body of a persistent Lua function, so return a value to receive it. " +
         "Available Lua primitives are gc.read(subject, query), gc.await(request), and gc.log(level, event, fields). " +
-        "Actions use the seeded behavior profile unless breaks=false; gc.phase(name) performs a heavier phase evaluation. " +
+        "Each composite client interaction uses the seeded behavior profile unless breaks=false; gc.phase(name) performs a heavier phase evaluation. " +
         "Use script_save for reusable standalone scripts, then script_run by id. Only one manifest script and one REPL execution run at a time.",
     },
   );

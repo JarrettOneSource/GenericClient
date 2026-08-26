@@ -40,9 +40,10 @@ The Settings tab selects one filename from that directory. Copy another profile
 into the directory, select it, and press **Reload**. A failed load leaves the
 currently active profile unchanged and writes the parse error to `client.log`.
 
-**Mouse move duration** controls the playback duration supplied to the matcher.
-The default is 432 milliseconds, matching GenericClient's previous mouse move
-duration.
+The active account behavior profile controls the playback duration supplied to
+the matcher. Seeded values range from 300 through 650 milliseconds in 25 ms
+steps. **Mouse move ms** in the Behavior section saves an account-specific
+override; **Use seeded** restores the derived value.
 
 ## Cursor effects
 

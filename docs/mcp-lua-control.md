@@ -113,8 +113,8 @@ local result = gc.await {
 return result
 ```
 
-Actions use the account behavior profile by default. A time-sensitive parent
-action can bypass both break classes:
+Each composite client interaction uses the account behavior profile by default.
+A time-sensitive task can bypass both break classes for all of its interactions:
 
 ```lua
 return gc.await {

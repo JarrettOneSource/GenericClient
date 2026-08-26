@@ -148,6 +148,13 @@ final class GenericClientBehaviorController implements AutoCloseable
 		return status();
 	}
 
+	synchronized int mouseMoveDurationMillis()
+	{
+		return profile == null
+			? GenericClientBehaviorProfile.DEFAULT_MOUSE_MOVE_DURATION_MILLIS
+			: profile.getMouseMoveDurationMillis();
+	}
+
 	synchronized void setLoggedIn(boolean loggedIn)
 	{
 		this.loggedIn = loggedIn;

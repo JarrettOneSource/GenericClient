@@ -10,7 +10,7 @@ fresh runtime random source.
 ## Profile traits
 
 Independent SHA-256 labels derive an attention style and separate short, long,
-duration, phase, logout, and idle-edge traits. A Gaussian copula softly
+duration, mouse, phase, logout, and idle-edge traits. A Gaussian copula softly
 correlates attention style with short cadence, long cadence, short duration,
 and phase sensitivity while preserving all four combinations of frequent or
 rare short and long breaks.
@@ -27,6 +27,7 @@ rare short and long breaks.
 | Phase short weight | Equivalent to 1-4 ordinary short chances |
 | Long-mode reversal | 2-15% chance of the non-favored AFK/logout choice |
 | Idle edge | One stable choice from left, right, top, or bottom |
+| Mouse move duration | 300-650 milliseconds in 25 ms steps |
 
 The dashboard and MCP status expose a title and plain-language summary generated
 only from these numeric values. That text never feeds back into behavior.
@@ -35,7 +36,8 @@ only from these numeric values. That text never feeds back into behavior.
 
 The Settings tab can override the understandable profile controls per account:
 micro chance and duration, long-micro chance, long-break interval and duration,
-phase boost, preferred AFK/logout style, style-switch chance, and idle edge.
+phase boost, preferred AFK/logout style, style-switch chance, idle edge, and
+mouse move duration.
 Derived refractory, hazard scale, summary, and downtime are recomputed from the
 custom values. **Use seeded** deletes the override and restores the exact
 account-derived profile.
@@ -45,9 +47,15 @@ profile ID is a one-way derived identifier; the raw account hash is not stored.
 
 ## Action contract
 
-Only a high-level parent action evaluates breaks. Mouse movement, right-clicks,
-context-menu selection, minimap/canvas clicks, walker retries, and other child
-steps inherit their parent decision.
+A composite client interaction evaluates breaks. For walking, one interaction
+contains any needed camera turn, one recorded-template cursor movement, and the
+click that advances the interaction. Context-menu walking treats its right-click
+and menu-selection click as separate interactions and reopens the menu if a
+break closes it.
+Every dispatched route interaction runs its own before/after evaluation. A
+`walk.to` task containing eight route clicks therefore performs eight micro
+rolls, not one roll around the whole task. Low-level mouse path samples do not
+roll independently.
 
 Automated Lua and MCP actions default to breaks enabled:
 
@@ -60,7 +68,8 @@ local result = gc.await {
 }
 ```
 
-A time-sensitive sequence can bypass both micro and long breaks for one action:
+A time-sensitive sequence can bypass both micro and long breaks for every
+composite interaction it performs:
 
 ```lua
 local result = gc.await {
@@ -75,7 +84,7 @@ responsive during a break.
 
 ## Micro breaks and off-canvas idle
 
-A micro roll occurs after a successfully completed parent action. If selected:
+A micro roll occurs after each dispatched composite interaction. If selected:
 
 1. the recorded mouse-template matcher moves the synthetic client cursor to the
    account's stable off-canvas edge;
@@ -98,7 +107,7 @@ H(s) = (max(0, s - R) / lambda)^2
 
 A fresh exponential budget is persisted. Long becomes due when cumulative
 hazard reaches that budget and begins at the next eligible safe boundary.
-`breaks=false` and long-running parent actions preserve accumulated pressure.
+`breaks=false` and long-running composite interactions preserve accumulated pressure.
 Micro breaks never reset or suppress it. If long and micro are both selected,
 long wins.
 
@@ -147,4 +156,6 @@ The existing recorded template matcher still generates the complete path, but
 GenericClient no longer reads or moves the operating-system pointer. Returning
 from off-canvas idle emits focus/enter events; leaving emits exit/focus-loss
 events. Synthetic events are marked so manual mouse-profile recording ignores
-them.
+them. Walking rotates the client camera through RuneLite's injected camera yaw
+target before recomputing the canvas/minimap projection; it never moves the
+operating-system cursor.

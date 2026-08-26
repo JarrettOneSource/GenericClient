@@ -14,7 +14,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.coords.WorldPoint;
 
@@ -29,7 +28,7 @@ final class GenericClientLuaHost implements AutoCloseable
 	private static final int LOG_HISTORY_SIZE = 80;
 
 	private final GenericClientScriptRegistry registry;
-	private final Supplier<CompletableFuture<String>> walkRandomAction;
+	private final WalkRandomAction walkRandomAction;
 	private final WalkToAction walkToAction;
 	private final Consumer<String> cancelWalkAction;
 	private final GenericClientBehaviorController behavior;
@@ -48,7 +47,7 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	GenericClientLuaHost(
 		Path scriptsDirectory,
-		Supplier<CompletableFuture<String>> walkRandomAction,
+		WalkRandomAction walkRandomAction,
 		WalkToAction walkToAction,
 		Consumer<String> cancelWalkAction,
 		GenericClientBehaviorController behavior,
@@ -194,22 +193,16 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	void submitWalkRandom(GenericClientLuaScript script, long requestId, boolean breaksEnabled)
 	{
-		behavior.beforeAction(breaksEnabled).thenCompose(before ->
+		walkRandomAction.walk(breaksEnabled).handle((result, error) ->
 		{
-			Map<String, Object> receipt = new LinkedHashMap<>();
-			receipt.put("behavior_before", before);
-			return walkRandomAction.get().handle((result, error) ->
+			if (error != null)
 			{
-				if (error != null)
-				{
-					receipt.put("status", "rejected");
-					receipt.put("result", rootMessage(error));
-					return new ActionOutcome(receipt, false);
-				}
-				receipt.put("status", result.startsWith("WALK_CLICK_EXECUTED") ? "dispatched" : "rejected");
-				receipt.put("result", result);
-				return new ActionOutcome(receipt, true);
-			}).thenCompose(outcome -> finishBehavior(outcome, breaksEnabled));
+				Map<String, Object> receipt = new LinkedHashMap<>();
+				receipt.put("status", "rejected");
+				receipt.put("result", rootMessage(error));
+				return receipt;
+			}
+			return result.toReceipt();
 		}).whenComplete((receipt, error) -> completeAction(script, requestId, receipt, error));
 	}
 
@@ -221,22 +214,17 @@ final class GenericClientLuaHost implements AutoCloseable
 		int timeoutTicks,
 		boolean breaksEnabled)
 	{
-		behavior.beforeAction(breaksEnabled).thenCompose(before ->
+		walkToAction.walkTo(destination, within, timeoutTicks, breaksEnabled).handle((receipt, error) ->
 		{
-			return walkToAction.walkTo(destination, within, timeoutTicks).handle((receipt, error) ->
+			Map<String, Object> result = receipt == null
+				? new LinkedHashMap<>()
+				: new LinkedHashMap<>(receipt);
+			if (error != null)
 			{
-				Map<String, Object> result = receipt == null
-					? new LinkedHashMap<>()
-					: new LinkedHashMap<>(receipt);
-				result.put("behavior_before", before);
-				if (error != null)
-				{
-					result.put("status", "rejected");
-					result.put("reason", rootMessage(error));
-					return new ActionOutcome(result, false);
-				}
-				return new ActionOutcome(result, true);
-			}).thenCompose(outcome -> finishBehavior(outcome, breaksEnabled));
+				result.put("status", "rejected");
+				result.put("reason", rootMessage(error));
+			}
+			return result;
 		}).whenComplete((receipt, error) -> completeAction(script, requestId, receipt, error));
 	}
 
@@ -248,21 +236,6 @@ final class GenericClientLuaHost implements AutoCloseable
 	{
 		behavior.enterPhase(phase, breaksEnabled).whenComplete((receipt, error) ->
 			completePhase(script, requestId, phase, receipt, error));
-	}
-
-	private CompletableFuture<Map<String, Object>> finishBehavior(
-		ActionOutcome outcome,
-		boolean breaksEnabled)
-	{
-		if (!outcome.completedNormally)
-		{
-			return CompletableFuture.completedFuture(outcome.receipt);
-		}
-		return behavior.afterAction(breaksEnabled).thenApply(after ->
-		{
-			outcome.receipt.put("behavior_after", after);
-			return outcome.receipt;
-		});
 	}
 
 	private void completeAction(
@@ -626,23 +599,18 @@ final class GenericClientLuaHost implements AutoCloseable
 	}
 
 	@FunctionalInterface
+	interface WalkRandomAction
+	{
+		CompletableFuture<GenericClientInteractionResult> walk(boolean breaksEnabled);
+	}
+
+	@FunctionalInterface
 	interface WalkToAction
 	{
 		CompletableFuture<Map<String, Object>> walkTo(
 			WorldPoint destination,
 			int within,
-			int timeoutTicks);
-	}
-
-	private static final class ActionOutcome
-	{
-		private final Map<String, Object> receipt;
-		private final boolean completedNormally;
-
-		private ActionOutcome(Map<String, Object> receipt, boolean completedNormally)
-		{
-			this.receipt = receipt;
-			this.completedNormally = completedNormally;
-		}
+			int timeoutTicks,
+			boolean breaksEnabled);
 	}
 }

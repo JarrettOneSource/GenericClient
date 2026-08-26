@@ -66,7 +66,6 @@ final class GenericClientDashboard extends PluginPanel
 	void updateMouseState(
 		String currentProfile,
 		List<String> profiles,
-		int durationMillis,
 		GenericClientMouseEffect effect,
 		boolean recording,
 		int recordedTemplates)
@@ -74,7 +73,6 @@ final class GenericClientDashboard extends PluginPanel
 		runOnEdt(() -> settings.updateMouse(
 			currentProfile,
 			profiles,
-			durationMillis,
 			effect,
 			recording,
 			recordedTemplates));

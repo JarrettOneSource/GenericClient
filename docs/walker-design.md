@@ -171,12 +171,14 @@ route:
 1. Complete `arrived` when the player is on the correct plane and within the requested radius.
 2. Match the player to a nearby point on the active route; replan when more than
    three tiles off route.
-3. Click at most ten path tiles ahead. Prefer a visible canvas polygon; use a
-   minimap projection when the tile is outside the 3D viewport.
+3. Offer the entire remaining route from farthest to nearest. The input module
+   turns the camera, recomputes projection, and selects the first route tile
+   currently reachable through a visible canvas polygon or minimap projection.
 4. If an object owns the canvas left-click, right-click and move to the exposed
    `Walk here` row. Confirm canvas selections through `MenuOptionClicked`;
    confirm minimap dispatch through subsequent player progress.
-5. Retain the accepted waypoint until the player is within two tiles of it or
+5. Run one behavior evaluation after every dispatched route click, then retain
+   the accepted waypoint until the player is within two tiles of it or
    has passed its route index. Retain the final waypoint until arrival instead
    of re-clicking the same endpoint. Keep a two-game-tick minimum between
    clicks, replan after eight ticks without player movement, and reduce click
@@ -194,6 +196,7 @@ route:
   reached = { x = 3200, y = 3199, plane = 0 },
   within = 1,
   game_ticks = 14,
+  active_game_ticks = 10, -- excludes camera/mouse/click/break interaction time
   plans = 2,
   clicks = 4,
   path_tiles = 31,
@@ -203,10 +206,21 @@ route:
 ```
 
 Console and `client.log` receive `WALK_REQUESTED`, `WALK_PLANNING`,
-`WALK_PLANNED`, `WALK_CLICK`, `WALK_PROGRESS`, `WALK_CLICK_REJECTED`, and
-`WALK_COMPLETED` records. The Lua script receives only the terminal receipt.
+`WALK_PLANNED`, `CAMERA_TURN_STARTED`, `CAMERA_TURN_COMPLETED`,
+`WALK_CLICK_REQUEST`, `WALK_CLICK`, `WALK_INTERACTION_COMPLETED`,
+`WALK_CONTEXT_INTERACTION_COMPLETED`, `WALK_PROGRESS`, `WALK_CLICK_REJECTED`,
+and `WALK_COMPLETED` records. The Lua script receives only the terminal receipt.
 
 ## Live verification
+
+GenericClient 0.7.0 completed a breaks-enabled Varrock-to-Grand-Exchange run
+with eight route clicks, eight camera turns, and eight interaction behavior
+receipts. Five clicks selected micro breaks, no click was rejected, and one
+accepted edge-of-minimap leg was automatically shortened after it produced no
+movement. The terminal receipt reported 167 wall-clock game ticks but only 35
+active execution ticks after excluding camera, mouse, click, and break time.
+The seeded mouse duration was 550 milliseconds, and the account finished ready
+at `3166,3483`.
 
 GenericClient 0.6.1 changed route pacing from a two-tick-only gate to retained
 waypoints. The exact release artifact completed the Grand-Exchange-to-Varrock

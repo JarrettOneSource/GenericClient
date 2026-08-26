@@ -19,7 +19,6 @@ final class GenericClientSettingsPanel extends JPanel
 	private final GenericClientDashboardActions actions;
 	private final JComboBox<GenericClientMouseEffect> mouseEffect =
 		new JComboBox<>(GenericClientMouseEffect.values());
-	private final JSpinner mouseDuration = spinner(432, 25, 5_000, 25);
 	private final JComboBox<String> mouseProfile = new JComboBox<>();
 	private final JLabel recordingState = GenericClientDashboardStyle.muted("Not recording");
 	private final JButton record = GenericClientDashboardStyle.button("Record");
@@ -39,6 +38,11 @@ final class GenericClientSettingsPanel extends JPanel
 	private final JSpinner styleSwitchChance = spinner(5, 0, 50, 1);
 	private final JComboBox<GenericClientBehaviorProfile.Edge> idleEdge =
 		new JComboBox<>(GenericClientBehaviorProfile.Edge.values());
+	private final JSpinner mouseDuration = spinner(
+		GenericClientBehaviorProfile.DEFAULT_MOUSE_MOVE_DURATION_MILLIS,
+		GenericClientBehaviorProfile.MOUSE_MOVE_DURATION_MIN_MILLIS,
+		GenericClientBehaviorProfile.MOUSE_MOVE_DURATION_MAX_MILLIS,
+		25);
 	private final JLabel saveResult = GenericClientDashboardStyle.muted("");
 
 	private boolean updatingMouse;
@@ -59,7 +63,6 @@ final class GenericClientSettingsPanel extends JPanel
 
 		JPanel mouse = GenericClientDashboardStyle.section("Mouse");
 		mouse.add(GenericClientDashboardStyle.settingRow("Effect", mouseEffect));
-		mouse.add(GenericClientDashboardStyle.settingRow("Move time ms", mouseDuration));
 		mouse.add(GenericClientDashboardStyle.settingRow("Profile", mouseProfile));
 		JPanel mouseButtons = new JPanel(new GridLayout(1, 3, 4, 4));
 		mouseButtons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
@@ -88,6 +91,7 @@ final class GenericClientSettingsPanel extends JPanel
 		behavior.add(GenericClientDashboardStyle.settingRow("Usually", longStyle));
 		behavior.add(GenericClientDashboardStyle.settingRow("Mode switch %", styleSwitchChance));
 		behavior.add(GenericClientDashboardStyle.settingRow("Idle side", idleEdge));
+		behavior.add(GenericClientDashboardStyle.settingRow("Mouse move ms", mouseDuration));
 		JPanel behaviorButtons = new JPanel(new GridLayout(1, 2, 4, 4));
 		behaviorButtons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		JButton save = GenericClientDashboardStyle.button("Save custom");
@@ -113,7 +117,6 @@ final class GenericClientSettingsPanel extends JPanel
 	void updateMouse(
 		String currentProfile,
 		List<String> profiles,
-		int durationMillis,
 		GenericClientMouseEffect effect,
 		boolean recording,
 		int recordedTemplates)
@@ -135,7 +138,6 @@ final class GenericClientSettingsPanel extends JPanel
 				}
 			}
 			mouseProfile.setSelectedItem(currentProfile);
-			mouseDuration.setValue(durationMillis);
 			mouseEffect.setSelectedItem(effect);
 			recordingState.setText(recording
 				? "Recording · " + recordedTemplates + " samples"
@@ -186,6 +188,7 @@ final class GenericClientSettingsPanel extends JPanel
 			styleSwitchChance.setValue(percent(profile.get("opposite_long_break_probability")));
 			idleEdge.setSelectedItem(GenericClientBehaviorProfile.Edge.valueOf(
 				String.valueOf(profile.get("idle_edge")).toUpperCase(java.util.Locale.ROOT)));
+			mouseDuration.setValue(number(profile.get("mouse_move_duration_millis")).intValue());
 			profileKey = nextKey;
 			behaviorDirty = false;
 		}
@@ -202,13 +205,6 @@ final class GenericClientSettingsPanel extends JPanel
 			if (!updatingMouse)
 			{
 				actions.setMouseEffect((GenericClientMouseEffect) mouseEffect.getSelectedItem());
-			}
-		});
-		mouseDuration.addChangeListener(event ->
-		{
-			if (!updatingMouse)
-			{
-				actions.setMouseDuration(((Number) mouseDuration.getValue()).intValue());
 			}
 		});
 		mouseProfile.addActionListener(event ->
@@ -230,6 +226,7 @@ final class GenericClientSettingsPanel extends JPanel
 		longLength.addChangeListener(change);
 		phaseBoost.addChangeListener(change);
 		styleSwitchChance.addChangeListener(change);
+		mouseDuration.addChangeListener(change);
 		longStyle.addActionListener(event -> markBehaviorDirty());
 		idleEdge.addActionListener(event -> markBehaviorDirty());
 	}
@@ -256,7 +253,8 @@ final class GenericClientSettingsPanel extends JPanel
 				((Number) phaseBoost.getValue()).doubleValue(),
 				(GenericClientBehaviorProfile.LongBreakMode) longStyle.getSelectedItem(),
 				((Number) styleSwitchChance.getValue()).doubleValue() / 100.0,
-				(GenericClientBehaviorProfile.Edge) idleEdge.getSelectedItem());
+				(GenericClientBehaviorProfile.Edge) idleEdge.getSelectedItem(),
+				((Number) mouseDuration.getValue()).intValue());
 			saveResult.setText(actions.saveBehaviorOverrides(overrides));
 			behaviorDirty = false;
 			profileKey = null;
@@ -287,14 +285,15 @@ final class GenericClientSettingsPanel extends JPanel
 	private static String compactSummary(Map<String, Object> profile)
 	{
 		return String.format(java.util.Locale.ROOT,
-			"%s%n%.0f%% micro · %.1fs typical%nLong about every %.0fm · %.1fm typical%nUsually %s · idle %s",
+			"%s%n%.0f%% micro · %.1fs typical%nLong about every %.0fm · %.1fm typical%nUsually %s · idle %s · mouse %dms",
 			profile.get("title"),
 			number(profile.get("short_release_probability")).doubleValue() * 100.0,
 			number(profile.get("short_body_median_seconds")).doubleValue(),
 			number(profile.get("long_cadence_minutes")).doubleValue(),
 			number(profile.get("long_median_minutes")).doubleValue(),
 			profile.get("favored_long_break_mode"),
-			profile.get("idle_edge"));
+			profile.get("idle_edge"),
+			number(profile.get("mouse_move_duration_millis")).intValue());
 	}
 
 	private static double roundTo(double value, double step)

@@ -1,6 +1,7 @@
 package com.genericclient;
 
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
 final class GenericClientTestSupport
@@ -50,5 +51,15 @@ final class GenericClientTestSupport
 				}
 			},
 			message -> { });
+	}
+
+	static GenericClientInteractionResult interaction(String detail)
+	{
+		return new GenericClientInteractionResult(
+			null,
+			detail,
+			true,
+			Collections.singletonMap("status", "bypassed"),
+			Collections.singletonMap("status", "bypassed"));
 	}
 }

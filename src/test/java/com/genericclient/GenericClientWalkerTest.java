@@ -27,9 +27,11 @@ public class GenericClientWalkerTest
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			WorldPoint destination = new WorldPoint(3230, 3428, 0);
 			walker.publishGameTick(snapshot(0, start));
-			CompletableFuture<?> completion = walker.walkTo(destination, 0, 60);
+			CompletableFuture<?> completion = walker.walkTo(destination, 0, 60, false);
 
 			waitForFirstClick(walker, input, start);
+			assertEquals(destination, input.candidateBatches.get(0).get(0));
+			assertEquals(Boolean.FALSE, input.breakPolicies.get(0));
 			WorldPoint firstTarget = input.targets.get(0);
 			assertTrue(distance(start, firstTarget) >= 8);
 			WorldPoint partialProgress = stepToward(start, firstTarget);
@@ -45,6 +47,7 @@ public class GenericClientWalkerTest
 			assertEquals(2, distance(nearTarget, firstTarget));
 			walker.publishGameTick(snapshot(4, nearTarget));
 			assertEquals(2, input.targets.size());
+			assertEquals(Boolean.FALSE, input.breakPolicies.get(1));
 		}
 		finally
 		{
@@ -65,9 +68,10 @@ public class GenericClientWalkerTest
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			WorldPoint destination = new WorldPoint(3207, 3428, 0);
 			walker.publishGameTick(snapshot(0, start));
-			walker.walkTo(destination, 0, 60);
+			walker.walkTo(destination, 0, 60, true);
 
 			waitForFirstClick(walker, input, start);
+			assertEquals(Boolean.TRUE, input.breakPolicies.get(0));
 			assertEquals(destination, input.targets.get(0));
 			WorldPoint oneTileAway = stepToward(
 				new WorldPoint(destination.getX() - 2, destination.getY(), destination.getPlane()),
@@ -76,6 +80,37 @@ public class GenericClientWalkerTest
 			walker.publishGameTick(snapshot(3, oneTileAway));
 
 			assertEquals(1, input.targets.size());
+		}
+		finally
+		{
+			walker.close();
+		}
+	}
+
+	@Test
+	public void backsOffAfterTheFarthestAcceptedClickProducesNoMovement() throws Exception
+	{
+		FakeWalkInput input = new FakeWalkInput(Integer.MAX_VALUE);
+		GenericClientWalker walker = new GenericClientWalker(
+			input,
+			GenericClientCollisionMap.loadBundled(),
+			message -> { });
+		try
+		{
+			WorldPoint start = new WorldPoint(3202, 3428, 0);
+			walker.publishGameTick(snapshot(0, start));
+			walker.walkTo(new WorldPoint(3230, 3428, 0), 0, 60, false);
+			waitForFirstClick(walker, input, start);
+			int firstDistance = distance(start, input.targets.get(0));
+
+			for (long tick = 2; tick <= 8; tick++)
+			{
+				walker.publishGameTick(snapshot(tick, start));
+			}
+			waitForClickCount(walker, input, start, 2, 9);
+
+			int secondDistance = distance(start, input.targets.get(1));
+			assertTrue(secondDistance <= firstDistance - 3);
 		}
 		finally
 		{
@@ -95,6 +130,22 @@ public class GenericClientWalkerTest
 			Thread.sleep(10L);
 		}
 		assertEquals(1, input.targets.size());
+	}
+
+	private static void waitForClickCount(
+		GenericClientWalker walker,
+		FakeWalkInput input,
+		WorldPoint player,
+		int count,
+		long tick) throws Exception
+	{
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+		while (input.targets.size() < count && System.nanoTime() < deadline)
+		{
+			walker.publishGameTick(snapshot(tick, player));
+			Thread.sleep(10L);
+		}
+		assertEquals(count, input.targets.size());
 	}
 
 	private static GenericClientSnapshot snapshot(long tick, WorldPoint player)
@@ -137,13 +188,37 @@ public class GenericClientWalkerTest
 
 	private static final class FakeWalkInput implements GenericClientWalker.WalkInput
 	{
+		private final int maximumProjectedTiles;
 		private final List<WorldPoint> targets = new ArrayList<>();
+		private final List<List<WorldPoint>> candidateBatches = new ArrayList<>();
+		private final List<Boolean> breakPolicies = new ArrayList<>();
+
+		private FakeWalkInput()
+		{
+			this(10);
+		}
+
+		private FakeWalkInput(int maximumProjectedTiles)
+		{
+			this.maximumProjectedTiles = maximumProjectedTiles;
+		}
 
 		@Override
-		public CompletableFuture<String> walkToTile(WorldPoint target)
+		public CompletableFuture<GenericClientInteractionResult> walkToFarthest(
+			List<WorldPoint> candidates,
+			boolean breaksEnabled)
 		{
+			candidateBatches.add(new ArrayList<>(candidates));
+			breakPolicies.add(breaksEnabled);
+			int projectedTiles = Math.min(maximumProjectedTiles, candidates.size());
+			WorldPoint target = candidates.get(candidates.size() - projectedTiles);
 			targets.add(target);
-			return CompletableFuture.completedFuture("WALK_TILE_CLICK_EXECUTED test");
+			return CompletableFuture.completedFuture(new GenericClientInteractionResult(
+				target,
+				"WALK_TILE_CLICK_EXECUTED test",
+				true,
+				Collections.emptyMap(),
+				Collections.emptyMap()));
 		}
 
 		@Override

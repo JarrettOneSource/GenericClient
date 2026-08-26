@@ -25,12 +25,13 @@ public class GenericClientLuaHostTest
 		AtomicInteger walkRequests = new AtomicInteger();
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("scripts").toPath(),
-			() ->
+			breaks ->
 			{
 				walkRequests.incrementAndGet();
-				return CompletableFuture.completedFuture("WALK_CLICK_EXECUTED test");
+				return CompletableFuture.completedFuture(
+					GenericClientTestSupport.interaction("WALK_CLICK_EXECUTED test"));
 			},
-			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("behavior").toPath()),
 			message -> { });
@@ -68,8 +69,8 @@ public class GenericClientLuaHostTest
 	{
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("pinned-scripts").toPath(),
-			() -> CompletableFuture.completedFuture("unused"),
-			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("pinned-behavior").toPath()),
 			message -> { });
@@ -105,8 +106,8 @@ public class GenericClientLuaHostTest
 	{
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("fault-scripts").toPath(),
-			() -> CompletableFuture.completedFuture("unused"),
-			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("fault-behavior").toPath()),
 			message -> { });
@@ -139,8 +140,8 @@ public class GenericClientLuaHostTest
 	{
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("invalid-break-scripts").toPath(),
-			() -> CompletableFuture.completedFuture("unused"),
-			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("invalid-break-behavior").toPath()),
 			message -> { });
@@ -175,8 +176,8 @@ public class GenericClientLuaHostTest
 	{
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("repl-scripts").toPath(),
-			() -> CompletableFuture.completedFuture("unused"),
-			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("repl-behavior").toPath()),
 			message -> { });
@@ -214,12 +215,13 @@ public class GenericClientLuaHostTest
 		AtomicInteger walkRequests = new AtomicInteger();
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("phase-scripts").toPath(),
-			() ->
+			breaks ->
 			{
 				walkRequests.incrementAndGet();
-				return CompletableFuture.completedFuture("WALK_CLICK_EXECUTED phase-test");
+				return CompletableFuture.completedFuture(
+					GenericClientTestSupport.interaction("WALK_CLICK_EXECUTED phase-test"));
 			},
-			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("phase-behavior").toPath()),
 			message -> { });
@@ -256,8 +258,8 @@ public class GenericClientLuaHostTest
 	{
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("closing-repl-scripts").toPath(),
-			() -> CompletableFuture.completedFuture("unused"),
-			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("closing-repl-behavior").toPath()),
 			message -> { });

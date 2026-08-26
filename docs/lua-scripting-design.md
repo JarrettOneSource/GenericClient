@@ -32,8 +32,8 @@ The current checkout implements:
 - `gc.read` subjects `runtime`, `player`, `behavior`, and bounded `npcs` queries;
 - `gc.await` for `game.tick`, tick counts, the synthetic `walk.random` action,
   and the same-plane `walk.to` ground-route action;
-- per-action `breaks=false`, phase transitions, and a seeded account behavior
-  controller that pauses coroutine action progression without blocking control;
+- per-interaction `breaks=false`, phase transitions, seeded mouse timing, and a
+  behavior controller that pauses coroutine action progression without blocking control;
 - `gc.log` to `client.log` and the GenericClient dashboard;
 - manifest-registered one-file scripts with start/reload/stop controls and automatic NPC diagnostics;
 - a loopback control bridge and stdio MCP server for live status, REPL evaluation,
@@ -44,8 +44,9 @@ The current checkout implements:
 - focused tests for NPC queries, coroutine/action flow, pinned frames, and infinite-loop termination.
 
 Every automated movement and click now runs through the recorded template
-matcher and synthetic canvas input. The operating-system pointer is not read or
-moved. The complete behavior contract is in
+matcher and synthetic canvas input. Route clicks face the client camera and use
+the farthest currently projectable path tile. The operating-system pointer is
+not read or moved. The complete behavior contract is in
 [`behavior-system.md`](behavior-system.md).
 
 The MCP and manifest interface is documented in
@@ -58,6 +59,13 @@ normalized dialog, target references, and additional semantic actions remain
 intentionally absent until a concrete automation requires each one.
 
 ### Live verification receipt
+
+GenericClient 0.7.0 had SHA-256
+`aaf462ae63fe050a6b55d35a6e65ab499649902e4660d776bf420293597f6cd0`.
+The exact installed artifact passed the camera, farthest-route targeting,
+profile-owned mouse timing, and per-click behavior receipt in
+[`walker-design.md`](walker-design.md). It passed 60 Java tests plus three Node
+MCP tests.
 
 GenericClient 0.6.1 had SHA-256
 `11b8bbb3f3d72f4a463ec5f980f94964d57becc6cb7fdaa8a4698958edf75dbe`.

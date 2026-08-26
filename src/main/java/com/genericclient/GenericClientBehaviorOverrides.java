@@ -18,6 +18,7 @@ final class GenericClientBehaviorOverrides
 	private GenericClientBehaviorProfile.LongBreakMode favoredLongBreakMode;
 	private double oppositeLongBreakProbability;
 	private GenericClientBehaviorProfile.Edge idleEdge;
+	private int mouseMoveDurationMillis;
 
 	private GenericClientBehaviorOverrides()
 	{
@@ -32,7 +33,8 @@ final class GenericClientBehaviorOverrides
 		double phaseShortChances,
 		GenericClientBehaviorProfile.LongBreakMode favoredLongBreakMode,
 		double oppositeLongBreakProbability,
-		GenericClientBehaviorProfile.Edge idleEdge)
+		GenericClientBehaviorProfile.Edge idleEdge,
+		int mouseMoveDurationMillis)
 	{
 		this.shortReleaseProbability = shortReleaseProbability;
 		this.shortBodyMedianSeconds = shortBodyMedianSeconds;
@@ -43,6 +45,7 @@ final class GenericClientBehaviorOverrides
 		this.favoredLongBreakMode = favoredLongBreakMode;
 		this.oppositeLongBreakProbability = oppositeLongBreakProbability;
 		this.idleEdge = idleEdge;
+		this.mouseMoveDurationMillis = mouseMoveDurationMillis;
 		validate();
 	}
 
@@ -57,7 +60,8 @@ final class GenericClientBehaviorOverrides
 			profile.getPhaseShortChances(),
 			profile.getFavoredLongBreakMode(),
 			profile.getOppositeLongBreakProbability(),
-			profile.getIdleEdge());
+			profile.getIdleEdge(),
+			profile.getMouseMoveDurationMillis());
 	}
 
 	void validate()
@@ -73,6 +77,14 @@ final class GenericClientBehaviorOverrides
 		requireRange(longMedianMinutes, 3.0, 60.0, "Typical long-break duration");
 		requireRange(phaseShortChances, 1.0, 4.0, "Phase boost");
 		requireRange(oppositeLongBreakProbability, 0.0, 0.5, "Long-style switch chance");
+		if (mouseMoveDurationMillis != 0 &&
+			(mouseMoveDurationMillis < GenericClientBehaviorProfile.MOUSE_MOVE_DURATION_MIN_MILLIS ||
+				mouseMoveDurationMillis > GenericClientBehaviorProfile.MOUSE_MOVE_DURATION_MAX_MILLIS))
+		{
+			throw new IllegalArgumentException("Mouse move duration must be between " +
+				GenericClientBehaviorProfile.MOUSE_MOVE_DURATION_MIN_MILLIS + " and " +
+				GenericClientBehaviorProfile.MOUSE_MOVE_DURATION_MAX_MILLIS);
+		}
 		if (favoredLongBreakMode == null)
 		{
 			throw new IllegalArgumentException("Preferred long-break style is required");
@@ -128,6 +140,11 @@ final class GenericClientBehaviorOverrides
 		return idleEdge;
 	}
 
+	int getMouseMoveDurationMillis()
+	{
+		return mouseMoveDurationMillis;
+	}
+
 	Map<String, Object> toMap()
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
@@ -141,6 +158,7 @@ final class GenericClientBehaviorOverrides
 		value.put("favored_long_break_mode", favoredLongBreakMode.name().toLowerCase(Locale.ROOT));
 		value.put("opposite_long_break_probability", oppositeLongBreakProbability);
 		value.put("idle_edge", idleEdge.name().toLowerCase(Locale.ROOT));
+		value.put("mouse_move_duration_millis", (long) mouseMoveDurationMillis);
 		return value;
 	}
 

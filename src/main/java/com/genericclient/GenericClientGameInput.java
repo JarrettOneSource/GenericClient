@@ -14,7 +14,9 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
@@ -32,6 +34,9 @@ final class GenericClientGameInput implements AutoCloseable
 	private static final long HOVER_SETTLE_MILLIS = 250L;
 	private static final long CONTEXT_MENU_SETTLE_MILLIS = 150L;
 	private static final long CLICK_RESULT_TIMEOUT_MILLIS = 2500L;
+	private static final long CAMERA_TURN_TIMEOUT_MILLIS = 1_200L;
+	private static final long CAMERA_POLL_MILLIS = 40L;
+	private static final int CAMERA_SETTLED_UNITS = 24;
 	private static final int CONTEXT_MENU_ENTRY_HEIGHT = 15;
 	private static final int MAX_TARGET_ATTEMPTS = 20;
 
@@ -40,7 +45,9 @@ final class GenericClientGameInput implements AutoCloseable
 	private final ScheduledExecutorService executor;
 	private final Consumer<String> reporter;
 	private final GenericClientSyntheticMouse syntheticMouse;
+	private final GenericClientBehaviorController behavior;
 	private final AtomicBoolean running = new AtomicBoolean();
+	private final AtomicLong routeRequestSequence = new AtomicLong();
 	private final List<ScheduledFuture<?>> pending = new CopyOnWriteArrayList<>();
 
 	private volatile boolean awaitingMenuResult;
@@ -51,45 +58,134 @@ final class GenericClientGameInput implements AutoCloseable
 	private volatile int targetAttemptsRemaining;
 	private volatile TargetSurface targetSurface;
 	private volatile SelectionMode selectionMode;
-	private volatile WorldPoint requestedWorldPoint;
-	private volatile CompletableFuture<String> activeResult;
+	private volatile List<WorldPoint> requestedWorldPoints = Collections.emptyList();
+	private volatile CompletableFuture<RawWalkResult> activeResult;
+	private volatile boolean clickDispatched;
+	private volatile boolean cameraPrepared;
+	private volatile int cameraTargetYaw;
+	private volatile long cameraTurnDeadlineNanos;
+	private volatile boolean activeBreaksEnabled;
+	private volatile boolean closed;
 
 	GenericClientGameInput(
 		Client client,
 		ClientThread clientThread,
 		ScheduledExecutorService executor,
 		GenericClientSyntheticMouse syntheticMouse,
+		GenericClientBehaviorController behavior,
 		Consumer<String> reporter)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
 		this.executor = executor;
 		this.syntheticMouse = syntheticMouse;
+		this.behavior = behavior;
 		this.reporter = reporter;
 	}
 
-	CompletableFuture<String> walkToRandomTile()
+	CompletableFuture<GenericClientInteractionResult> walkToRandomTile(boolean breaksEnabled)
 	{
-		return beginWalkClick(SelectionMode.RANDOM, null);
+		return performWalkInteraction(SelectionMode.RANDOM, Collections.emptyList(), breaksEnabled, 0L);
 	}
 
-	CompletableFuture<String> walkToTile(WorldPoint worldPoint)
+	CompletableFuture<GenericClientInteractionResult> walkToFarthest(
+		List<WorldPoint> candidates,
+		boolean breaksEnabled)
 	{
-		if (worldPoint == null)
+		if (candidates == null || candidates.isEmpty())
 		{
-			throw new IllegalArgumentException("Walk tile cannot be null");
+			throw new IllegalArgumentException("Walk route candidates cannot be empty");
 		}
-		return beginWalkClick(SelectionMode.SPECIFIED, worldPoint);
+		List<WorldPoint> copy = new ArrayList<>(candidates.size());
+		for (WorldPoint candidate : candidates)
+		{
+			if (candidate == null)
+			{
+				throw new IllegalArgumentException("Walk route candidates cannot contain null");
+			}
+			copy.add(candidate);
+		}
+		return performWalkInteraction(
+			SelectionMode.ROUTE,
+			Collections.unmodifiableList(copy),
+			breaksEnabled,
+			routeRequestSequence.incrementAndGet());
 	}
 
-	private CompletableFuture<String> beginWalkClick(SelectionMode mode, WorldPoint worldPoint)
+	private CompletableFuture<GenericClientInteractionResult> performWalkInteraction(
+		SelectionMode mode,
+		List<WorldPoint> candidates,
+		boolean breaksEnabled,
+		long requestId)
 	{
-		CompletableFuture<String> result = new CompletableFuture<>();
+		return performWithBehavior(
+			behavior,
+			breaksEnabled,
+			() -> beginWalkClickUnlessCancelled(mode, candidates, requestId, breaksEnabled)).thenApply(result ->
+			{
+				reporter.accept("WALK_INTERACTION_COMPLETED target=" + result.getTarget() +
+					" clicked=" + result.isClickDispatched() +
+					" result=" + result.getDetail() +
+					" behaviorBefore=" + result.getBehaviorBefore().get("status") +
+					" behaviorAfter=" + result.getBehaviorAfter().get("status"));
+				return result;
+			});
+	}
+
+	private CompletableFuture<RawWalkResult> beginWalkClickUnlessCancelled(
+		SelectionMode mode,
+		List<WorldPoint> candidates,
+		long requestId,
+		boolean breaksEnabled)
+	{
+		if (closed || (mode == SelectionMode.ROUTE && routeRequestSequence.get() != requestId))
+		{
+			return CompletableFuture.completedFuture(new RawWalkResult(
+				null,
+				mode == SelectionMode.ROUTE ? "WALK_TILE_CLICK_CANCELLED" : "WALK_CLICK_STOPPED",
+				false));
+		}
+		return beginWalkClick(mode, candidates, breaksEnabled);
+	}
+
+	static CompletableFuture<GenericClientInteractionResult> performWithBehavior(
+		GenericClientBehaviorController behavior,
+		boolean breaksEnabled,
+		Supplier<CompletableFuture<RawWalkResult>> interaction)
+	{
+		return behavior.beforeAction(breaksEnabled).thenCompose(before ->
+			interaction.get().thenCompose(raw ->
+			{
+				if (!raw.clickDispatched)
+				{
+					return CompletableFuture.completedFuture(new GenericClientInteractionResult(
+						raw.target,
+						raw.detail,
+						false,
+						before,
+						Collections.emptyMap()));
+				}
+				return behavior.afterAction(breaksEnabled).thenApply(after ->
+					new GenericClientInteractionResult(
+						raw.target,
+						raw.detail,
+						true,
+						before,
+						after));
+			}));
+	}
+
+	private CompletableFuture<RawWalkResult> beginWalkClick(
+		SelectionMode mode,
+		List<WorldPoint> candidates,
+		boolean breaksEnabled)
+	{
+		CompletableFuture<RawWalkResult> result = new CompletableFuture<>();
 		if (!running.compareAndSet(false, true))
 		{
 			String message = "WALK_CLICK_ALREADY_RUNNING";
 			reporter.accept(message);
-			result.complete(message);
+			result.complete(new RawWalkResult(null, message, false));
 			return result;
 		}
 
@@ -98,11 +194,14 @@ final class GenericClientGameInput implements AutoCloseable
 		targetWorldPoint = null;
 		targetSurface = null;
 		selectionMode = mode;
-		requestedWorldPoint = worldPoint;
+		requestedWorldPoints = candidates;
 		targetAttemptsRemaining = MAX_TARGET_ATTEMPTS;
+		clickDispatched = false;
+		cameraPrepared = false;
+		activeBreaksEnabled = breaksEnabled;
 		reporter.accept(mode == SelectionMode.RANDOM
 			? "WALK_CLICK_SELECTING_TILE"
-			: "WALK_TILE_SELECTING tile=" + worldPoint);
+			: "WALK_ROUTE_SELECTING candidates=" + candidates.size());
 		clientThread.invoke(this::selectTargetOnClientThread);
 		return result;
 	}
@@ -143,7 +242,8 @@ final class GenericClientGameInput implements AutoCloseable
 
 	void cancelWalkToTile()
 	{
-		if (running.get() && selectionMode == SelectionMode.SPECIFIED)
+		routeRequestSequence.incrementAndGet();
+		if (running.get() && selectionMode == SelectionMode.ROUTE)
 		{
 			finish("WALK_TILE_CLICK_CANCELLED");
 		}
@@ -169,40 +269,34 @@ final class GenericClientGameInput implements AutoCloseable
 		}
 
 		Target target;
-		if (selectionMode == SelectionMode.SPECIFIED)
+		if (selectionMode == SelectionMode.ROUTE)
 		{
-			WorldPoint requested = requestedWorldPoint;
-			WorldPoint playerWorldPoint = player.getWorldLocation();
-			if (requested == null || playerWorldPoint == null ||
-				requested.getPlane() != playerWorldPoint.getPlane())
-			{
-				finish("WALK_TILE_CLICK_FAILED reason=target_plane_unavailable tile=" + requested);
-				return;
-			}
-			LocalPoint local = LocalPoint.fromWorld(player.getWorldView(), requested);
-			if (local == null)
-			{
-				finish("WALK_TILE_CLICK_FAILED reason=tile_not_in_scene tile=" + requested);
-				return;
-			}
-			target = targetForLocalPoint(local, requested);
-			if (target == null)
-			{
-				target = targetForMinimap(local, requested);
-				if (target == null)
-				{
-					finish("WALK_TILE_CLICK_FAILED reason=no_clickable_projection tile=" + requested);
-					return;
-				}
-			}
+			target = chooseFarthestRouteTarget(player);
 		}
 		else
 		{
-			target = chooseRandomVisibleTile(player);
+			if (requestedWorldPoints.isEmpty())
+			{
+				target = chooseRandomVisibleTile(player);
+				if (target != null)
+				{
+					requestedWorldPoints = Collections.singletonList(target.worldPoint);
+				}
+			}
+			else
+			{
+				target = targetForWorldPoint(player, requestedWorldPoints.get(0));
+			}
 		}
 		if (target == null)
 		{
-			finish("WALK_CLICK_FAILED reason=no_visible_nearby_tile");
+			finish(selectionMode == SelectionMode.ROUTE
+				? "WALK_TILE_CLICK_FAILED reason=no_projectable_route_target"
+				: "WALK_CLICK_FAILED reason=no_visible_nearby_tile");
+			return;
+		}
+		if (!cameraPrepared && beginCameraTurn(player, target.worldPoint))
+		{
 			return;
 		}
 
@@ -213,6 +307,93 @@ final class GenericClientGameInput implements AutoCloseable
 			" canvas=" + target.canvasPoint.getX() + "," + target.canvasPoint.getY());
 		Target selectedTarget = target;
 		beginSyntheticMouseMove(selectedTarget);
+	}
+
+	private Target chooseFarthestRouteTarget(Player player)
+	{
+		for (WorldPoint candidate : requestedWorldPoints)
+		{
+			Target target = targetForWorldPoint(player, candidate);
+			if (target != null)
+			{
+				return target;
+			}
+		}
+		return null;
+	}
+
+	private Target targetForWorldPoint(Player player, WorldPoint worldPoint)
+	{
+		WorldPoint playerWorldPoint = player.getWorldLocation();
+		if (playerWorldPoint == null || worldPoint.getPlane() != playerWorldPoint.getPlane())
+		{
+			return null;
+		}
+		LocalPoint local = LocalPoint.fromWorld(player.getWorldView(), worldPoint);
+		if (local == null)
+		{
+			return null;
+		}
+		Target target = targetForLocalPoint(local, worldPoint);
+		return target == null ? targetForMinimap(local, worldPoint) : target;
+	}
+
+	private boolean beginCameraTurn(Player player, WorldPoint target)
+	{
+		WorldPoint origin = player.getWorldLocation();
+		if (origin == null || origin.equals(target))
+		{
+			cameraPrepared = true;
+			return false;
+		}
+		cameraTargetYaw = yawToward(origin, target);
+		int currentYaw = client.getCameraYaw();
+		if (angularDistance(currentYaw, cameraTargetYaw) <= CAMERA_SETTLED_UNITS)
+		{
+			cameraPrepared = true;
+			return false;
+		}
+
+		cameraTurnDeadlineNanos = System.nanoTime() +
+			TimeUnit.MILLISECONDS.toNanos(CAMERA_TURN_TIMEOUT_MILLIS);
+		client.setCameraYawTarget(cameraTargetYaw);
+		reporter.accept("CAMERA_TURN_STARTED from=" + currentYaw + " target=" + cameraTargetYaw +
+			" tile=" + target);
+		schedule(() -> clientThread.invoke(this::checkCameraTurnOnClientThread), CAMERA_POLL_MILLIS);
+		return true;
+	}
+
+	private void checkCameraTurnOnClientThread()
+	{
+		if (!running.get())
+		{
+			return;
+		}
+		int currentYaw = client.getCameraYaw();
+		int remaining = angularDistance(currentYaw, cameraTargetYaw);
+		if (remaining <= CAMERA_SETTLED_UNITS || System.nanoTime() >= cameraTurnDeadlineNanos)
+		{
+			cameraPrepared = true;
+			reporter.accept("CAMERA_TURN_COMPLETED yaw=" + currentYaw +
+				" target=" + cameraTargetYaw + " remaining=" + remaining);
+			selectTargetOnClientThread();
+			return;
+		}
+		schedule(() -> clientThread.invoke(this::checkCameraTurnOnClientThread), CAMERA_POLL_MILLIS);
+	}
+
+	static int yawToward(WorldPoint origin, WorldPoint target)
+	{
+		double radians = Math.atan2(
+			target.getX() - origin.getX(),
+			target.getY() - origin.getY());
+		return (int) Math.round(radians * 1024.0 / Math.PI) & 2047;
+	}
+
+	private static int angularDistance(int first, int second)
+	{
+		int distance = Math.abs((first - second) & 2047);
+		return Math.min(distance, 2048 - distance);
 	}
 
 	private Target chooseRandomVisibleTile(Player player)
@@ -375,7 +556,7 @@ final class GenericClientGameInput implements AutoCloseable
 				openContextMenu(target, topEntry, walkEntry);
 				return;
 			}
-			if (selectionMode == SelectionMode.SPECIFIED)
+			if (selectionMode == SelectionMode.ROUTE)
 			{
 				targetAttemptsRemaining--;
 				if (targetAttemptsRemaining > 0)
@@ -413,6 +594,7 @@ final class GenericClientGameInput implements AutoCloseable
 	private void dispatchMinimapClick(Target target)
 	{
 		reporter.accept("WALK_CLICK_DISPATCH tile=" + target.worldPoint + " surface=minimap");
+		clickDispatched = true;
 		syntheticMouse.click(MouseEvent.BUTTON1).whenComplete((result, error) ->
 		{
 			if (error != null)
@@ -435,6 +617,7 @@ final class GenericClientGameInput implements AutoCloseable
 			" action=" + entry.getType() + " option=" + entry.getOption() +
 			" param0=" + expectedParam0 + " param1=" + expectedParam1 +
 			" worldView=" + expectedWorldViewId);
+		clickDispatched = true;
 		syntheticMouse.click(MouseEvent.BUTTON1).whenComplete((result, error) ->
 		{
 			if (error != null)
@@ -459,6 +642,7 @@ final class GenericClientGameInput implements AutoCloseable
 		reporter.accept("WALK_CONTEXT_OPEN tile=" + target.worldPoint +
 			" coveredBy=" + coveredEntry.getOption() +
 			" walkParam0=" + walkEntry.getParam0() + " walkParam1=" + walkEntry.getParam1());
+		clickDispatched = true;
 		syntheticMouse.click(MouseEvent.BUTTON3).whenComplete((result, error) ->
 		{
 			if (error != null)
@@ -466,7 +650,24 @@ final class GenericClientGameInput implements AutoCloseable
 				finish("WALK_TILE_CLICK_FAILED reason=synthetic_context_open message=" + error.getMessage());
 				return;
 			}
-			schedule(() -> clientThread.invoke(() -> moveToContextMenuWalk(target)), CONTEXT_MENU_SETTLE_MILLIS);
+			behavior.afterAction(activeBreaksEnabled).thenCompose(after ->
+				behavior.beforeAction(activeBreaksEnabled).thenApply(before ->
+				{
+					reporter.accept("WALK_CONTEXT_INTERACTION_COMPLETED target=" + target.worldPoint +
+						" behaviorAfter=" + after.get("status") +
+						" behaviorBefore=" + before.get("status"));
+					return before;
+				})).whenComplete((ignored, behaviorError) ->
+			{
+				if (behaviorError != null)
+				{
+					finish("WALK_TILE_CLICK_FAILED reason=context_behavior message=" +
+						behaviorError.getMessage());
+					return;
+				}
+				schedule(() -> clientThread.invoke(() -> moveToContextMenuWalk(target)),
+					CONTEXT_MENU_SETTLE_MILLIS);
+			});
 		});
 	}
 
@@ -474,7 +675,17 @@ final class GenericClientGameInput implements AutoCloseable
 	{
 		if (!running.get() || !client.isMenuOpen())
 		{
-			finish("WALK_TILE_CLICK_FAILED reason=context_menu_did_not_open tile=" + target.worldPoint);
+			targetAttemptsRemaining--;
+			if (running.get() && targetAttemptsRemaining > 0)
+			{
+				reporter.accept("WALK_CONTEXT_REOPEN tile=" + target.worldPoint +
+					" attemptsRemaining=" + targetAttemptsRemaining);
+				selectTargetOnClientThread();
+			}
+			else
+			{
+				finish("WALK_TILE_CLICK_FAILED reason=context_menu_did_not_open tile=" + target.worldPoint);
+			}
 			return;
 		}
 		MenuEntry[] entries = client.getMenu().getMenuEntries();
@@ -558,11 +769,11 @@ final class GenericClientGameInput implements AutoCloseable
 		awaitingMenuResult = false;
 		cancelPending();
 		reporter.accept(result);
-		CompletableFuture<String> completion = activeResult;
+		CompletableFuture<RawWalkResult> completion = activeResult;
 		activeResult = null;
 		if (completion != null)
 		{
-			completion.complete(result);
+			completion.complete(new RawWalkResult(targetWorldPoint, result, clickDispatched));
 		}
 	}
 
@@ -578,6 +789,8 @@ final class GenericClientGameInput implements AutoCloseable
 	@Override
 	public void close()
 	{
+		closed = true;
+		routeRequestSequence.incrementAndGet();
 		if (running.get())
 		{
 			finish("WALK_CLICK_STOPPED");
@@ -614,6 +827,20 @@ final class GenericClientGameInput implements AutoCloseable
 	private enum SelectionMode
 	{
 		RANDOM,
-		SPECIFIED
+		ROUTE
+	}
+
+	static final class RawWalkResult
+	{
+		private final WorldPoint target;
+		private final String detail;
+		private final boolean clickDispatched;
+
+		RawWalkResult(WorldPoint target, String detail, boolean clickDispatched)
+		{
+			this.target = target;
+			this.detail = detail;
+			this.clickDispatched = clickDispatched;
+		}
 	}
 }
