@@ -1,11 +1,10 @@
 package com.genericclient;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import net.runelite.api.coords.WorldPoint;
 import party.iroiro.luajava.JFunction;
@@ -23,27 +22,31 @@ final class GenericClientLuaScript implements AutoCloseable
 	private final String name;
 	private final Lua lua;
 	private Lua coroutine;
+	private int hookInstallerReference;
 	private int coroutineReference;
 	private long deadlineNanos = Long.MAX_VALUE;
 	private boolean budgetExceeded;
 	private boolean activated;
-	private boolean finished;
+	private boolean finished = true;
 	private String terminalStatus = "COMPLETED";
+	private String faultMessage;
+	private Object returnValue;
 	private GenericClientSnapshot pinnedSnapshot;
 	private Wait wait;
 	private long nextRequestId;
 
-	GenericClientLuaScript(GenericClientLuaHost host, Path source) throws IOException
+	GenericClientLuaScript(GenericClientLuaHost host, String name, String source)
 	{
 		this.host = host;
-		this.name = source.getFileName().toString();
+		this.name = name;
 		this.lua = new Lua54();
 
 		try
 		{
-			initializeRuntime(Files.readString(source, StandardCharsets.UTF_8));
+			initializeRuntime();
+			startSource(source);
 		}
-		catch (RuntimeException | IOException exception)
+		catch (RuntimeException exception)
 		{
 			lua.close();
 			throw exception;
@@ -113,7 +116,69 @@ final class GenericClientLuaScript implements AutoCloseable
 		return terminalStatus;
 	}
 
-	private void initializeRuntime(String source)
+	String getFaultMessage()
+	{
+		return faultMessage;
+	}
+
+	Object getReturnValue()
+	{
+		return returnValue;
+	}
+
+	void pinSnapshot(GenericClientSnapshot snapshot)
+	{
+		pinnedSnapshot = snapshot;
+	}
+
+	void startSource(String source)
+	{
+		if (!finished)
+		{
+			throw new IllegalStateException("Lua execution is already running");
+		}
+		releaseCoroutine();
+		finished = false;
+		terminalStatus = "COMPLETED";
+		faultMessage = null;
+		returnValue = null;
+		wait = null;
+		nextRequestId = 0;
+
+		try
+		{
+			beginBudget();
+			lua.load(source);
+			lua.pCall(0, 1);
+			checkBudget();
+			if (!lua.isFunction(-1))
+			{
+				throw new IllegalArgumentException("Lua script must return one root function");
+			}
+			int rootFunctionReference = lua.ref();
+
+			coroutine = lua.newThread();
+			coroutineReference = lua.ref();
+			lua.refGet(rootFunctionReference);
+			lua.xMove(coroutine, 1);
+			lua.unref(rootFunctionReference);
+
+			lua.refGet(hookInstallerReference);
+			lua.refGet(coroutineReference);
+			lua.pCall(1, 0);
+			resume(null);
+		}
+		catch (RuntimeException exception)
+		{
+			finished = true;
+			terminalStatus = "FAULTED";
+			faultMessage = exception.getMessage();
+			releaseCoroutine();
+			throw exception;
+		}
+	}
+
+	private void initializeRuntime()
 	{
 		for (String library : new String[]{"base", "coroutine", "string", "table", "math", "utf8", "debug"})
 		{
@@ -133,7 +198,7 @@ final class GenericClientLuaScript implements AutoCloseable
 			"local hook = __gc_budget_hook\n" +
 			"return function(thread) sethook(thread, hook, '', " + HOOK_INSTRUCTION_INTERVAL + ") end");
 		lua.pCall(0, 1);
-		int hookInstallerReference = lua.ref();
+		hookInstallerReference = lua.ref();
 
 		lua.run(
 			"local host_read = __gc_read\n" +
@@ -161,28 +226,6 @@ final class GenericClientLuaScript implements AutoCloseable
 			"__gc_log = nil\n" +
 			"__gc_budget_hook = nil");
 
-		beginBudget();
-		lua.load(source);
-		lua.pCall(0, 1);
-		checkBudget();
-		if (!lua.isFunction(-1))
-		{
-			throw new IllegalArgumentException("Lua script must return one root function");
-		}
-		int rootFunctionReference = lua.ref();
-
-		coroutine = lua.newThread();
-		coroutineReference = lua.ref();
-		lua.refGet(rootFunctionReference);
-		lua.xMove(coroutine, 1);
-		lua.unref(rootFunctionReference);
-
-		lua.refGet(hookInstallerReference);
-		lua.refGet(coroutineReference);
-		lua.pCall(1, 0);
-		lua.unref(hookInstallerReference);
-
-		resume(null);
 	}
 
 	private int read(Lua state)
@@ -216,7 +259,7 @@ final class GenericClientLuaScript implements AutoCloseable
 			return -1;
 		}
 		Object fields = state.getTop() >= 3 ? state.toObject(3) : null;
-		host.scriptLog(name, level, event, fields);
+		host.scriptLog(name, level, event, normalizeLuaValue(fields));
 		return 0;
 	}
 
@@ -253,9 +296,12 @@ final class GenericClientLuaScript implements AutoCloseable
 
 			if (!yielded)
 			{
-				coroutine.pop(coroutine.getTop());
+				int returnCount = coroutine.getTop();
+				returnValue = returnCount == 0 ? null : normalizeLuaValue(coroutine.toObject(-1));
+				coroutine.pop(returnCount);
 				finished = true;
 				terminalStatus = "COMPLETED";
+				releaseCoroutine();
 				return;
 			}
 
@@ -268,7 +314,9 @@ final class GenericClientLuaScript implements AutoCloseable
 		{
 			finished = true;
 			terminalStatus = "FAULTED";
+			faultMessage = exception.getMessage();
 			host.scriptLog(name, "error", "script-fault", exception.getMessage());
+			releaseCoroutine();
 		}
 	}
 
@@ -454,16 +502,75 @@ final class GenericClientLuaScript implements AutoCloseable
 		}
 	}
 
+	private static Object normalizeLuaValue(Object value)
+	{
+		if (value instanceof Collection)
+		{
+			List<Object> result = new ArrayList<>(((Collection<?>) value).size());
+			for (Object item : (Collection<?>) value)
+			{
+				result.add(normalizeLuaValue(item));
+			}
+			return result;
+		}
+		if (!(value instanceof Map))
+		{
+			return value;
+		}
+
+		Map<?, ?> table = (Map<?, ?>) value;
+		List<Object> array = new ArrayList<>(Collections.nCopies(table.size(), null));
+		boolean sequential = !table.isEmpty();
+		for (Map.Entry<?, ?> entry : table.entrySet())
+		{
+			if (!(entry.getKey() instanceof Number))
+			{
+				sequential = false;
+				break;
+			}
+			double numericKey = ((Number) entry.getKey()).doubleValue();
+			int index = (int) numericKey;
+			if (numericKey != index || index < 1 || index > table.size() || array.get(index - 1) != null)
+			{
+				sequential = false;
+				break;
+			}
+			array.set(index - 1, normalizeLuaValue(entry.getValue()));
+		}
+		if (sequential && !array.contains(null))
+		{
+			return array;
+		}
+
+		Map<Object, Object> result = new LinkedHashMap<>();
+		for (Map.Entry<?, ?> entry : table.entrySet())
+		{
+			result.put(entry.getKey(), normalizeLuaValue(entry.getValue()));
+		}
+		return result;
+	}
+
 	@Override
 	public void close()
 	{
 		finished = true;
+		releaseCoroutine();
+		if (hookInstallerReference != 0)
+		{
+			lua.unref(hookInstallerReference);
+			hookInstallerReference = 0;
+		}
+		lua.close();
+	}
+
+	private void releaseCoroutine()
+	{
 		if (coroutineReference != 0)
 		{
 			lua.unref(coroutineReference);
 			coroutineReference = 0;
 		}
-		lua.close();
+		coroutine = null;
 	}
 
 	private enum WaitKind

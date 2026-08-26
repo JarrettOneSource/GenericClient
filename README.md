@@ -53,6 +53,10 @@ Editable scripts are installed in:
 ~/.runelite/genericclient/scripts/
 ```
 
+`manifest.json` registers the scripts shown in the sidebar. Each entry has a
+stable id, display name, description, and Lua filename. Press **Reload
+manifest** after editing it manually.
+
 `npc-diagnostics.lua` starts with the plugin and logs nearby NPC snapshots every
 five game ticks. `walk-stress.lua` is a manual three-click stress script that
 uses the existing native ground-tile interaction. `lumbridge-varrock.lua` walks
@@ -107,6 +111,25 @@ The active design is documented in
 [`docs/lua-scripting-design.md`](docs/lua-scripting-design.md). The packet-driven
 headless design is saved separately and remains deferred.
 
+## MCP control
+
+The included stdio MCP server lets Codex read live state, execute Lua snippets,
+save and register scripts, and run scripts on demand. GenericClient exposes its
+control bridge only on `127.0.0.1`; the default port is `17343`.
+
+```bash
+cd mcp
+npm install
+
+codex mcp add genericclient -- \
+  "/mnt/c/Program Files/nodejs/node.exe" \
+  '\\wsl.localhost\Ubuntu\home\user\GenericClient\mcp\src\server.mjs'
+```
+
+The MCP tools, Lua REPL examples, manifest format, and junior-friendly script
+workflow are documented in
+[`docs/mcp-lua-control.md`](docs/mcp-lua-control.md).
+
 ## Mouse profiles
 
 Mouse movement uses a local Template Match implementation with the bundled
@@ -138,11 +161,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.3.1.jar`
-- `build/libs/GenericClient-0.3.1-all.jar`
+- `build/libs/generic-client-0.4.0.jar`
+- `build/libs/GenericClient-0.4.0-all.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.3.1-all.jar
+java -ea -jar build/libs/GenericClient-0.4.0-all.jar
 ```

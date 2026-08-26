@@ -1,0 +1,23 @@
+{
+  "schema": "genericclient_scripts.v1",
+  "scripts": [
+    {
+      "id": "lumbridge-varrock",
+      "name": "Walk to Varrock",
+      "description": "Walk from the current outdoor position to Varrock center.",
+      "file": "lumbridge-varrock.lua"
+    },
+    {
+      "id": "npc-diagnostics",
+      "name": "Nearby NPC diagnostics",
+      "description": "Log nearby NPC state every five game ticks.",
+      "file": "npc-diagnostics.lua"
+    },
+    {
+      "id": "walk-stress",
+      "name": "Three-click movement check",
+      "description": "Execute three nearby ground clicks through the active mouse profile.",
+      "file": "walk-stress.lua"
+    }
+  ]
+}

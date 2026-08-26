@@ -3,9 +3,9 @@ package com.genericclient;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -35,18 +35,19 @@ public class GenericClientLuaHostTest
 			message -> { });
 		try
 		{
-			Files.writeString(
-				temporaryFolder.getRoot().toPath().resolve("scripts/test.lua"),
+			host.saveScript(
+				"test",
+				"Test",
+				"Exercise reads, logs, and actions.",
 				"return function()\n" +
 				"  gc.await { event = 'game.tick' }\n" +
 				"  local npcs = gc.read('npcs', { within = 15, limit = 1 })\n" +
 				"  gc.log('info', 'npc-count', { count = #npcs })\n" +
 				"  local receipt = gc.await { action = { type = 'walk.random' } }\n" +
 				"  gc.log('info', 'walk-result', receipt)\n" +
-				"end\n",
-				StandardCharsets.UTF_8);
+				"end\n").get(2, TimeUnit.SECONDS);
 
-			host.start("test.lua").get(2, TimeUnit.SECONDS);
+			host.start("test").get(2, TimeUnit.SECONDS);
 			host.publishGameTick(snapshot(1));
 			waitForStatus(host, "COMPLETED");
 
@@ -72,17 +73,18 @@ public class GenericClientLuaHostTest
 			message -> { });
 		try
 		{
-			Files.writeString(
-				temporaryFolder.getRoot().toPath().resolve("pinned-scripts/pinned.lua"),
+			host.saveScript(
+				"pinned",
+				"Pinned frame",
+				"Verify reads remain pinned for one resume.",
 				"return function()\n" +
 				"  gc.await { event = 'game.tick' }\n" +
 				"  local first = gc.read('runtime').game_tick\n" +
 				"  local second = gc.read('runtime').game_tick\n" +
 				"  gc.log('info', 'pinned-frame', { first = first, second = second })\n" +
-				"end\n",
-				StandardCharsets.UTF_8);
+				"end\n").get(2, TimeUnit.SECONDS);
 
-			host.start("pinned.lua").get(2, TimeUnit.SECONDS);
+			host.start("pinned").get(2, TimeUnit.SECONDS);
 			host.publishGameTick(snapshot(1));
 			host.publishGameTick(snapshot(2));
 			waitForStatus(host, "COMPLETED");
@@ -107,19 +109,88 @@ public class GenericClientLuaHostTest
 			message -> { });
 		try
 		{
-			Files.writeString(
-				temporaryFolder.getRoot().toPath().resolve("fault-scripts/infinite.lua"),
-				"return function() while true do end end\n",
-				StandardCharsets.UTF_8);
+			host.saveScript(
+				"infinite",
+				"Infinite",
+				"Exercise the instruction hook.",
+				"return function() while true do end end\n").get(2, TimeUnit.SECONDS);
 
 			try
 			{
-				host.start("infinite.lua").get(2, TimeUnit.SECONDS);
+				host.start("infinite").get(2, TimeUnit.SECONDS);
 				throw new AssertionError("Expected infinite script to fail");
 			}
 			catch (ExecutionException expected)
 			{
 				assertTrue(expected.getCause().getMessage().contains("initialization"));
+			}
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void replKeepsGlobalsAndReturnsStructuredValues() throws Exception
+	{
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("repl-scripts").toPath(),
+			() -> CompletableFuture.completedFuture("unused"),
+			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> { },
+			message -> { });
+		try
+		{
+			host.publishGameTick(snapshot(7));
+			Map<String, Object> first = host.evaluate(
+				"counter = (counter or 0) + 1\n" +
+					"return { counter = counter, player = gc.read('player'), " +
+					"npcs = gc.read('npcs'), empty = {} }")
+				.get(2, TimeUnit.SECONDS);
+			Map<String, Object> second = host.evaluate(
+				"counter = counter + 1\nreturn { counter = counter }")
+				.get(2, TimeUnit.SECONDS);
+
+			assertEquals("completed", first.get("status"));
+			Map<String, Object> firstValue = (Map<String, Object>) first.get("value");
+			assertEquals(1.0, firstValue.get("counter"));
+			assertTrue(firstValue.get("player") instanceof Map);
+			assertTrue(firstValue.get("npcs") instanceof List);
+			Map<String, Object> firstNpc = (Map<String, Object>) ((List<?>) firstValue.get("npcs")).get(0);
+			assertTrue(firstNpc.get("actions") instanceof List);
+			assertTrue(firstValue.get("empty") instanceof Map);
+			assertEquals(2.0, ((Map<String, Object>) second.get("value")).get("counter"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void completesAPendingReplCallWhenTheHostCloses() throws Exception
+	{
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("closing-repl-scripts").toPath(),
+			() -> CompletableFuture.completedFuture("unused"),
+			(destination, within, timeout) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> { },
+			message -> { });
+		try
+		{
+			CompletableFuture<Map<String, Object>> pending = host.evaluate(
+				"gc.await { ticks = 100 }\nreturn true");
+			host.close();
+			try
+			{
+				pending.get(2, TimeUnit.SECONDS);
+				throw new AssertionError("Expected the pending REPL call to fail during shutdown");
+			}
+			catch (ExecutionException expected)
+			{
+				assertEquals("Lua host stopped", expected.getCause().getMessage());
 			}
 		}
 		finally

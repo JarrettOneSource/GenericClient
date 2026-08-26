@@ -269,7 +269,7 @@ Removing the injected Jagex client entirely would require reimplementing packet 
 
 ### Jagex Launcher compatibility
 
-GenericClient's current [`install.ps1`](../install.ps1) changes RuneLite's launch configuration so the Jagex Launcher invokes [`GenericClientLauncher`](../src/test/java/com/genericclient/GenericClientLauncher.java), which registers the plugin and delegates to `RuneLite.main`. A future mode-selecting wrapper can preserve the same launcher-provided process context and choose visible or displayless/headless startup. Rendering changes do not themselves replace account/session bootstrap. For unattended remote restarts, launcher/session orchestration remains a separate concern.
+GenericClient's current [`install.ps1`](../install.ps1) changes RuneLite's launch configuration so the Jagex Launcher invokes [`GenericClientLauncher`](../src/main/java/com/genericclient/GenericClientLauncher.java), which registers the plugin and delegates to `RuneLite.main`. A future mode-selecting wrapper can preserve the same launcher-provided process context and choose visible or displayless/headless startup. Rendering changes do not themselves replace account/session bootstrap. For unattended remote restarts, launcher/session orchestration remains a separate concern.
 
 Use one game client per JVM. The injected client and RuneLite contain substantial static/global state, so multiple clients in one classloader are not a sensible memory optimization. A multi-client system should supervise multiple displayless processes and expose one control socket per process.
 

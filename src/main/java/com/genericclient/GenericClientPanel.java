@@ -1,10 +1,12 @@
 package com.genericclient;
 
+import com.google.gson.GsonBuilder;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.GridLayout;
 import javax.swing.BorderFactory;
+import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
@@ -30,9 +32,13 @@ final class GenericClientPanel extends PluginPanel
 	private final JButton mouseStopButton = new JButton("Stop and use recording");
 	private final JLabel luaScriptValue = valueLabel("none");
 	private final JLabel luaStatusValue = valueLabel("IDLE");
-	private final JComboBox<String> luaScripts = new JComboBox<>();
+	private final JLabel luaDescriptionValue = valueLabel("");
+	private final JComboBox<GenericClientScriptRegistry.Script> luaScripts = new JComboBox<>();
 	private final JTextArea luaLogs = new JTextArea("No Lua output yet.");
+	private final JTextArea luaReplInput = new JTextArea("return gc.read(\"player\")");
+	private final JTextArea luaReplOutput = new JTextArea("No REPL result yet.");
 	private final GenericClientLuaHost luaHost;
+	private long scriptManifestRevision = -1;
 
 	GenericClientPanel(
 		Runnable printDiagnostics,
@@ -89,20 +95,24 @@ final class GenericClientPanel extends PluginPanel
 		JPanel luaSection = section("Lua scripts");
 		luaSection.add(row("Active", luaScriptValue));
 		luaSection.add(row("Status", luaStatusValue));
+		luaSection.add(row("Selected", luaDescriptionValue));
+		luaScripts.addActionListener(event -> updateSelectedScriptDescription());
 		luaSection.add(luaScripts);
 
 		JPanel luaButtons = new JPanel(new GridLayout(2, 2, 4, 4));
 		luaButtons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		JButton scanButton = new JButton("Scan");
-		scanButton.addActionListener(event -> refreshScripts());
+		JButton scanButton = new JButton("Reload manifest");
+		scanButton.addActionListener(event -> luaHost.reloadManifest()
+			.whenComplete((result, error) -> runOnEdt(this::refreshScripts)));
 		luaButtons.add(scanButton);
 		JButton startButton = new JButton("Start");
 		startButton.addActionListener(event ->
 		{
-			Object selection = luaScripts.getSelectedItem();
+			GenericClientScriptRegistry.Script selection =
+				(GenericClientScriptRegistry.Script) luaScripts.getSelectedItem();
 			if (selection != null)
 			{
-				luaHost.start(selection.toString());
+				luaHost.start(selection.getId());
 			}
 		});
 		luaButtons.add(startButton);
@@ -125,6 +135,47 @@ final class GenericClientPanel extends PluginPanel
 		luaSection.add(luaScrollPane);
 		add(luaSection);
 		refreshScripts();
+
+		JPanel replSection = section("Lua REPL");
+		luaReplInput.setRows(5);
+		luaReplInput.setLineWrap(false);
+		luaReplInput.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		luaReplInput.setForeground(Color.WHITE);
+		luaReplInput.setCaretColor(Color.WHITE);
+		luaReplInput.setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, 11));
+		JScrollPane replInputScroll = new JScrollPane(luaReplInput);
+		replInputScroll.setPreferredSize(new Dimension(205, 105));
+		replSection.add(replInputScroll);
+
+		JPanel replButtons = new JPanel(new GridLayout(1, 2, 4, 4));
+		replButtons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		JButton runReplButton = new JButton("Run Lua");
+		runReplButton.addActionListener(event ->
+		{
+			luaReplOutput.setText("Running...");
+			luaHost.evaluate(luaReplInput.getText()).whenComplete((result, error) ->
+				runOnEdt(() -> luaReplOutput.setText(error == null
+					? new GsonBuilder().setPrettyPrinting().create().toJson(result)
+					: error.getMessage())));
+		});
+		replButtons.add(runReplButton);
+		JButton resetReplButton = new JButton("Reset REPL");
+		resetReplButton.addActionListener(event -> luaHost.resetRepl()
+			.whenComplete((result, error) -> runOnEdt(() -> luaReplOutput.setText(
+				error == null ? result : error.getMessage()))));
+		replButtons.add(resetReplButton);
+		replSection.add(replButtons);
+
+		luaReplOutput.setEditable(false);
+		luaReplOutput.setRows(6);
+		luaReplOutput.setLineWrap(false);
+		luaReplOutput.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		luaReplOutput.setForeground(Color.WHITE);
+		luaReplOutput.setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, 11));
+		JScrollPane replOutputScroll = new JScrollPane(luaReplOutput);
+		replOutputScroll.setPreferredSize(new Dimension(205, 125));
+		replSection.add(replOutputScroll);
+		add(replSection);
 
 		JPanel npcSection = section("Latest NPC snapshot");
 		npcDiagnostics.setEditable(false);
@@ -182,30 +233,53 @@ final class GenericClientPanel extends PluginPanel
 			luaStatusValue.setText(status);
 			luaLogs.setText(logs.isEmpty() ? "No Lua output yet." : logs);
 			luaLogs.setCaretPosition(luaLogs.getDocument().getLength());
+			if (scriptManifestRevision != luaHost.getManifestRevision())
+			{
+				refreshScripts();
+			}
 		});
 	}
 
 	private void refreshScripts()
 	{
-		Object selected = luaScripts.getSelectedItem();
+		GenericClientScriptRegistry.Script selected =
+			(GenericClientScriptRegistry.Script) luaScripts.getSelectedItem();
+		String selectedId = selected == null ? null : selected.getId();
 		luaScripts.removeAllItems();
-		for (String script : luaHost.listScripts())
+		for (GenericClientScriptRegistry.Script script : luaHost.listScripts())
 		{
 			luaScripts.addItem(script);
 		}
-		if (selected != null)
+		if (selectedId != null)
 		{
-			luaScripts.setSelectedItem(selected);
+			for (int index = 0; index < luaScripts.getItemCount(); index++)
+			{
+				if (selectedId.equals(luaScripts.getItemAt(index).getId()))
+				{
+					luaScripts.setSelectedIndex(index);
+					break;
+				}
+			}
 		}
 		if (luaScripts.getSelectedItem() == null && luaScripts.getItemCount() > 0)
 		{
 			luaScripts.setSelectedIndex(0);
 		}
+		updateSelectedScriptDescription();
+		scriptManifestRevision = luaHost.getManifestRevision();
+	}
+
+	private void updateSelectedScriptDescription()
+	{
+		GenericClientScriptRegistry.Script selected =
+			(GenericClientScriptRegistry.Script) luaScripts.getSelectedItem();
+		luaDescriptionValue.setText(selected == null ? "" : selected.getDescription());
 	}
 
 	private static JPanel section(String title)
 	{
-		JPanel panel = new JPanel(new GridLayout(0, 1, 0, 4));
+		JPanel panel = new JPanel();
+		panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
 		panel.setBackground(ColorScheme.DARKER_GRAY_COLOR);
 		panel.setBorder(BorderFactory.createTitledBorder(
 			BorderFactory.createLineBorder(ColorScheme.MEDIUM_GRAY_COLOR),

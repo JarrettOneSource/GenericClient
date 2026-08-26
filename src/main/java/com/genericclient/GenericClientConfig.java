@@ -61,4 +61,15 @@ public interface GenericClientConfig extends Config
 	{
 		return 432;
 	}
+
+	@Range(min = 1024, max = 65535)
+	@ConfigItem(
+		keyName = "controlPort",
+		name = "MCP bridge port",
+		description = "Loopback port used by the GenericClient MCP server"
+	)
+	default int controlPort()
+	{
+		return 17343;
+	}
 }

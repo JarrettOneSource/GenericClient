@@ -25,16 +25,21 @@ Reactive streams and a declarative reconciliation DSL were explored as radically
 The current checkout implements:
 
 - LuaJava 4.1.0 with native PUC Lua 5.4 in the standalone fat JAR;
-- one active script, one native state, one root coroutine, and one scheduler thread;
+- one active standalone script plus one persistent REPL state on one scheduler thread;
 - `gc.read` subjects `runtime`, `player`, and bounded `npcs` queries;
 - `gc.await` for `game.tick`, tick counts, the real `walk.random` native mouse
   action, and the same-plane `walk.to` ground-route action;
 - `gc.log` to `client.log` and the GenericClient sidebar;
-- editable one-file scripts, scan/start/reload/stop controls, and automatic read-only NPC diagnostics;
+- manifest-registered one-file scripts with start/reload/stop controls and automatic NPC diagnostics;
+- a loopback control bridge and stdio MCP server for live status, REPL evaluation,
+  script registration, and on-demand execution;
 - a bounded three-click `walk-stress.lua` automation;
-- a `lumbridge-varrock.lua` static-ground route prepared but not yet tested;
+- a live-tested `lumbridge-varrock.lua` static-ground route;
 - per-resume instruction/deadline interruption and pinned-frame reads;
 - focused tests for NPC queries, coroutine/action flow, pinned frames, and infinite-loop termination.
+
+The MCP and manifest interface is documented in
+[`mcp-lua-control.md`](mcp-lua-control.md).
 
 The walker adds only the collision reader, A* planner, and route lifecycle needed
 by this automation. Its implementation status and limits are documented in
@@ -44,13 +49,19 @@ intentionally absent until a concrete automation requires each one.
 
 ### Live verification receipt
 
-The exact standalone artifact deployed through the existing Jagex Launcher configuration had SHA-256 `eb232a126af442fad37e474149c8a37f900e78e553a8944f4c3aabf25771ef1d`. On RuneLite 1.12.36/game revision 240 it:
+The GenericClient 0.4.0 standalone artifact deployed through the existing Jagex
+Launcher configuration had SHA-256
+`d2d9fdff9e6363ada38f96d991c66157719f18bb7b52c5dea9c7d346a67b73c0`.
+On RuneLite 1.12.36/game revision 240 it:
 
 - loaded native Lua 5.4 and started `npc-diagnostics.lua`;
-- logged changing live NPC snapshots every five game ticks;
-- completed `walk-stress.lua` with three native mouse `WALK` dispatches and three `dispatched` Lua receipts;
-- terminated with `LUA_COMPLETED` and left RuneLite running;
-- passed four focused tests covering NPC queries, end-to-end coroutine/action flow, pinned-frame reads, and infinite-loop interruption.
+- exposed all nine MCP tools through the official TypeScript MCP client;
+- returned live player, runtime, and nearby-NPC snapshots with proper JSON arrays;
+- preserved a REPL global across separate calls with results `1` and `2`;
+- dispatched a generated-mouse `Walk here` click from Lua and moved the player;
+- saved, registered, displayed, and completed `mcp-location-check.lua` on demand;
+- ran `return gc.read("player")` from the RuneLite sidebar REPL and displayed the result;
+- passed 12 Java tests and three Node MCP tests.
 
 This is a refinement of the initial LuaJ-first idea. The decisive reasons are:
 

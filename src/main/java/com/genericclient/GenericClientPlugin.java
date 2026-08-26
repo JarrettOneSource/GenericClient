@@ -9,6 +9,8 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
@@ -33,8 +35,8 @@ import net.runelite.client.ui.overlay.OverlayManager;
 @Slf4j
 @PluginDescriptor(
 	name = "GenericClient",
-	description = "Runs Lua scripts over client snapshots, recorded mouse profiles, and native game actions",
-	tags = {"genericclient", "diagnostics", "lua", "scripting", "mouse"},
+	description = "Runs Lua and MCP tools over client snapshots, recorded mouse profiles, and native game actions",
+	tags = {"genericclient", "diagnostics", "lua", "scripting", "mouse", "mcp"},
 	loadInSafeMode = false
 )
 public final class GenericClientPlugin extends Plugin
@@ -75,6 +77,7 @@ public final class GenericClientPlugin extends Plugin
 	private boolean initialNpcSnapshotLogged;
 
 	private GenericClientPanel panel;
+	private GenericClientControlServer controlServer;
 	private GenericClientGameInput gameInput;
 	private GenericClientMouseRecorder mouseRecorder;
 	private GenericClientWalker walker;
@@ -82,6 +85,7 @@ public final class GenericClientPlugin extends Plugin
 	private NavigationButton navigationButton;
 	private Path mouseProfilesDirectory;
 	private volatile GenericClientMouseProfile mouseProfile;
+	private volatile GenericClientSnapshot latestSnapshot;
 
 	@Override
 	protected void startUp() throws Exception
@@ -112,6 +116,12 @@ public final class GenericClientPlugin extends Plugin
 			walker::walkTo,
 			walker::cancelActive,
 			this::publishResult);
+		controlServer = new GenericClientControlServer(
+			config.controlPort(),
+			luaHost,
+			this::controlStatus,
+			this::publishResult);
+		controlServer.start();
 		panel = new GenericClientPanel(
 			this::printDiagnostics,
 			this::logNearbyNpcs,
@@ -154,6 +164,11 @@ public final class GenericClientPlugin extends Plugin
 	protected void shutDown()
 	{
 		lifecycle = "STOPPING";
+		if (controlServer != null)
+		{
+			controlServer.close();
+			controlServer = null;
+		}
 		if (luaHost != null)
 		{
 			luaHost.close();
@@ -201,6 +216,7 @@ public final class GenericClientPlugin extends Plugin
 	{
 		tickCount++;
 		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(client, tickCount);
+		latestSnapshot = snapshot;
 		nearbyNpcCount = snapshot.countNearbyNpcs(config.npcLogRadius());
 		GenericClientWalker activeWalker = walker;
 		if (activeWalker != null)
@@ -405,6 +421,33 @@ public final class GenericClientPlugin extends Plugin
 		{
 			client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null);
 		}
+	}
+
+	private Map<String, Object> controlStatus()
+	{
+		Map<String, Object> value = new LinkedHashMap<>();
+		value.put("protocol", 1L);
+		value.put("lifecycle", lifecycle);
+		value.put("game_state", gameStateName);
+		value.put("last_status", lastStatus);
+		GenericClientSnapshot snapshot = latestSnapshot;
+		value.put("runtime", snapshot == null ? null : snapshot.read("runtime", null));
+		value.put("player", snapshot == null ? null : snapshot.read("player", null));
+		value.put("nearby_npc_count", (long) nearbyNpcCount);
+		GenericClientMouseProfile profile = mouseProfile;
+		if (profile != null)
+		{
+			Map<String, Object> mouse = new LinkedHashMap<>();
+			mouse.put("profile", profile.getProfileId());
+			mouse.put("templates", (long) profile.getTemplateCount());
+			mouse.put("duration_ms", (long) config.mouseDurationMillis());
+			value.put("mouse", mouse);
+		}
+		GenericClientLuaHost host = luaHost;
+		value.put("lua", host == null ? null : host.controlState());
+		GenericClientControlServer bridge = controlServer;
+		value.put("control_url", bridge == null ? null : bridge.getUrl());
+		return value;
 	}
 
 	private void refreshPanel()
