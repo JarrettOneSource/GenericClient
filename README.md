@@ -33,21 +33,15 @@ Copy-Item "$env:LOCALAPPDATA\RuneLite\config.stock.json" `
 This launches the current stock RuneLite release and loads `GenericClientPlugin`
 through `ExternalPluginManager.loadBuiltin` without development mode.
 
-After logging in, open the GenericClient sidebar:
+After logging in, open the three-tab GenericClient dashboard:
 
-- **Print diagnostics** logs the RuneLite version, game revision, game state,
-  player location, classloader, thread, tick count, and uptime.
-- **Log nearby NPCs** logs each nearby NPC's name, ID, index, location,
-  distance, combat level, animation, interaction target, and actions.
-- **Walk to random tile** moves the synthetic client cursor to a nearby ground tile,
-  follows the active recorded mouse profile to it, executes a left click when
-  the selected action is `Walk here`, records the resulting
-  `MenuOptionClicked`, and logs a fresh NPC snapshot.
-- **Lua scripts** can be scanned, started, reloaded, and stopped from the
-  sidebar. Script output appears in the Lua log pane and `client.log`.
-- **Behavior profile** shows the account's stable attention style, short/long
-  break tendencies, current break, long pressure, idle edge, and plain-language
-  description.
+- **Scripts** runs manifest scripts and shows their output.
+- **Console** contains the Lua REPL plus the three diagnostic actions.
+- **Settings** contains mouse movement/trail options and the behavior profile.
+
+Settings can save account-specific behavior overrides or restore the original
+seeded profile. The dashboard intentionally omits low-value runtime counters;
+complete diagnostics remain available through the Console and MCP.
 
 ## Lua scripts
 
@@ -57,7 +51,7 @@ Editable scripts are installed in:
 ~/.runelite/genericclient/scripts/
 ```
 
-`manifest.json` registers the scripts shown in the sidebar. Each entry has a
+`manifest.json` registers the scripts shown in the Scripts tab. Each entry has a
 stable id, display name, description, and Lua filename. Press **Reload
 manifest** after editing it manually.
 
@@ -161,23 +155,23 @@ workflow are documented in
 
 Mouse movement uses a local Template Match implementation with the bundled
 6,069-trajectory recorded profile. Generated paths are injected into RuneLite's
-canvas; only manual profile recording reads the real cursor. Profiles live in:
+canvas; only manual profile recording reads the real cursor. The dashboard can
+show PMouse's fading **Trail**, the active **Path** with green progress, or no
+effect. Profiles live in:
 
 ```text
 ~/.runelite/genericclient/mouse-profiles/
 ```
 
-Select a filename in RuneLite's GenericClient settings and reload it from the
-sidebar. The sidebar can also record manual RuneLite-canvas movement into a new
-profile and activate it. The matcher, profile schema, recording flow, and source
-data hashes are documented in
+Select, reload, and record profiles from the dashboard's Settings tab. The
+matcher, profile schema, recording flow, effects, and source data hashes are documented in
 [`docs/mouse-profiles.md`](docs/mouse-profiles.md).
 
 Diagnostics are written to:
 
 - the terminal running RuneLite;
 - `~/.runelite/logs/client.log`;
-- the GenericClient sidebar.
+- the GenericClient Console tab.
 
 Log lines use the `[GenericClient]` prefix.
 
@@ -189,11 +183,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.5.1.jar`
-- `build/libs/GenericClient-0.5.1-all.jar`
+- `build/libs/generic-client-0.6.0.jar`
+- `build/libs/GenericClient-0.6.0-all.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.5.1-all.jar
+java -ea -jar build/libs/GenericClient-0.6.0-all.jar
 ```

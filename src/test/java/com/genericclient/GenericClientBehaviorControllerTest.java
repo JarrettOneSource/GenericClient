@@ -200,6 +200,89 @@ public class GenericClientBehaviorControllerTest
 		}
 	}
 
+	@Test
+	@SuppressWarnings("unchecked")
+	public void manualOverridesApplyImmediatelyAndResetToTheSeed() throws Exception
+	{
+		Fixture fixture = fixture(0.5);
+		try
+		{
+			fixture.controller.activateAccount(4242L);
+			Map<String, Object> seeded = (Map<String, Object>) fixture.controller.status().get("profile");
+			fixture.controller.saveOverrides(new GenericClientBehaviorOverrides(
+				0.95,
+				9.0,
+				0.30,
+				240.0,
+				35.0,
+				3.5,
+				GenericClientBehaviorProfile.LongBreakMode.LOGOUT,
+				0.25,
+				GenericClientBehaviorProfile.Edge.TOP));
+
+			Map<String, Object> custom = (Map<String, Object>) fixture.controller.status().get("profile");
+			assertTrue((Boolean) custom.get("customized"));
+			assertEquals(0.95, (Double) custom.get("short_release_probability"), 0.0);
+			assertEquals("top", custom.get("idle_edge"));
+
+			fixture.controller.resetOverrides();
+			Map<String, Object> restored = (Map<String, Object>) fixture.controller.status().get("profile");
+			assertFalse((Boolean) restored.get("customized"));
+			assertEquals(seeded.get("short_release_probability"), restored.get("short_release_probability"));
+			assertEquals(seeded.get("idle_edge"), restored.get("idle_edge"));
+		}
+		finally
+		{
+			fixture.controller.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void manualOverridesReloadWithTheSameAccount() throws Exception
+	{
+		Path directory = temporaryFolder.newFolder("override-reload").toPath();
+		GenericClientBehaviorOverrides overrides = new GenericClientBehaviorOverrides(
+			0.88,
+			7.5,
+			0.22,
+			300.0,
+			40.0,
+			3.2,
+			GenericClientBehaviorProfile.LongBreakMode.AFK,
+			0.18,
+			GenericClientBehaviorProfile.Edge.RIGHT);
+		GenericClientBehaviorController first = controller(directory);
+		first.activateAccount(8080L);
+		first.saveOverrides(overrides);
+		first.close();
+
+		GenericClientBehaviorController second = controller(directory);
+		try
+		{
+			second.activateAccount(8080L);
+			Map<String, Object> profile = (Map<String, Object>) second.status().get("profile");
+			assertTrue((Boolean) profile.get("customized"));
+			assertEquals(0.88, (Double) profile.get("short_release_probability"), 0.0);
+			assertEquals(300.0, (Double) profile.get("long_cadence_minutes"), 0.0);
+		}
+		finally
+		{
+			second.close();
+		}
+	}
+
+	private GenericClientBehaviorController controller(Path directory) throws Exception
+	{
+		return new GenericClientBehaviorController(
+			new GenericClientBehaviorStore(directory),
+			new FakeEffects(),
+			new ManualTimer(),
+			new ManualClock(),
+			new SequenceRandom(0.5),
+			message -> { });
+	}
+
 	private Fixture fixture(double... randomValues) throws Exception
 	{
 		ManualClock clock = new ManualClock();

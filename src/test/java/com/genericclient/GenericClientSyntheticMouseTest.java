@@ -209,6 +209,11 @@ public class GenericClientSyntheticMouseTest
 			() -> profile,
 			() -> duration,
 			start,
+			new GenericClientMouseEffectOverlay(
+				() -> GenericClientMouseEffect.TRAIL,
+				canvas::getWidth,
+				canvas::getHeight,
+				System::currentTimeMillis),
 			message -> { },
 			() -> random);
 	}

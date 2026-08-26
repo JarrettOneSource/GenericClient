@@ -12,7 +12,7 @@ Codex
               -> snapshots, behavior controller, walker, and synthetic input
 ```
 
-RuneLite must be running with GenericClient loaded. The sidebar and MCP tools
+RuneLite must be running with GenericClient loaded. The dashboard and MCP tools
 share the same Lua host and script registry.
 
 ## Install the MCP server
@@ -140,7 +140,7 @@ Standalone scripts live in:
 ~/.runelite/genericclient/scripts/
 ```
 
-`manifest.json` is the registry shown in the RuneLite sidebar and returned by
+`manifest.json` is the registry shown in the RuneLite Scripts tab and returned by
 `script_list`:
 
 ```json
@@ -177,7 +177,7 @@ gc.phase(name, options)
 
 The easiest programmatic path is `script_save`, which writes both the Lua file
 and manifest entry. For manual editing, add the file and manifest row, then
-press **Reload manifest** in the sidebar or call `script_reload_manifest`.
+press **Reload list** in the Scripts tab or call `script_reload_manifest`.
 
 Only one standalone script is active at a time. Starting another replaces it.
 The REPL is separate, so short interactive queries can run while a diagnostic

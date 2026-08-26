@@ -11,16 +11,6 @@ public interface GenericClientConfig extends Config
 	String GROUP = "genericclient";
 
 	@ConfigItem(
-		keyName = "showOverlay",
-		name = "Show status overlay",
-		description = "Show GenericClient status in an overlay"
-	)
-	default boolean showOverlay()
-	{
-		return true;
-	}
-
-	@ConfigItem(
 		keyName = "chatNotifications",
 		name = "Show chat diagnostics",
 		description = "Write GenericClient events to the in-game chat"
@@ -44,7 +34,8 @@ public interface GenericClientConfig extends Config
 	@ConfigItem(
 		keyName = "mouseProfileFile",
 		name = "Mouse profile file",
-		description = "Profile filename inside ~/.runelite/genericclient/mouse-profiles"
+		description = "Profile filename inside ~/.runelite/genericclient/mouse-profiles",
+		hidden = true
 	)
 	default String mouseProfileFile()
 	{
@@ -55,11 +46,23 @@ public interface GenericClientConfig extends Config
 	@ConfigItem(
 		keyName = "mouseDurationMillis",
 		name = "Mouse move duration",
-		description = "Milliseconds used to play each matched mouse trajectory"
+		description = "Milliseconds used to play each matched mouse trajectory",
+		hidden = true
 	)
 	default int mouseDurationMillis()
 	{
 		return 432;
+	}
+
+	@ConfigItem(
+		keyName = "mouseEffect",
+		name = "Mouse effect",
+		description = "Draw a fading cursor trail or the active generated path",
+		hidden = true
+	)
+	default GenericClientMouseEffect mouseEffect()
+	{
+		return GenericClientMouseEffect.TRAIL;
 	}
 
 	@Range(min = 1024, max = 65535)

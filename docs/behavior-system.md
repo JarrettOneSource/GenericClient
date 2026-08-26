@@ -28,8 +28,20 @@ rare short and long breaks.
 | Long-mode reversal | 2-15% chance of the non-favored AFK/logout choice |
 | Idle edge | One stable choice from left, right, top, or bottom |
 
-The sidebar and MCP status expose a title and plain-language summary generated
+The dashboard and MCP status expose a title and plain-language summary generated
 only from these numeric values. That text never feeds back into behavior.
+
+### Manual overrides
+
+The Settings tab can override the understandable profile controls per account:
+micro chance and duration, long-micro chance, long-break interval and duration,
+phase boost, preferred AFK/logout style, style-switch chance, and idle edge.
+Derived refractory, hazard scale, summary, and downtime are recomputed from the
+custom values. **Use seeded** deletes the override and restores the exact
+account-derived profile.
+
+Overrides live beside runtime state as `overrides-<profile-id>.json`. The
+profile ID is a one-way derived identifier; the raw account hash is not stored.
 
 ## Action contract
 
@@ -57,7 +69,7 @@ local result = gc.await {
 }
 ```
 
-Explicit sidebar actions are operator commands and bypass behavior. Status,
+Explicit dashboard actions are operator commands and bypass behavior. Status,
 reads, logging, script stop/reset, manifest editing, and MCP control remain
 responsive during a break.
 

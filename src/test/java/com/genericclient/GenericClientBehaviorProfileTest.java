@@ -110,6 +110,39 @@ public class GenericClientBehaviorProfileTest
 			(Double) value.get("long_cadence_minutes"), 0.0);
 	}
 
+	@Test
+	public void manualOverridesRecomputeEveryDerivedValue()
+	{
+		GenericClientBehaviorProfile generated = GenericClientBehaviorProfile.fromAccountHash(123L);
+		GenericClientBehaviorProfile custom = generated.withOverrides(new GenericClientBehaviorOverrides(
+			0.90,
+			10.0,
+			0.25,
+			200.0,
+			30.0,
+			2.5,
+			GenericClientBehaviorProfile.LongBreakMode.LOGOUT,
+			0.20,
+			GenericClientBehaviorProfile.Edge.BOTTOM));
+
+		assertTrue(custom.isCustomized());
+		assertEquals(generated.getId(), custom.getId());
+		assertEquals(0.90, custom.getShortReleaseProbability(), 0.0);
+		assertEquals(10.0, custom.getShortBodyMedianSeconds(), 0.0);
+		assertEquals(0.25, custom.getShortTailProbability(), 0.0);
+		assertEquals(200.0, custom.getLongCadenceMinutes(), 0.0);
+		assertEquals(60.0, custom.getLongRefractoryMinutes(), 0.0);
+		assertEquals(30.0, custom.getLongMedianMinutes(), 0.0);
+		assertEquals(2.5, custom.getPhaseShortChances(), 0.0);
+		assertEquals(0.75, custom.getPhaseLongBonusMaximum(), 0.0);
+		assertEquals(GenericClientBehaviorProfile.LongBreakMode.LOGOUT,
+			custom.getFavoredLongBreakMode());
+		assertEquals(GenericClientBehaviorProfile.Edge.BOTTOM, custom.getIdleEdge());
+		assertTrue((Boolean) custom.toMap().get("customized"));
+		assertTrue(custom.getSummary().contains("90%"));
+		assertTrue(custom.getSummary().contains("200 active minutes"));
+	}
+
 	private static void assertBetween(double value, double minimum, double maximum)
 	{
 		assertTrue("Expected " + value + " >= " + minimum, value >= minimum);

@@ -49,10 +49,48 @@ final class GenericClientBehaviorStore
 	{
 		state.validate(state.getProfileId());
 		state.markSaved(epochMillis);
-		String json = gson.toJson(state) + System.lineSeparator();
-		Path target = path(state.getProfileId());
+		writeAtomically(path(state.getProfileId()), gson.toJson(state) + System.lineSeparator());
+	}
+
+	GenericClientBehaviorOverrides loadOverrides(String profileId) throws IOException
+	{
+		Path path = overridePath(profileId);
+		if (!Files.isRegularFile(path))
+		{
+			return null;
+		}
+		try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8))
+		{
+			GenericClientBehaviorOverrides overrides = gson.fromJson(reader, GenericClientBehaviorOverrides.class);
+			if (overrides == null)
+			{
+				throw new IOException("Behavior overrides are empty: " + path);
+			}
+			overrides.validate();
+			return overrides;
+		}
+		catch (JsonParseException | IllegalArgumentException exception)
+		{
+			throw new IOException("Invalid behavior overrides: " + path, exception);
+		}
+	}
+
+	void saveOverrides(String profileId, GenericClientBehaviorOverrides overrides) throws IOException
+	{
+		validateProfileId(profileId);
+		overrides.validate();
+		writeAtomically(overridePath(profileId), gson.toJson(overrides) + System.lineSeparator());
+	}
+
+	void deleteOverrides(String profileId) throws IOException
+	{
+		Files.deleteIfExists(overridePath(profileId));
+	}
+
+	private static void writeAtomically(Path target, String value) throws IOException
+	{
 		Path temporary = target.resolveSibling(target.getFileName() + ".tmp");
-		Files.writeString(temporary, json, StandardCharsets.UTF_8);
+		Files.writeString(temporary, value, StandardCharsets.UTF_8);
 		try
 		{
 			Files.move(temporary, target,
@@ -67,10 +105,21 @@ final class GenericClientBehaviorStore
 
 	private Path path(String profileId)
 	{
+		validateProfileId(profileId);
+		return directory.resolve("state-" + profileId + ".json");
+	}
+
+	private Path overridePath(String profileId)
+	{
+		validateProfileId(profileId);
+		return directory.resolve("overrides-" + profileId + ".json");
+	}
+
+	private static void validateProfileId(String profileId)
+	{
 		if (profileId == null || !profileId.matches("[0-9a-f]{16}"))
 		{
 			throw new IllegalArgumentException("Behavior profile id must be 16 lowercase hexadecimal characters");
 		}
-		return directory.resolve("state-" + profileId + ".json");
 	}
 }

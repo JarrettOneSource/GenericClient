@@ -9,6 +9,9 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
@@ -38,8 +41,8 @@ import net.runelite.client.ui.overlay.OverlayManager;
 @Slf4j
 @PluginDescriptor(
 	name = "GenericClient",
-	description = "Runs Lua and MCP tools with seeded behavior profiles and synthetic client input",
-	tags = {"genericclient", "diagnostics", "lua", "scripting", "mouse", "mcp", "behavior"},
+	description = "Lua automation dashboard with seeded behavior profiles and synthetic client input",
+	tags = {"genericclient", "diagnostics", "lua", "scripting", "mouse", "mcp", "behavior", "dashboard"},
 	loadInSafeMode = false
 )
 public final class GenericClientPlugin extends Plugin
@@ -57,7 +60,7 @@ public final class GenericClientPlugin extends Plugin
 	private GenericClientConfig config;
 
 	@Inject
-	private GenericClientOverlay overlay;
+	private GenericClientMouseEffectOverlay mouseEffectOverlay;
 
 	@Inject
 	private OverlayManager overlayManager;
@@ -79,7 +82,7 @@ public final class GenericClientPlugin extends Plugin
 	private volatile Instant startedAt;
 	private boolean initialNpcSnapshotLogged;
 
-	private GenericClientPanel panel;
+	private GenericClientDashboard panel;
 	private GenericClientControlServer controlServer;
 	private GenericClientGameInput gameInput;
 	private GenericClientSyntheticMouse syntheticMouse;
@@ -115,6 +118,7 @@ public final class GenericClientPlugin extends Plugin
 			() -> mouseProfile,
 			config::mouseDurationMillis,
 			new java.awt.Point(mousePosition.getX(), mousePosition.getY()),
+			mouseEffectOverlay,
 			this::publishResult);
 		gameInput = new GenericClientGameInput(
 			client,
@@ -175,14 +179,7 @@ public final class GenericClientPlugin extends Plugin
 			this::controlStatus,
 			this::publishResult);
 		controlServer.start();
-		panel = new GenericClientPanel(
-			this::printDiagnostics,
-			this::logNearbyNpcs,
-			() -> gameInput.walkToRandomTile(),
-			this::reloadMouseProfile,
-			this::startMouseRecording,
-			this::stopMouseRecording,
-			luaHost);
+		panel = new GenericClientDashboard(dashboardActions(), luaHost);
 		navigationButton = NavigationButton.builder()
 			.tooltip("GenericClient")
 			.icon(createIcon())
@@ -190,7 +187,7 @@ public final class GenericClientPlugin extends Plugin
 			.panel(panel)
 			.build();
 
-		overlayManager.add(overlay);
+		overlayManager.add(mouseEffectOverlay);
 		clientToolbar.addNavigation(navigationButton);
 		refreshPanel();
 		panelRefreshFuture = executor.scheduleAtFixedRate(this::refreshPanel, 1L, 1L, TimeUnit.SECONDS);
@@ -268,7 +265,7 @@ public final class GenericClientPlugin extends Plugin
 			syntheticMouse.close();
 			syntheticMouse = null;
 		}
-		overlayManager.remove(overlay);
+		overlayManager.remove(mouseEffectOverlay);
 		if (navigationButton != null)
 		{
 			clientToolbar.removeNavigation(navigationButton);
@@ -360,6 +357,12 @@ public final class GenericClientPlugin extends Plugin
 		{
 			reloadMouseProfile();
 		}
+		if (GenericClientConfig.GROUP.equals(event.getGroup()) &&
+			"mouseEffect".equals(event.getKey()))
+		{
+			mouseEffectOverlay.clear();
+			refreshPanel();
+		}
 	}
 
 	void printDiagnostics()
@@ -415,7 +418,7 @@ public final class GenericClientPlugin extends Plugin
 		int logged = Math.min(nearbyNpcCount, NPC_LOG_LIMIT);
 		String panelOutput = snapshot.formatNpcDiagnostics(config.npcLogRadius(), NPC_LOG_LIMIT);
 		log.info("{} NPC_SNAPSHOT\n{}", LOG_PREFIX, panelOutput);
-		GenericClientPanel currentPanel = panel;
+		GenericClientDashboard currentPanel = panel;
 		if (currentPanel != null)
 		{
 			currentPanel.updateNpcDiagnostics(panelOutput);
@@ -545,6 +548,119 @@ public final class GenericClientPlugin extends Plugin
 		}
 	}
 
+	private GenericClientDashboardActions dashboardActions()
+	{
+		return new GenericClientDashboardActions()
+		{
+			@Override
+			public void printDiagnostics()
+			{
+				GenericClientPlugin.this.printDiagnostics();
+			}
+
+			@Override
+			public void logNearbyNpcs()
+			{
+				GenericClientPlugin.this.logNearbyNpcs();
+			}
+
+			@Override
+			public void walkToRandomTile()
+			{
+				gameInput.walkToRandomTile();
+			}
+
+			@Override
+			public void setMouseProfile(String file)
+			{
+				configManager.setConfiguration(GenericClientConfig.GROUP, "mouseProfileFile", file);
+			}
+
+			@Override
+			public void setMouseDuration(int milliseconds)
+			{
+				configManager.setConfiguration(GenericClientConfig.GROUP, "mouseDurationMillis", milliseconds);
+			}
+
+			@Override
+			public void setMouseEffect(GenericClientMouseEffect effect)
+			{
+				configManager.setConfiguration(GenericClientConfig.GROUP, "mouseEffect", effect);
+				mouseEffectOverlay.clear();
+			}
+
+			@Override
+			public void reloadMouseProfile()
+			{
+				GenericClientPlugin.this.reloadMouseProfile();
+			}
+
+			@Override
+			public void startMouseRecording()
+			{
+				GenericClientPlugin.this.startMouseRecording();
+			}
+
+			@Override
+			public void stopMouseRecording()
+			{
+				GenericClientPlugin.this.stopMouseRecording();
+			}
+
+			@Override
+			public String saveBehaviorOverrides(GenericClientBehaviorOverrides overrides)
+			{
+				try
+				{
+					behaviorController.saveOverrides(overrides);
+					refreshPanel();
+					return "Saved";
+				}
+				catch (IOException | RuntimeException exception)
+				{
+					return exception.getMessage();
+				}
+			}
+
+			@Override
+			public String resetBehaviorOverrides()
+			{
+				try
+				{
+					behaviorController.resetOverrides();
+					refreshPanel();
+					return "Using seeded profile";
+				}
+				catch (IOException | RuntimeException exception)
+				{
+					return exception.getMessage();
+				}
+			}
+		};
+	}
+
+	private List<String> listMouseProfiles()
+	{
+		if (mouseProfilesDirectory == null)
+		{
+			return Collections.emptyList();
+		}
+		List<String> files = new ArrayList<>();
+		try (java.util.stream.Stream<Path> paths = java.nio.file.Files.list(mouseProfilesDirectory))
+		{
+			paths.filter(java.nio.file.Files::isRegularFile)
+				.map(path -> path.getFileName().toString())
+				.filter(name -> name.endsWith(".json"))
+				.sorted(String.CASE_INSENSITIVE_ORDER)
+				.forEach(files::add);
+		}
+		catch (IOException exception)
+		{
+			log.warn("Unable to list mouse profiles", exception);
+		}
+		return files;
+	}
+
 	private Map<String, Object> controlStatus()
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
@@ -576,24 +692,29 @@ public final class GenericClientPlugin extends Plugin
 
 	private void refreshPanel()
 	{
-		GenericClientPanel currentPanel = panel;
+		GenericClientDashboard currentPanel = panel;
 		if (currentPanel == null)
 		{
 			return;
 		}
-		currentPanel.updateLiveState(lifecycle, gameStateName, tickCount, nearbyNpcCount, lastStatus);
 		GenericClientBehaviorController behaviors = behaviorController;
 		currentPanel.updateBehaviorState(behaviors == null ? null : behaviors.status());
 		GenericClientLuaHost scripts = luaHost;
 		if (scripts != null)
 		{
+			currentPanel.updateLiveState(
+				gameStateName,
+				scripts.getActiveScript(),
+				scripts.getStatus(),
+				lastStatus);
 			currentPanel.updateLuaState(scripts.getActiveScript(), scripts.getStatus(), scripts.getRecentLogs());
 		}
-		GenericClientMouseProfile profile = mouseProfile;
 		GenericClientMouseRecorder recorder = mouseRecorder;
 		currentPanel.updateMouseState(
 			config.mouseProfileFile(),
-			profile == null ? 0 : profile.getTemplateCount(),
+			listMouseProfiles(),
+			config.mouseDurationMillis(),
+			config.mouseEffect(),
 			recorder != null && recorder.isRecording(),
 			recorder == null ? 0 : recorder.getTemplateCount());
 	}
@@ -626,49 +747,6 @@ public final class GenericClientPlugin extends Plugin
 		}
 		long seconds = Math.max(0, Duration.between(start, Instant.now()).getSeconds());
 		return seconds + "s";
-	}
-
-	String getGameStateName()
-	{
-		return gameStateName;
-	}
-
-	long getTickCount()
-	{
-		return tickCount;
-	}
-
-	int getNearbyNpcCount()
-	{
-		return nearbyNpcCount;
-	}
-
-	String getLastStatus()
-	{
-		return lastStatus;
-	}
-
-	String getLuaStatus()
-	{
-		GenericClientLuaHost scripts = luaHost;
-		return scripts == null ? "IDLE" : scripts.getStatus();
-	}
-
-	String getLuaScript()
-	{
-		GenericClientLuaHost scripts = luaHost;
-		return scripts == null ? "none" : scripts.getActiveScript();
-	}
-
-	String getBehaviorState()
-	{
-		GenericClientBehaviorController behaviors = behaviorController;
-		if (behaviors == null)
-		{
-			return "unavailable";
-		}
-		Object state = behaviors.status().get("state");
-		return state == null ? "unavailable" : String.valueOf(state);
 	}
 
 	@Provides

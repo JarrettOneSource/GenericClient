@@ -37,6 +37,7 @@ final class GenericClientBehaviorProfile
 	private final String title;
 	private final String summary;
 	private final double referenceDowntimePercent;
+	private final boolean customized;
 
 	private GenericClientBehaviorProfile(
 		String id,
@@ -51,7 +52,8 @@ final class GenericClientBehaviorProfile
 		double phaseLongBonusMaximum,
 		LongBreakMode favoredLongBreakMode,
 		double oppositeLongBreakProbability,
-		Edge idleEdge)
+		Edge idleEdge,
+		boolean customized)
 	{
 		this.id = id;
 		this.shortReleaseProbability = shortReleaseProbability;
@@ -66,6 +68,7 @@ final class GenericClientBehaviorProfile
 		this.favoredLongBreakMode = favoredLongBreakMode;
 		this.oppositeLongBreakProbability = oppositeLongBreakProbability;
 		this.idleEdge = idleEdge;
+		this.customized = customized;
 		this.referenceDowntimePercent = calculateReferenceDowntimePercent();
 		this.title = buildTitle();
 		this.summary = buildSummary();
@@ -105,7 +108,31 @@ final class GenericClientBehaviorProfile
 			1.5 * phaseQuantile,
 			favorite,
 			0.02 + 0.13 * oppositeUnit * oppositeUnit,
-			Edge.values()[(int) Math.floor(unit(accountHash, "idle.edge") * Edge.values().length)]);
+			Edge.values()[(int) Math.floor(unit(accountHash, "idle.edge") * Edge.values().length)],
+			false);
+	}
+
+	GenericClientBehaviorProfile withOverrides(GenericClientBehaviorOverrides overrides)
+	{
+		overrides.validate();
+		double cadence = overrides.getLongCadenceMinutes();
+		double refractory = clamp(0.30 * cadence, 10.0, 60.0);
+		double phase = overrides.getPhaseShortChances();
+		return new GenericClientBehaviorProfile(
+			id,
+			overrides.getShortReleaseProbability(),
+			overrides.getShortBodyMedianSeconds(),
+			overrides.getShortTailProbability(),
+			cadence,
+			refractory,
+			(cadence - refractory) / 0.886226925452758,
+			overrides.getLongMedianMinutes(),
+			phase,
+			(phase - 1.0) / 3.0 * 1.5,
+			overrides.getFavoredLongBreakMode(),
+			overrides.getOppositeLongBreakProbability(),
+			overrides.getIdleEdge(),
+			true);
 	}
 
 	String getId()
@@ -188,6 +215,11 @@ final class GenericClientBehaviorProfile
 		return referenceDowntimePercent;
 	}
 
+	boolean isCustomized()
+	{
+		return customized;
+	}
+
 	double cumulativeLongHazard(double activeMinutes)
 	{
 		double elapsed = Math.max(0.0, activeMinutes - longRefractoryMinutes);
@@ -202,6 +234,7 @@ final class GenericClientBehaviorProfile
 		value.put("id", id);
 		value.put("title", title);
 		value.put("summary", summary);
+		value.put("customized", customized);
 		value.put("short_release_probability", shortReleaseProbability);
 		value.put("short_body_median_seconds", shortBodyMedianSeconds);
 		value.put("short_tail_probability", shortTailProbability);

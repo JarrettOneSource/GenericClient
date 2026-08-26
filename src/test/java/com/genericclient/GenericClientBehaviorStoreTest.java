@@ -94,6 +94,31 @@ public class GenericClientBehaviorStoreTest
 		assertEquals(1.5, state.getLongHazardBudget(), 0.0);
 	}
 
+	@Test
+	public void persistsAndDeletesPerProfileOverrides() throws Exception
+	{
+		Path directory = temporaryFolder.newFolder("overrides").toPath();
+		GenericClientBehaviorStore store = new GenericClientBehaviorStore(directory);
+		GenericClientBehaviorProfile profile = GenericClientBehaviorProfile.fromAccountHash(77L);
+		GenericClientBehaviorOverrides overrides = new GenericClientBehaviorOverrides(
+			0.8,
+			8.0,
+			0.2,
+			180.0,
+			25.0,
+			3.0,
+			GenericClientBehaviorProfile.LongBreakMode.LOGOUT,
+			0.15,
+			GenericClientBehaviorProfile.Edge.LEFT);
+
+		store.saveOverrides(profile.getId(), overrides);
+		assertEquals(overrides.toMap(), store.loadOverrides(profile.getId()).toMap());
+		assertTrue(Files.isRegularFile(directory.resolve("overrides-" + profile.getId() + ".json")));
+
+		store.deleteOverrides(profile.getId());
+		assertNull(store.loadOverrides(profile.getId()));
+	}
+
 	private static void assertInvalid(GenericClientBehaviorStore store, String profileId) throws Exception
 	{
 		try

@@ -5,7 +5,7 @@ import * as z from "zod/v4";
 
 import { GenericClientBridge } from "./bridge.mjs";
 
-const VERSION = "0.5.1";
+const VERSION = "0.6.0";
 
 function result(value) {
   return {
@@ -196,7 +196,7 @@ export function createServer(bridge = new GenericClientBridge()) {
           .string()
           .regex(/^[a-z0-9][a-z0-9_-]*$/)
           .describe("Stable lowercase script id."),
-        name: z.string().min(1).describe("Human-readable name shown in the RuneLite sidebar."),
+        name: z.string().min(1).describe("Human-readable name shown in the RuneLite Scripts tab."),
         description: z.string().min(1).describe("One sentence explaining what the script does."),
         source: z.string().min(1).describe("Complete Lua file returning one root function."),
       }),
@@ -216,7 +216,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Run Lua script",
       description:
-        "Start a registered standalone script by manifest id. It becomes the active script shown in the GenericClient sidebar.",
+        "Start a registered standalone script by manifest id. It becomes the active script shown in the GenericClient dashboard.",
       inputSchema: z.object({
         id: z.string().min(1).describe("Manifest script id."),
       }),
@@ -251,7 +251,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Reload script manifest",
       description:
-        "Reload scripts/manifest.json after files were edited outside GenericClient. The sidebar and MCP list update immediately.",
+        "Reload scripts/manifest.json after files were edited outside GenericClient. The dashboard and MCP list update immediately.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: false,

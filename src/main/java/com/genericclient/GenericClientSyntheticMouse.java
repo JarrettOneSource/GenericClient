@@ -30,6 +30,7 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 	private final IntSupplier durationMillis;
 	private final Consumer<String> reporter;
 	private final Supplier<Random> randomSupplier;
+	private final GenericClientMouseEffectOverlay effects;
 	private final MouseAdapter realMouseListener = new MouseAdapter()
 	{
 		@Override
@@ -70,9 +71,10 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		Supplier<GenericClientMouseProfile> profileSupplier,
 		IntSupplier durationMillis,
 		Point initialPosition,
+		GenericClientMouseEffectOverlay effects,
 		Consumer<String> reporter)
 	{
-		this(canvas, executor, profileSupplier, durationMillis, initialPosition, reporter,
+		this(canvas, executor, profileSupplier, durationMillis, initialPosition, effects, reporter,
 			() -> ThreadLocalRandom.current());
 	}
 
@@ -82,6 +84,7 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		Supplier<GenericClientMouseProfile> profileSupplier,
 		IntSupplier durationMillis,
 		Point initialPosition,
+		GenericClientMouseEffectOverlay effects,
 		Consumer<String> reporter,
 		Supplier<Random> randomSupplier)
 	{
@@ -91,6 +94,7 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		this.durationMillis = durationMillis;
 		this.position = initialPosition == null ? new Point(0, 0) : new Point(initialPosition);
 		this.outside = !inside(this.position);
+		this.effects = effects;
 		this.reporter = reporter;
 		this.randomSupplier = randomSupplier;
 		canvas.addMouseMotionListener(realMouseListener);
@@ -135,6 +139,8 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		reporter.accept("SYNTHETIC_MOUSE_PATH_GENERATED profile=" + profileSupplier.get().getProfileId() +
 			" points=" + path.size() + " durationMs=" + duration + " destination=" +
 			destination.x + "," + destination.y);
+		effects.beginPath(path);
+		effects.recordPoint(getPosition());
 		boolean entering = isOutside() && inside(destination);
 		if (entering)
 		{
@@ -143,9 +149,10 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		}
 		for (int index = 1; index < path.size(); index++)
 		{
+			int pathIndex = index;
 			GenericClientMouseMatcher.PathPoint point = path.get(index);
 			Point next = new Point((int) Math.round(point.x), (int) Math.round(point.y));
-			schedule(() -> dispatchMove(next), Math.round(point.timeMillis));
+			schedule(() -> dispatchMove(next, pathIndex), Math.round(point.timeMillis));
 		}
 		schedule(() -> finishMove(destination, completion), duration + 1L);
 		return completion;
@@ -242,13 +249,15 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		return moving;
 	}
 
-	private void dispatchMove(Point point)
+	private void dispatchMove(Point point, int pathIndex)
 	{
 		dispatchMouse(MouseEvent.MOUSE_MOVED, point, 0, MouseEvent.NOBUTTON, false);
 		synchronized (this)
 		{
 			position = new Point(point);
 		}
+		effects.recordPoint(point);
+		effects.advancePath(pathIndex);
 	}
 
 	private synchronized void captureRealPosition(MouseEvent event, boolean exited)
@@ -259,6 +268,7 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		}
 		position = event.getPoint();
 		outside = exited || !inside(position);
+		effects.recordPoint(position);
 	}
 
 	private void finishMove(Point destination, CompletableFuture<String> completion)
@@ -269,6 +279,8 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 			dispatchMouse(MouseEvent.MOUSE_EXITED, destination, 0, MouseEvent.NOBUTTON, false);
 			dispatchFocus(FocusEvent.FOCUS_LOST);
 		}
+		effects.recordPoint(destination);
+		effects.endPath();
 		synchronized (this)
 		{
 			if (activeMove != completion)
@@ -400,6 +412,7 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 			future.cancel(false);
 		}
 		pending.clear();
+		effects.endPath();
 		canvas.removeMouseMotionListener(realMouseListener);
 		canvas.removeMouseListener(realMouseListener);
 		if (activeMove != null)

@@ -26,6 +26,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 	private final Consumer<String> reporter;
 
 	private GenericClientBehaviorProfile profile;
+	private GenericClientBehaviorProfile generatedProfile;
 	private GenericClientBehaviorState state;
 	private CompletableFuture<Map<String, Object>> activeBreak;
 	private Cancellable breakTimer;
@@ -112,7 +113,9 @@ final class GenericClientBehaviorController implements AutoCloseable
 			saveStateQuietly();
 		}
 		cancelCurrentBreak("account_changed");
-		profile = nextProfile;
+		generatedProfile = nextProfile;
+		GenericClientBehaviorOverrides overrides = store.loadOverrides(nextProfile.getId());
+		profile = overrides == null ? nextProfile : nextProfile.withOverrides(overrides);
 		state = store.load(profile.getId());
 		if (state == null)
 		{
@@ -124,6 +127,25 @@ final class GenericClientBehaviorController implements AutoCloseable
 		reporter.accept("BEHAVIOR_PROFILE_ACTIVATED id=" + profile.getId() +
 			" title=" + profile.getTitle() + " edge=" + profile.getIdleEdge());
 		restorePersistedBreak();
+	}
+
+	synchronized Map<String, Object> saveOverrides(GenericClientBehaviorOverrides overrides) throws IOException
+	{
+		ensureProfile();
+		overrides.validate();
+		store.saveOverrides(generatedProfile.getId(), overrides);
+		profile = generatedProfile.withOverrides(overrides);
+		reporter.accept("BEHAVIOR_OVERRIDES_SAVED title=" + profile.getTitle());
+		return status();
+	}
+
+	synchronized Map<String, Object> resetOverrides() throws IOException
+	{
+		ensureProfile();
+		store.deleteOverrides(generatedProfile.getId());
+		profile = generatedProfile;
+		reporter.accept("BEHAVIOR_OVERRIDES_RESET title=" + profile.getTitle());
+		return status();
 	}
 
 	synchronized void setLoggedIn(boolean loggedIn)
@@ -280,6 +302,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 			return value;
 		}
 		value.put("profile", profile.toMap());
+		value.put("generated_profile", generatedProfile.toMap());
 		value.put("state", state.getBreakType().equals("none") ? "ready" : state.getBreakType() + "_break");
 		value.put("long_break_mode", state.getLongBreakMode());
 		value.put("break_remaining_millis", Math.max(0L, state.getBreakEndEpochMillis() - clock.epochMillis()));
@@ -536,6 +559,15 @@ final class GenericClientBehaviorController implements AutoCloseable
 		if (closed)
 		{
 			throw new IllegalStateException("Behavior controller is closed");
+		}
+	}
+
+	private void ensureProfile()
+	{
+		ensureOpen();
+		if (profile == null || generatedProfile == null || state == null)
+		{
+			throw new IllegalStateException("Behavior profile is unavailable until account login");
 		}
 	}
 

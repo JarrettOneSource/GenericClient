@@ -36,18 +36,30 @@ On first startup, GenericClient installs the bundled profile at:
 ~/.runelite/genericclient/mouse-profiles/default.json
 ```
 
-The RuneLite setting **Mouse profile file** selects one filename from that
-directory. Copy another profile into the directory, change the setting, and
-press **Reload profile** in the GenericClient sidebar. A failed load leaves the
+The Settings tab selects one filename from that directory. Copy another profile
+into the directory, select it, and press **Reload**. A failed load leaves the
 currently active profile unchanged and writes the parse error to `client.log`.
 
 **Mouse move duration** controls the playback duration supplied to the matcher.
 The default is 432 milliseconds, matching GenericClient's previous mouse move
 duration.
 
+## Cursor effects
+
+Settings offers three client-only effects:
+
+- **Off** draws nothing.
+- **Trail** draws PMouse's green 1.8-second fading cursor trail.
+- **Path** draws the current generated route in cyan and completed progress in
+  green.
+
+The port keeps the original PMouse colors, line weights, point limits, and
+cosine fade. It draws in a RuneLite overlay and does not move the operating
+system cursor.
+
 ## Recording a profile
 
-The sidebar provides **Record new profile** and **Stop and use recording**.
+The Settings tab provides **Record** and **Stop**.
 While recording, manually move and click inside the RuneLite canvas. Generated
 GenericClient movement is excluded. The recorder:
 

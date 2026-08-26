@@ -34,7 +34,7 @@ The current checkout implements:
   and the same-plane `walk.to` ground-route action;
 - per-action `breaks=false`, phase transitions, and a seeded account behavior
   controller that pauses coroutine action progression without blocking control;
-- `gc.log` to `client.log` and the GenericClient sidebar;
+- `gc.log` to `client.log` and the GenericClient dashboard;
 - manifest-registered one-file scripts with start/reload/stop controls and automatic NPC diagnostics;
 - a loopback control bridge and stdio MCP server for live status, REPL evaluation,
   script registration, and on-demand execution;
@@ -58,6 +58,14 @@ normalized dialog, target references, and additional semantic actions remain
 intentionally absent until a concrete automation requires each one.
 
 ### Live verification receipt
+
+GenericClient 0.6.0 had SHA-256
+`4e98bb8cc3c29f5aaede1dfcfda0d48b6d123541f96e1574567de20f43f3ceb7`.
+The exact self-contained artifact loaded through the Jagex Launcher into stock
+RuneLite 1.12.37/game revision 240. The three-tab dashboard fit RuneLite's
+sidebar, Trail and Path rendered over real synthetic ground clicks, and the
+Settings buttons saved then removed an account-specific behavior override.
+It passed 53 Java tests plus three Node MCP tests.
 
 GenericClient 0.5.1 had SHA-256
 `9a7a0d0906caa6b7351cb0e14238e832d3328397b61c17b334998f6d0176f177`.
@@ -94,7 +102,7 @@ On RuneLite 1.12.36/game revision 240 it:
 - preserved a REPL global across separate calls with results `1` and `2`;
 - dispatched a generated-mouse `Walk here` click from Lua and moved the player;
 - saved, registered, displayed, and completed `mcp-location-check.lua` on demand;
-- ran `return gc.read("player")` from the RuneLite sidebar REPL and displayed the result;
+- ran `return gc.read("player")` from the RuneLite Console tab and displayed the result;
 - passed 12 Java tests and three Node MCP tests.
 
 This is a refinement of the initial LuaJ-first idea. The decisive reasons are:
