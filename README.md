@@ -39,8 +39,9 @@ After logging in, open the GenericClient sidebar:
 - **Log nearby NPCs** logs each nearby NPC's name, ID, index, location,
   distance, combat level, animation, interaction target, and actions.
 - **Walk to random tile** moves the native cursor to a nearby ground tile,
-  executes a left click when the selected action is `Walk here`, records the
-  resulting `MenuOptionClicked`, and logs a fresh NPC snapshot.
+  follows the active recorded mouse profile to it, executes a left click when
+  the selected action is `Walk here`, records the resulting
+  `MenuOptionClicked`, and logs a fresh NPC snapshot.
 - **Lua scripts** can be scanned, started, reloaded, and stopped from the
   sidebar. Script output appears in the Lua log pane and `client.log`.
 
@@ -106,6 +107,21 @@ The active design is documented in
 [`docs/lua-scripting-design.md`](docs/lua-scripting-design.md). The packet-driven
 headless design is saved separately and remains deferred.
 
+## Mouse profiles
+
+Mouse movement uses a local Template Match implementation with the bundled
+6,069-trajectory recorded profile. Profiles live in:
+
+```text
+~/.runelite/genericclient/mouse-profiles/
+```
+
+Select a filename in RuneLite's GenericClient settings and reload it from the
+sidebar. The sidebar can also record manual RuneLite-canvas movement into a new
+profile and activate it. The matcher, profile schema, recording flow, and source
+data hashes are documented in
+[`docs/mouse-profiles.md`](docs/mouse-profiles.md).
+
 Diagnostics are written to:
 
 - the terminal running RuneLite;
@@ -122,11 +138,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.2.0.jar`
-- `build/libs/GenericClient-0.2.0-all.jar`
+- `build/libs/generic-client-0.3.0.jar`
+- `build/libs/GenericClient-0.3.0-all.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.2.0-all.jar
+java -ea -jar build/libs/GenericClient-0.3.0-all.jar
 ```

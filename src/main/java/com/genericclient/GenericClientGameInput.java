@@ -19,6 +19,8 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.IntSupplier;
+import java.util.function.Supplier;
 import javax.swing.SwingUtilities;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
@@ -34,8 +36,6 @@ import net.runelite.client.callback.ClientThread;
 final class GenericClientGameInput implements AutoCloseable
 {
 	private static final int LOCAL_TILE_SIZE = Perspective.LOCAL_TILE_SIZE;
-	private static final int MOVE_STEPS = 24;
-	private static final long MOVE_STEP_MILLIS = 18L;
 	private static final long HOVER_SETTLE_MILLIS = 250L;
 	private static final long CLICK_RESULT_TIMEOUT_MILLIS = 2500L;
 	private static final int MAX_TARGET_ATTEMPTS = 20;
@@ -44,6 +44,8 @@ final class GenericClientGameInput implements AutoCloseable
 	private final ClientThread clientThread;
 	private final ScheduledExecutorService executor;
 	private final Consumer<String> reporter;
+	private final Supplier<GenericClientMouseProfile> mouseProfile;
+	private final IntSupplier mouseDurationMillis;
 	private final AtomicBoolean running = new AtomicBoolean();
 	private final List<ScheduledFuture<?>> pending = new CopyOnWriteArrayList<>();
 
@@ -62,11 +64,15 @@ final class GenericClientGameInput implements AutoCloseable
 		Client client,
 		ClientThread clientThread,
 		ScheduledExecutorService executor,
+		Supplier<GenericClientMouseProfile> mouseProfile,
+		IntSupplier mouseDurationMillis,
 		Consumer<String> reporter)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
 		this.executor = executor;
+		this.mouseProfile = mouseProfile;
+		this.mouseDurationMillis = mouseDurationMillis;
 		this.reporter = reporter;
 	}
 
@@ -309,7 +315,12 @@ final class GenericClientGameInput implements AutoCloseable
 				finish("WALK_CLICK_FAILED reason=mouse_pointer_unavailable");
 				return;
 			}
-			animateMouse(pointerInfo.getLocation(), destination, target);
+			Rectangle viewport = new Rectangle(
+				canvasOrigin.x,
+				canvasOrigin.y,
+				canvas.getWidth(),
+				canvas.getHeight());
+			animateMouse(pointerInfo.getLocation(), destination, viewport, target);
 		}
 		catch (RuntimeException exception)
 		{
@@ -317,7 +328,11 @@ final class GenericClientGameInput implements AutoCloseable
 		}
 	}
 
-	private void animateMouse(java.awt.Point start, java.awt.Point destination, Target target)
+	private void animateMouse(
+		java.awt.Point start,
+		java.awt.Point destination,
+		Rectangle viewport,
+		Target target)
 	{
 		final Robot nativeRobot;
 		try
@@ -330,21 +345,49 @@ final class GenericClientGameInput implements AutoCloseable
 			return;
 		}
 
-		for (int step = 1; step <= MOVE_STEPS; step++)
+		GenericClientMouseProfile profile = mouseProfile.get();
+		if (profile == null)
 		{
-			final int currentStep = step;
-			schedule(() ->
-			{
-				double progress = currentStep / (double) MOVE_STEPS;
-				double eased = progress * progress * (3.0 - 2.0 * progress);
-				int x = start.x + (int) Math.round((destination.x - start.x) * eased);
-				int y = start.y + (int) Math.round((destination.y - start.y) * eased);
-				nativeRobot.mouseMove(x, y);
-			}, step * MOVE_STEP_MILLIS);
+			finish("WALK_CLICK_FAILED reason=mouse_profile_unavailable");
+			return;
+		}
+		int durationMillis = Math.max(25, mouseDurationMillis.getAsInt());
+		List<GenericClientMouseMatcher.PathPoint> path;
+		try
+		{
+			path = GenericClientMouseMatcher.generate(
+				profile,
+				start,
+				destination,
+				viewport,
+				durationMillis,
+				ThreadLocalRandom.current());
+		}
+		catch (RuntimeException exception)
+		{
+			finish("WALK_CLICK_FAILED reason=mouse_profile_generation message=" + exception.getMessage());
+			return;
 		}
 
-		long verificationDelay = MOVE_STEPS * MOVE_STEP_MILLIS + HOVER_SETTLE_MILLIS;
+		reporter.accept("MOUSE_PATH_GENERATED profile=" + profile.getProfileId() +
+			" templates=" + profile.getTemplateCount() + " points=" + path.size() +
+			" durationMs=" + durationMillis);
+		for (int index = 1; index < path.size(); index++)
+		{
+			GenericClientMouseMatcher.PathPoint point = path.get(index);
+			schedule(() ->
+			{
+				nativeRobot.mouseMove((int) Math.round(point.x), (int) Math.round(point.y));
+			}, Math.round(point.timeMillis));
+		}
+
+		long verificationDelay = durationMillis + HOVER_SETTLE_MILLIS;
 		schedule(() -> clientThread.invoke(() -> verifyHoverAndClick(target)), verificationDelay);
+	}
+
+	boolean isRunning()
+	{
+		return running.get();
 	}
 
 	private void verifyHoverAndClick(Target target)

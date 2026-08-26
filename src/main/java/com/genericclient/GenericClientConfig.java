@@ -40,4 +40,25 @@ public interface GenericClientConfig extends Config
 	{
 		return 15;
 	}
+
+	@ConfigItem(
+		keyName = "mouseProfileFile",
+		name = "Mouse profile file",
+		description = "Profile filename inside ~/.runelite/genericclient/mouse-profiles"
+	)
+	default String mouseProfileFile()
+	{
+		return GenericClientMouseProfile.DEFAULT_FILE_NAME;
+	}
+
+	@Range(min = 25, max = 5000)
+	@ConfigItem(
+		keyName = "mouseDurationMillis",
+		name = "Mouse move duration",
+		description = "Milliseconds used to play each matched mouse trajectory"
+	)
+	default int mouseDurationMillis()
+	{
+		return 432;
+	}
 }

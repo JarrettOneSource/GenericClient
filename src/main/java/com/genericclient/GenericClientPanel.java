@@ -23,6 +23,11 @@ final class GenericClientPanel extends PluginPanel
 	private final JLabel npcValue = valueLabel("0");
 	private final JLabel statusValue = valueLabel("Waiting for plugin startup");
 	private final JTextArea npcDiagnostics = new JTextArea("No NPC snapshot captured yet.");
+	private final JLabel mouseProfileValue = valueLabel("loading");
+	private final JLabel mouseTemplateValue = valueLabel("0");
+	private final JLabel mouseRecordingValue = valueLabel("stopped");
+	private final JButton mouseRecordButton = new JButton("Record new profile");
+	private final JButton mouseStopButton = new JButton("Stop and use recording");
 	private final JLabel luaScriptValue = valueLabel("none");
 	private final JLabel luaStatusValue = valueLabel("IDLE");
 	private final JComboBox<String> luaScripts = new JComboBox<>();
@@ -33,6 +38,9 @@ final class GenericClientPanel extends PluginPanel
 		Runnable printDiagnostics,
 		Runnable logNearbyNpcs,
 		Runnable walkToRandomTile,
+		Runnable reloadMouseProfile,
+		Runnable startMouseRecording,
+		Runnable stopMouseRecording,
 		GenericClientLuaHost luaHost)
 	{
 		this.luaHost = luaHost;
@@ -63,6 +71,20 @@ final class GenericClientPanel extends PluginPanel
 		JButton clickButton = new JButton("Walk to random tile");
 		clickButton.addActionListener(event -> walkToRandomTile.run());
 		add(clickButton);
+
+		JPanel mouseSection = section("Mouse profile");
+		mouseSection.add(row("File", mouseProfileValue));
+		mouseSection.add(row("Templates", mouseTemplateValue));
+		mouseSection.add(row("Recording", mouseRecordingValue));
+		JButton mouseReloadButton = new JButton("Reload profile");
+		mouseReloadButton.addActionListener(event -> reloadMouseProfile.run());
+		mouseSection.add(mouseReloadButton);
+		mouseRecordButton.addActionListener(event -> startMouseRecording.run());
+		mouseSection.add(mouseRecordButton);
+		mouseStopButton.setEnabled(false);
+		mouseStopButton.addActionListener(event -> stopMouseRecording.run());
+		mouseSection.add(mouseStopButton);
+		add(mouseSection);
 
 		JPanel luaSection = section("Lua scripts");
 		luaSection.add(row("Active", luaScriptValue));
@@ -135,6 +157,20 @@ final class GenericClientPanel extends PluginPanel
 		{
 			npcDiagnostics.setText(diagnostics);
 			npcDiagnostics.setCaretPosition(0);
+		});
+	}
+
+	void updateMouseState(String file, int templates, boolean recording, int recordedTemplates)
+	{
+		runOnEdt(() ->
+		{
+			mouseProfileValue.setText(file);
+			mouseTemplateValue.setText(Integer.toString(templates));
+			mouseRecordingValue.setText(recording
+				? "running (" + recordedTemplates + ")"
+				: "stopped");
+			mouseRecordButton.setEnabled(!recording);
+			mouseStopButton.setEnabled(recording);
 		});
 	}
 

@@ -5,6 +5,8 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.ScheduledExecutorService;
@@ -21,6 +23,7 @@ import net.runelite.client.RuneLiteProperties;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
@@ -30,8 +33,8 @@ import net.runelite.client.ui.overlay.OverlayManager;
 @Slf4j
 @PluginDescriptor(
 	name = "GenericClient",
-	description = "Runs Lua scripts over client snapshots and native game actions",
-	tags = {"genericclient", "diagnostics", "lua", "scripting"},
+	description = "Runs Lua scripts over client snapshots, recorded mouse profiles, and native game actions",
+	tags = {"genericclient", "diagnostics", "lua", "scripting", "mouse"},
 	loadInSafeMode = false
 )
 public final class GenericClientPlugin extends Plugin
@@ -60,6 +63,9 @@ public final class GenericClientPlugin extends Plugin
 	@Inject
 	private ScheduledExecutorService executor;
 
+	@Inject
+	private ConfigManager configManager;
+
 	private volatile String lifecycle = "CREATED";
 	private volatile String gameStateName = "UNKNOWN";
 	private volatile String lastStatus = "Plugin instance created";
@@ -70,9 +76,12 @@ public final class GenericClientPlugin extends Plugin
 
 	private GenericClientPanel panel;
 	private GenericClientGameInput gameInput;
+	private GenericClientMouseRecorder mouseRecorder;
 	private GenericClientWalker walker;
 	private GenericClientLuaHost luaHost;
 	private NavigationButton navigationButton;
+	private Path mouseProfilesDirectory;
+	private volatile GenericClientMouseProfile mouseProfile;
 
 	@Override
 	protected void startUp() throws Exception
@@ -82,8 +91,20 @@ public final class GenericClientPlugin extends Plugin
 		gameStateName = client.getGameState().name();
 		lastStatus = "PLUGIN_STARTED stock RuneLite loaded GenericClient";
 		initialNpcSnapshotLogged = false;
+		mouseProfilesDirectory = net.runelite.client.RuneLite.RUNELITE_DIR.toPath()
+			.resolve("genericclient")
+			.resolve("mouse-profiles");
+		GenericClientMouseProfile.installDefault(mouseProfilesDirectory);
+		loadConfiguredMouseProfile();
 		GenericClientCollisionMap collisionMap = GenericClientCollisionMap.loadBundled();
-		gameInput = new GenericClientGameInput(client, clientThread, executor, this::publishResult);
+		gameInput = new GenericClientGameInput(
+			client,
+			clientThread,
+			executor,
+			() -> mouseProfile,
+			config::mouseDurationMillis,
+			this::publishResult);
+		mouseRecorder = new GenericClientMouseRecorder(client.getCanvas(), gameInput::isRunning);
 		walker = new GenericClientWalker(gameInput, collisionMap, this::publishResult);
 		luaHost = new GenericClientLuaHost(
 			net.runelite.client.RuneLite.RUNELITE_DIR.toPath().resolve("genericclient").resolve("scripts"),
@@ -95,6 +116,9 @@ public final class GenericClientPlugin extends Plugin
 			this::printDiagnostics,
 			this::logNearbyNpcs,
 			() -> gameInput.walkToRandomTile(),
+			this::reloadMouseProfile,
+			this::startMouseRecording,
+			this::stopMouseRecording,
 			luaHost);
 		navigationButton = NavigationButton.builder()
 			.tooltip("GenericClient")
@@ -117,6 +141,11 @@ public final class GenericClientPlugin extends Plugin
 			collisionMap.getRegionCount(),
 			GenericClientCollisionMap.SOURCE_REVISION,
 			GenericClientCollisionMap.SOURCE_SHA256);
+		log.info("{} MOUSE_PROFILE_LOADED file={} profile={} templates={}",
+			LOG_PREFIX,
+			config.mouseProfileFile(),
+			mouseProfile.getProfileId(),
+			mouseProfile.getTemplateCount());
 		printDiagnostics();
 		luaHost.start(GenericClientLuaHost.DIAGNOSTIC_SCRIPT);
 	}
@@ -134,6 +163,11 @@ public final class GenericClientPlugin extends Plugin
 		{
 			walker.close();
 			walker = null;
+		}
+		if (mouseRecorder != null)
+		{
+			mouseRecorder.close();
+			mouseRecorder = null;
 		}
 		if (gameInput != null)
 		{
@@ -203,18 +237,30 @@ public final class GenericClientPlugin extends Plugin
 		}
 	}
 
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (GenericClientConfig.GROUP.equals(event.getGroup()) &&
+			"mouseProfileFile".equals(event.getKey()))
+		{
+			reloadMouseProfile();
+		}
+	}
+
 	void printDiagnostics()
 	{
 		clientThread.invoke(() ->
 		{
 			Player player = client.getLocalPlayer();
+			GenericClientMouseProfile profile = mouseProfile;
 			String playerLocation = player == null ? "unavailable" : String.valueOf(player.getWorldLocation());
 			String codeSource = getClass().getProtectionDomain().getCodeSource() == null
 				? "unknown"
 				: String.valueOf(getClass().getProtectionDomain().getCodeSource().getLocation());
 			log.info(
 				"{} DIAGNOSTICS lifecycle={} gameState={} ticks={} nearbyNpcs={} playerLocation={} " +
-					"runeliteVersion={} gameRevision={} classLoader={} codeSource={} clientThread={} uptime={}",
+					"runeliteVersion={} gameRevision={} mouseProfile={} mouseTemplates={} mouseDurationMs={} " +
+					"classLoader={} codeSource={} clientThread={} uptime={}",
 				LOG_PREFIX,
 				lifecycle,
 				client.getGameState(),
@@ -223,6 +269,9 @@ public final class GenericClientPlugin extends Plugin
 				playerLocation,
 				RuneLiteProperties.getVersion(),
 				client.getRevision(),
+				profile == null ? "unavailable" : profile.getProfileId(),
+				profile == null ? 0 : profile.getTemplateCount(),
+				config.mouseDurationMillis(),
 				getClass().getClassLoader().getClass().getName(),
 				codeSource,
 				Thread.currentThread().getName(),
@@ -272,6 +321,82 @@ public final class GenericClientPlugin extends Plugin
 		}
 	}
 
+	private void reloadMouseProfile()
+	{
+		executor.execute(() ->
+		{
+			try
+			{
+				loadConfiguredMouseProfile();
+				publishResult("MOUSE_PROFILE_LOADED file=" + config.mouseProfileFile() +
+					" profile=" + mouseProfile.getProfileId() +
+					" templates=" + mouseProfile.getTemplateCount());
+			}
+			catch (IOException | RuntimeException exception)
+			{
+				publishResult("MOUSE_PROFILE_LOAD_FAILED file=" + config.mouseProfileFile() +
+					" message=" + exception.getMessage());
+			}
+		});
+	}
+
+	private void loadConfiguredMouseProfile() throws IOException
+	{
+		String configured = config.mouseProfileFile().trim();
+		Path name = Path.of(configured).getFileName();
+		if (configured.isEmpty() || !name.toString().equals(configured))
+		{
+			throw new IOException("Mouse profile must be a filename inside " + mouseProfilesDirectory);
+		}
+		mouseProfile = GenericClientMouseProfile.load(mouseProfilesDirectory.resolve(name));
+	}
+
+	private void startMouseRecording()
+	{
+		try
+		{
+			mouseRecorder.start();
+			publishResult("MOUSE_RECORDING_STARTED");
+		}
+		catch (RuntimeException exception)
+		{
+			publishResult("MOUSE_RECORDING_FAILED message=" + exception.getMessage());
+		}
+	}
+
+	private void stopMouseRecording()
+	{
+		final GenericClientMouseProfile recorded;
+		final String profileId = "recorded-" + Instant.now().toEpochMilli();
+		try
+		{
+			recorded = mouseRecorder.stop(profileId);
+			publishResult("MOUSE_RECORDING_STOPPED templates=" + recorded.getTemplateCount());
+		}
+		catch (RuntimeException exception)
+		{
+			publishResult("MOUSE_RECORDING_FAILED message=" + exception.getMessage());
+			return;
+		}
+
+		executor.execute(() ->
+		{
+			String fileName = profileId + ".json";
+			try
+			{
+				recorded.save(mouseProfilesDirectory.resolve(fileName));
+				mouseProfile = recorded;
+				configManager.setConfiguration(GenericClientConfig.GROUP, "mouseProfileFile", fileName);
+				publishResult("MOUSE_PROFILE_RECORDED file=" + fileName +
+					" templates=" + recorded.getTemplateCount());
+			}
+			catch (IOException exception)
+			{
+				publishResult("MOUSE_RECORDING_SAVE_FAILED message=" + exception.getMessage());
+			}
+		});
+	}
+
 	private void postChat(String message)
 	{
 		if (config.chatNotifications() &&
@@ -295,6 +420,13 @@ public final class GenericClientPlugin extends Plugin
 		{
 			currentPanel.updateLuaState(scripts.getActiveScript(), scripts.getStatus(), scripts.getRecentLogs());
 		}
+		GenericClientMouseProfile profile = mouseProfile;
+		GenericClientMouseRecorder recorder = mouseRecorder;
+		currentPanel.updateMouseState(
+			config.mouseProfileFile(),
+			profile == null ? 0 : profile.getTemplateCount(),
+			recorder != null && recorder.isRecording(),
+			recorder == null ? 0 : recorder.getTemplateCount());
 	}
 
 	private static BufferedImage createIcon()
