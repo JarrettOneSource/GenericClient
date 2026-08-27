@@ -2,19 +2,17 @@ package com.genericclient;
 
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
-import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
-import java.awt.RenderingHints;
 import java.awt.Window;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import javax.swing.BorderFactory;
-import javax.swing.Box;
-import javax.swing.BoxLayout;
+import javax.swing.Icon;
 import javax.swing.JButton;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
@@ -27,11 +25,16 @@ final class GenericClientDashboard implements AutoCloseable
 	private static final String AUTOMATIONS = "Automations";
 	private static final String CONSOLE = "Console";
 	private static final String SETTINGS = "Settings";
+	private static final int SIDEBAR_WIDTH = 204;
+	private static final Icon ONLINE = GenericClientDashboardStyle.dot(GenericClientDashboardStyle.ACCENT);
+	private static final Icon OFFLINE = GenericClientDashboardStyle.dot(GenericClientDashboardStyle.MUTED);
 
 	private final Window owner;
 	private final JPanel content = new JPanel(new BorderLayout());
-	private final JLabel status = GenericClientDashboardStyle.muted("Starting");
 	private final JPanel cards = new JPanel(new CardLayout());
+	private final JLabel connection = GenericClientDashboardStyle.strong("Starting");
+	private final JLabel activity = GenericClientDashboardStyle.small(" ");
+	private final LongBreakBanner longBreak;
 	private final GenericClientScriptsPanel scripts;
 	private final GenericClientConsolePanel console;
 	private final GenericClientSettingsPanel settings;
@@ -41,9 +44,7 @@ final class GenericClientDashboard implements AutoCloseable
 	GenericClientDashboard(Window owner, GenericClientDashboardActions actions, GenericClientLuaHost host)
 	{
 		this.owner = owner;
-		content.setBackground(GenericClientDashboardStyle.BACKGROUND);
-		content.add(createHeader(), BorderLayout.NORTH);
-
+		longBreak = new LongBreakBanner(actions);
 		scripts = new GenericClientScriptsPanel(host);
 		console = new GenericClientConsolePanel(actions, host);
 		settings = new GenericClientSettingsPanel(actions);
@@ -52,15 +53,13 @@ final class GenericClientDashboard implements AutoCloseable
 		cards.add(console, CONSOLE);
 		cards.add(settings, SETTINGS);
 
-		JButton automations = nav(AUTOMATIONS);
-		JButton consoleButton = nav(CONSOLE);
-		JButton settingsButton = nav(SETTINGS);
-		navigation = Arrays.asList(automations, consoleButton, settingsButton);
-		JPanel body = new JPanel(new BorderLayout());
-		body.setBackground(GenericClientDashboardStyle.BACKGROUND);
-		body.add(createNavigation(), BorderLayout.WEST);
-		body.add(cards, BorderLayout.CENTER);
-		content.add(body, BorderLayout.CENTER);
+		navigation = Arrays.asList(
+			nav(AUTOMATIONS, GenericClientDashboardStyle.NavGlyph.PLAY),
+			nav(CONSOLE, GenericClientDashboardStyle.NavGlyph.CONSOLE),
+			nav(SETTINGS, GenericClientDashboardStyle.NavGlyph.SLIDERS));
+		content.setBackground(GenericClientDashboardStyle.BACKGROUND);
+		content.add(createSidebar(), BorderLayout.WEST);
+		content.add(cards, BorderLayout.CENTER);
 		show(AUTOMATIONS);
 	}
 
@@ -73,8 +72,8 @@ final class GenericClientDashboard implements AutoCloseable
 				window = new JDialog(owner, "GenericClient", JDialog.ModalityType.MODELESS);
 				window.setDefaultCloseOperation(WindowConstants.HIDE_ON_CLOSE);
 				window.setContentPane(content);
-				window.setMinimumSize(new Dimension(820, 580));
-				window.setSize(980, 720);
+				window.setMinimumSize(new Dimension(880, 620));
+				window.setSize(1040, 760);
 				window.setLocationRelativeTo(owner);
 			}
 			window.setVisible(true);
@@ -93,15 +92,12 @@ final class GenericClientDashboard implements AutoCloseable
 		runOnEdt(() ->
 		{
 			boolean connected = "LOGGED_IN".equals(gameState);
-			String label = connected ? "Connected" : readable(gameState);
-			if (activeScript != null && !"none".equals(activeScript))
-			{
-				label += "  ·  " + activeScript;
-			}
-			status.setText(label);
-			status.setForeground(connected
-				? GenericClientDashboardStyle.ACCENT
-				: GenericClientDashboardStyle.MUTED);
+			connection.setText(connected ? "Connected" : readable(gameState));
+			connection.setIcon(connected ? ONLINE : OFFLINE);
+			boolean running = activeScript != null && !activeScript.isEmpty() && !"none".equals(activeScript);
+			activity.setText(running
+				? scripts.displayName(activeScript) + "  ·  " + GenericClientScriptsPanel.describe(scriptStatus)
+				: " ");
 			console.updateLastResult(lastResult);
 		});
 	}
@@ -133,61 +129,59 @@ final class GenericClientDashboard implements AutoCloseable
 
 	void updateBehaviorState(Map<String, Object> behavior)
 	{
-		runOnEdt(() -> settings.updateBehavior(behavior));
-	}
-
-	private JPanel createHeader()
-	{
-		JPanel header = new JPanel(new BorderLayout(16, 0));
-		header.setBackground(GenericClientDashboardStyle.SURFACE);
-		header.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createMatteBorder(0, 0, 1, 0, GenericClientDashboardStyle.BORDER),
-			BorderFactory.createEmptyBorder(14, 20, 14, 22)));
-		header.add(new BrandMark(), BorderLayout.WEST);
-
-		JPanel titles = new JPanel();
-		titles.setOpaque(false);
-		titles.setLayout(new BoxLayout(titles, BoxLayout.Y_AXIS));
-		JLabel title = new JLabel("GenericClient");
-		title.setFont(GenericClientDashboardStyle.TITLE_FONT);
-		title.setForeground(GenericClientDashboardStyle.TEXT);
-		JLabel subtitle = new JLabel("Automation workspace");
-		subtitle.setFont(GenericClientDashboardStyle.BODY_FONT);
-		subtitle.setForeground(GenericClientDashboardStyle.MUTED);
-		titles.add(title);
-		titles.add(subtitle);
-		header.add(titles, BorderLayout.CENTER);
-
-		status.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createLineBorder(GenericClientDashboardStyle.BORDER),
-			BorderFactory.createEmptyBorder(7, 12, 7, 12)));
-		header.add(status, BorderLayout.EAST);
-		return header;
-	}
-
-	private JPanel createNavigation()
-	{
-		JPanel rail = new JPanel();
-		rail.setLayout(new BoxLayout(rail, BoxLayout.Y_AXIS));
-		rail.setBackground(GenericClientDashboardStyle.BACKGROUND);
-		rail.setBorder(BorderFactory.createCompoundBorder(
-			BorderFactory.createMatteBorder(0, 0, 0, 1, GenericClientDashboardStyle.BORDER),
-			BorderFactory.createEmptyBorder(20, 14, 20, 14)));
-		rail.setPreferredSize(new Dimension(184, 0));
-		for (JButton button : navigation)
+		runOnEdt(() ->
 		{
-			button.setAlignmentX(JButton.LEFT_ALIGNMENT);
-			button.setMaximumSize(new Dimension(Integer.MAX_VALUE, 42));
-			rail.add(button);
-			rail.add(Box.createVerticalStrut(6));
-		}
-		rail.add(Box.createVerticalGlue());
-		return rail;
+			settings.updateBehavior(behavior);
+			if (behavior != null && "long_break".equals(behavior.get("state")))
+			{
+				Object remaining = behavior.get("break_remaining_millis");
+				longBreak.update(remaining instanceof Number ? ((Number) remaining).longValue() : 0L);
+			}
+			else
+			{
+				longBreak.hideBanner();
+			}
+		});
 	}
 
-	private JButton nav(String name)
+	private JPanel createSidebar()
 	{
-		JButton button = GenericClientDashboardStyle.navButton(name);
+		JPanel sidebar = new JPanel(new BorderLayout());
+		sidebar.setBackground(GenericClientDashboardStyle.SURFACE);
+		sidebar.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(0, 0, 0, 1, GenericClientDashboardStyle.BORDER),
+			BorderFactory.createEmptyBorder(18, 12, 18, 12)));
+		sidebar.setPreferredSize(new Dimension(SIDEBAR_WIDTH, 0));
+
+		JPanel brand = GenericClientDashboardStyle.panel(new BorderLayout(10, 0));
+		brand.setBorder(BorderFactory.createEmptyBorder(2, 6, 22, 6));
+		brand.add(new BrandMark(), BorderLayout.WEST);
+		brand.add(GenericClientDashboardStyle.heading("GenericClient"), BorderLayout.CENTER);
+
+		JPanel links = GenericClientDashboardStyle.stack(2, navigation.toArray(new JButton[0]));
+		sidebar.add(GenericClientDashboardStyle.stack(0, brand, links), BorderLayout.NORTH);
+		sidebar.add(createStatus(), BorderLayout.SOUTH);
+		return sidebar;
+	}
+
+	private JPanel createStatus()
+	{
+		connection.setIcon(OFFLINE);
+		connection.setIconTextGap(8);
+		activity.setBorder(BorderFactory.createEmptyBorder(3, 16, 0, 0));
+		JPanel status = GenericClientDashboardStyle.stack(0, connection, activity);
+		status.setBorder(BorderFactory.createCompoundBorder(
+			BorderFactory.createMatteBorder(1, 0, 0, 0, GenericClientDashboardStyle.BORDER),
+			BorderFactory.createEmptyBorder(14, 6, 0, 6)));
+		JPanel footer = GenericClientDashboardStyle.panel(new BorderLayout(0, 10));
+		footer.add(longBreak, BorderLayout.NORTH);
+		footer.add(status, BorderLayout.SOUTH);
+		return footer;
+	}
+
+	private JButton nav(String name, GenericClientDashboardStyle.NavGlyph glyph)
+	{
+		JButton button = GenericClientDashboardStyle.navButton(name, glyph);
 		button.setActionCommand(name);
 		button.addActionListener(event -> show(event.getActionCommand()));
 		return button;
@@ -204,12 +198,8 @@ final class GenericClientDashboard implements AutoCloseable
 
 	private static String readable(String value)
 	{
-		if (value == null || value.isEmpty())
-		{
-			return "Disconnected";
-		}
-		String lower = value.toLowerCase(java.util.Locale.ROOT).replace('_', ' ');
-		return Character.toUpperCase(lower.charAt(0)) + lower.substring(1);
+		String text = GenericClientDashboardStyle.humanize(value);
+		return text.isEmpty() ? "Disconnected" : text;
 	}
 
 	private static void runOnEdt(Runnable runnable)
@@ -239,29 +229,134 @@ final class GenericClientDashboard implements AutoCloseable
 
 	private static final class BrandMark extends JPanel
 	{
+		private static final int SIZE = 26;
+
 		private BrandMark()
 		{
 			setOpaque(false);
-			setPreferredSize(new Dimension(42, 42));
+			GenericClientDashboardStyle.size(this, SIZE, SIZE);
 		}
 
 		@Override
 		protected void paintComponent(Graphics graphics)
 		{
-			Graphics2D copy = (Graphics2D) graphics.create();
+			Graphics2D copy = GenericClientDashboardStyle.prepare(graphics);
 			try
 			{
-				copy.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 				copy.setColor(GenericClientDashboardStyle.ACCENT);
-				copy.fillRoundRect(0, 0, 42, 42, 14, 14);
-				copy.setFont(new Font(Font.SANS_SERIF, Font.BOLD, 21));
-				copy.setColor(new Color(8, 22, 16));
-				copy.drawString("G", 13, 29);
+				copy.fill(GenericClientDashboardStyle.round(0, 0, SIZE, SIZE, 8));
+				copy.setFont(GenericClientDashboardStyle.HEADING_FONT.deriveFont(Font.BOLD, 14f));
+				copy.setColor(GenericClientDashboardStyle.ACCENT_INK);
+				FontMetrics metrics = copy.getFontMetrics();
+				int x = (SIZE - metrics.stringWidth("G")) / 2;
+				int y = (SIZE - metrics.getHeight()) / 2 + metrics.getAscent();
+				copy.drawString("G", x, y);
 			}
 			finally
 			{
 				copy.dispose();
 			}
+		}
+	}
+
+	private static final class LongBreakBanner extends JPanel
+	{
+		private final GenericClientDashboardActions actions;
+		private final JLabel remaining = GenericClientDashboardStyle.small("");
+		private final JButton end = GenericClientDashboardStyle.ghostButton("×");
+		private boolean ending;
+
+		private LongBreakBanner(GenericClientDashboardActions actions)
+		{
+			super(new BorderLayout(8, 0));
+			this.actions = actions;
+			setOpaque(false);
+			setVisible(false);
+			setBorder(BorderFactory.createEmptyBorder(9, 11, 9, 7));
+			setPreferredSize(new Dimension(SIDEBAR_WIDTH - 24, 54));
+			setMaximumSize(new Dimension(Integer.MAX_VALUE, 54));
+			add(GenericClientDashboardStyle.stack(1,
+				GenericClientDashboardStyle.strong("Break"), remaining), BorderLayout.CENTER);
+			end.setToolTipText("End long break");
+			end.getAccessibleContext().setAccessibleName("End long break");
+			end.addActionListener(event -> endBreak());
+			add(end, BorderLayout.EAST);
+		}
+
+		private void update(long remainingMillis)
+		{
+			if (!ending)
+			{
+				remaining.setText("Long · " + formatDuration(remainingMillis) + " left");
+				remaining.setToolTipText(null);
+			}
+			setVisible(true);
+		}
+
+		private void hideBanner()
+		{
+			ending = false;
+			end.setEnabled(true);
+			remaining.setToolTipText(null);
+			setVisible(false);
+		}
+
+		private void endBreak()
+		{
+			if (ending)
+			{
+				return;
+			}
+			ending = true;
+			end.setEnabled(false);
+			remaining.setText("Ending...");
+			actions.endLongBreak().whenComplete((result, error) -> runOnEdt(() ->
+			{
+				if (error == null)
+				{
+					hideBanner();
+				}
+				else
+				{
+					ending = false;
+					end.setEnabled(true);
+					remaining.setText("Could not end break");
+					remaining.setToolTipText(GenericClientDashboardStyle.message(error));
+				}
+			}));
+		}
+
+		@Override
+		protected void paintComponent(Graphics graphics)
+		{
+			Graphics2D copy = GenericClientDashboardStyle.prepare(graphics);
+			try
+			{
+				copy.setColor(GenericClientDashboardStyle.RAISED);
+				copy.fill(GenericClientDashboardStyle.round(
+					0, 0, getWidth(), getHeight(), GenericClientDashboardStyle.RADIUS));
+				copy.setColor(GenericClientDashboardStyle.BORDER_STRONG);
+				copy.draw(GenericClientDashboardStyle.round(
+					0.5f, 0.5f, getWidth() - 1, getHeight() - 1,
+					GenericClientDashboardStyle.RADIUS));
+				copy.setColor(GenericClientDashboardStyle.WARNING);
+				copy.fill(GenericClientDashboardStyle.round(0, 8, 3, getHeight() - 16, 2));
+			}
+			finally
+			{
+				copy.dispose();
+			}
+			super.paintComponent(graphics);
+		}
+
+		private static String formatDuration(long millis)
+		{
+			long seconds = Math.max(0L, (millis + 999L) / 1_000L);
+			if (seconds < 60L)
+			{
+				return seconds + "s";
+			}
+			return seconds / 60L + "m " + seconds % 60L + "s";
 		}
 	}
 }

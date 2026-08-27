@@ -34,10 +34,13 @@ only from these numeric values. That text never feeds back into behavior.
 
 While a break is active, a small top-center overlay shows only its kind and
 remaining time. It disappears completely when the profile is ready.
+Long breaks also show a transient **Break** banner above the dashboard's
+connection status. Its × button manually ends only the active long break;
+micro breaks keep their original timer.
 
 ### Manual overrides
 
-The Settings tab can override the understandable profile controls per account:
+The Settings page can override the understandable profile controls per account:
 micro chance and duration, long-micro chance, long-break interval and duration,
 phase boost, preferred AFK/logout style, style-switch chance, idle edge, and
 mouse move duration.
@@ -119,6 +122,11 @@ At the deadline GenericClient uses the Jagex Launcher session to return to the
 world if the client logged out naturally or deliberately. A completed long
 break resets both behavior processes and suppresses the first post-return micro
 roll.
+
+Manually ending a long break follows the same completion path: it cancels the
+remaining timer, restores the Jagex-backed session when needed, resets long
+pressure, suppresses the first micro roll, and only then resumes the waiting
+script action.
 
 ## Phase transitions
 

@@ -31,15 +31,18 @@ The current checkout implements:
 - one active standalone script plus one persistent REPL state on one scheduler thread;
 - `gc.read` subjects `runtime`, `player`, `behavior`, and bounded `npcs` queries;
 - `gc.await` for `game.tick`, tick counts, the synthetic `walk.random` action,
-  and the same-plane `walk.to` ground-route action;
+  the same-plane `walk.to` ground-route action, and profile-owned
+  `mouse.offscreen` idle placement;
 - per-interaction `breaks=false`, phase transitions, seeded mouse timing, and a
   behavior controller that pauses coroutine action progression without blocking control;
 - `gc.log` to `client.log` and the GenericClient dashboard;
-- manifest-registered one-file scripts with start/reload/stop controls and on-demand NPC diagnostics;
+- manifest-registered one-file descriptor scripts with start/reload/stop
+  controls, validated `choice` inputs, and generic dashboard controls;
 - a loopback control bridge and stdio MCP server for live status, REPL evaluation,
   script registration, and on-demand execution;
 - a bounded three-click `walk-stress.lua` automation;
-- a live-tested `lumbridge-varrock.lua` static-ground route;
+- `walker.lua`, whose Lua-owned destination catalog drives the Java-owned
+  collision planner and synthetic interaction pipeline;
 - per-resume instruction/deadline interruption and pinned-frame reads;
 - focused tests for NPC queries, coroutine/action flow, pinned frames, and infinite-loop termination.
 
@@ -59,6 +62,21 @@ normalized dialog, target references, and additional semantic actions remain
 intentionally absent until a concrete automation requires each one.
 
 ### Live verification receipt
+
+GenericClient 0.9.0's final standalone artifact has SHA-256
+`1734728e4f285a194a338452ad89b9935468e922a4cc0ddf24b5d73bc7905828`.
+The exact installed artifact started through the Jagex Launcher on stock
+RuneLite 1.12.37, returned complete `client_status`, loaded `genericBoss`'s
+custom 99% micro profile without changing its precise seeded duration/cadence
+values, and completed Walker at the Grand Exchange with `mouse=moved` after a
+real 5.3-second phase micro break. The same 0.9 acceptance sequence also:
+
+- migrated the installed v1 manifest to v2 while retaining its custom MCP script;
+- rendered Walker's six-choice destination control and reached Varrock Center
+  through the selected `script_run` input;
+- restored a persisted long break, displayed the transient sidebar banner,
+  ended it from ×, and resumed the waiting Walker after session confirmation;
+- passed 74 Java tests plus three Node MCP tests.
 
 GenericClient 0.8.0 had SHA-256
 `0abcc592b262f93531102ecce75fbdf7d33b375a6cc187623e4c71c72370d197`.
@@ -249,7 +267,7 @@ interface LuaVm extends AutoCloseable
 ## Thread and state rules
 
 1. RuneLite callbacks copy only the data needed to build immutable records, then return. Lua never runs on the client thread or Swing event-dispatch thread. RuneLite's event bus invokes subscribers immediately on the posting thread ([RuneLite `EventBus.post`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-client/src/main/java/net/runelite/client/eventbus/EventBus.java#L202-L221)).
-2. One scheduler thread owns all Lua states for one game client. It enters only one VM at a time. Version 1 uses one suspended root coroutine per script.
+2. One scheduler thread owns all Lua states for one game client. It enters only one VM at a time. The runtime uses one suspended root coroutine per script.
 3. Use one main Lua state per script package. This gives globals, modules, GC, logs, budgets, and reload a clean lifecycle. Do not put unrelated scripts into different environments inside one shared state.
 4. Mutating intents are serialized per game client. Read-only queries can be served from immutable frames without entering the client thread.
 5. Every event, intent, receipt, log record, and coroutine carries `scriptId`, script `generation`, client `epoch`, and a monotonic `sequence`.
@@ -405,7 +423,7 @@ function gc.await(request)
 end
 ```
 
-After bootstrap, scripts receive only the wrapped `gc.await`; the raw coroutine library is not needed in version 1.
+After bootstrap, scripts receive only the wrapped `gc.await`; the raw coroutine library is not exposed.
 
 ### `gc.log(level, event, fields)`
 
@@ -413,81 +431,33 @@ Produces a structured record. The host automatically attaches script ID, generat
 
 ### Complete example
 
-Each script chunk returns its root function:
+Each script chunk returns a descriptor. The host validates optional inputs and
+uses `run(input)` as the root coroutine:
 
 ```lua
-return function()
-  gc.log("info", "nearby-diagnostics.started")
+return {
+  run = function(input)
+    gc.log("info", "nearby-diagnostics.started")
 
-  while true do
-    gc.await { event = "game.tick" }
+    while true do
+      gc.await { event = "game.tick" }
 
-    local npcs = gc.read("npcs", {
-      within = 15,
-      order = { "distance", "index" },
-      limit = 50,
-    })
-
-    gc.log("info", "nearby-npcs", { count = #npcs })
-
-    for _, npc in ipairs(npcs) do
-      gc.log("debug", "npc", {
-        id = npc.id,
-        name = npc.name,
-        distance = npc.distance,
-        actions = npc.actions,
-        location = npc.location,
+      local npcs = gc.read("npcs", {
+        within = 15,
+        limit = 50,
       })
+
+      gc.log("info", "nearby-npcs", { count = #npcs })
     end
-
-    local banker = gc.read("npcs", {
-      where = { name = "Banker" },
-      within = 15,
-      action = "Bank",
-      order = { "distance", "index" },
-      limit = 1,
-    })[1]
-
-    if banker then
-      local receipt = gc.await {
-        action = {
-          type = "interact",
-          target = banker.ref,
-          option = "Bank",
-        },
-        timeout = { game_ticks = 5 },
-      }
-
-      gc.log("info", "bank-action", receipt)
-    end
-
-    local dialog = gc.read("dialog")
-    if dialog and dialog.kind == "options" and dialog.options[1] then
-      gc.await {
-        action = {
-          type = "dialog.choose",
-          target = dialog.options[1].ref,
-        },
-        timeout = { game_ticks = 3 },
-      }
-    elseif dialog and dialog.can_continue then
-      gc.await {
-        action = {
-          type = "dialog.continue",
-          target = dialog.ref,
-        },
-        timeout = { game_ticks = 3 },
-      }
-    end
-  end
-end
+  end,
+}
 ```
 
 ## Event scheduling and backpressure
 
 RuneLite callbacks are normalized into ordered envelopes containing sequence, epoch, game tick, client tick, type, frame ID, and copied payload. `ScriptHost` stores them in a bounded journal/mailbox without invoking Lua on the client thread.
 
-Version 1 has one root coroutine and at most one active await per script. Between resumes, the host matches events against that await. While the coroutine is running, its frame remains pinned; an event cannot interleave between a `gc.read` and the following `gc.await`, eliminating the usual read/register race.
+The runtime has one root coroutine and at most one active await per script. Between resumes, the host matches events against that await. While the coroutine is running, its frame remains pinned; an event cannot interleave between a `gc.read` and the following `gc.await`, eliminating the usual read/register race.
 
 Snapshot-like events can coalesce to the latest full frame. Action receipts, epoch changes, and specifically awaited edge events cannot be silently dropped. If bounded history no longer covers an awaited event, `gc.await` returns `event_gap` and the script must reconcile from a fresh frame. `client_tick` is opt-in; most scripts should use `game.tick` and semantic events.
 
@@ -501,9 +471,12 @@ Bootstrap a fresh VM with only:
 - coroutine, string, table, math, and UTF-8 libraries;
 - the `gc` table.
 
-Version 1 loads one source file and does not open `package`. Do not expose LuaJava's `java` module, `io`, `os`, `debug`, native module loading, arbitrary source/bytecode loading, or the OS wall clock. LuaJava states start with its Java module available and its standard-library helper can open everything, so initialization must explicitly remove `java`, avoid `openLibraries()`, open selected libraries one at a time, install the private hook, then remove `debug`, raw coroutine access, `load`, `loadfile`, `dofile`, `collectgarbage`, and similar host-controlled functions ([LuaJava Java interface](https://github.com/gudzpoz/luajava/blob/v4.1.0/docs/java.md#open-libraries), [Lua 5.4 standard libraries](https://www.lua.org/manual/5.4/manual.html#6)).
+The runtime loads one source file and does not open `package`. Do not expose LuaJava's `java` module, `io`, `os`, `debug`, native module loading, arbitrary source/bytecode loading, or the OS wall clock. LuaJava states start with its Java module available and its standard-library helper can open everything, so initialization must explicitly remove `java`, avoid `openLibraries()`, open selected libraries one at a time, install the private hook, then remove `debug`, raw coroutine access, `load`, `loadfile`, `dofile`, `collectgarbage`, and similar host-controlled functions ([LuaJava Java interface](https://github.com/gudzpoz/luajava/blob/v4.1.0/docs/java.md#open-libraries), [Lua 5.4 standard libraries](https://www.lua.org/manual/5.4/manual.html#6)).
 
-Compile and execute the user chunk under the same instruction/deadline hook; it must return one root function. Do not execute unbudgeted top-level user code on the main Lua state.
+Compile and execute the user chunk under the same instruction/deadline hook; it
+must return a descriptor table with a `run` function. Parse and validate its
+optional input descriptor before creating the root coroutine. Do not execute
+unbudgeted top-level user code on the main Lua state.
 
 The private debug hook and traceback helpers live in registry references unavailable to script globals. Host values are marshalled as Lua primitives and tables rather than general Java userdata.
 
@@ -517,7 +490,7 @@ Installation-wide configuration carries the first limits. Initial values are hyp
 | Wall time per resume | 5 ms | Monotonic deadline checked by the same hook and around every host call |
 | Scheduler CPU per script | 50 ms/second | Token bucket across resumes |
 | Queued events | 256 | Coalesce replaceable events; fault on durable overflow |
-| Root coroutines | 1 per script | Fixed by interface version 1 |
+| Root coroutines | 1 per script | Fixed by the runtime model |
 | Outstanding actions | 1 per script | A new action can only be issued after the prior await resumes |
 | Query rows | 512 per call | Query adapter truncates with an explicit flag |
 | Structured log data | 64 KiB/minute | Token bucket plus truncation record |
@@ -529,7 +502,7 @@ The hard native-memory ceiling is the only item requiring a LuaJava patch. Until
 
 ## Script files and versioning
 
-Version 1 discovers one-file scripts directly:
+Version 2 registers one-file scripts in `manifest.json`:
 
 ```text
 .runelite/genericclient/scripts/
@@ -537,17 +510,33 @@ Version 1 discovers one-file scripts directly:
   banking-test.lua
 ```
 
-The filename is the script ID. A script declares its required host interface in a header and returns its root function:
+The manifest provides the stable script ID, name, description, and filename. A
+script declares its required host interface in a header and returns its
+descriptor:
 
 ```lua
--- genericclient-interface: 1
+-- genericclient-interface: 2
 
-return function()
-  -- script body
-end
+return {
+  inputs = {
+    {
+      id = "destination",
+      label = "Destination",
+      type = "choice",
+      choices = {
+        { value = "varrock", label = "Varrock" },
+      },
+    },
+  },
+  run = function(input)
+    -- script body
+  end,
+}
 ```
 
-Multi-file packages, dependency metadata, per-script configuration schemas, and manifests should be added only when a concrete script requires them. They are not prerequisites for the first usable scripting pipeline.
+Walker is the concrete requirement that introduced the small `choice` input
+schema. Additional input types, multi-file packages, and dependency metadata
+remain deferred until an automation requires them.
 
 Version the GenericClient scripting interface independently of RuneLite and Lua:
 
@@ -561,13 +550,15 @@ Version the GenericClient scripting interface independently of RuneLite and Lua:
 Reload is a generation replacement, not an attempt to preserve coroutine stacks:
 
 1. debounce filesystem changes and hash the source;
-2. compile it in a fresh VM and run the candidate root only until its first cooperative `gc.await`, with mutating action submission disabled during validation;
+2. compile it in a fresh VM, validate its descriptor, and run the candidate only
+   until its first cooperative `gc.await`, with mutating action submission
+   disabled during validation;
 3. if initialization fails, close the candidate and leave the old generation untouched;
 4. at the old generation's next yield boundary, atomically install the candidate and register its yielded wait or action request;
 5. cancel the old wait or pending operation with `reloaded` and ignore late completions tagged with the old generation;
 6. close the old VM and resume the new generation against the latest full frame.
 
-Version 1 deliberately resets Lua globals and control flow on reload. State migration, stack preservation, and serialized checkpoints are deferred until a real script demonstrates the need. A script must reread current state before acting after every start, reload, login, or world hop.
+Reload deliberately resets Lua globals and control flow. State migration, stack preservation, and serialized checkpoints are deferred until a real script demonstrates the need. A script must reread current state before acting after every start, reload, login, or world hop.
 
 ## Logs and debugger
 

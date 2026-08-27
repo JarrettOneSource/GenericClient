@@ -1,92 +1,106 @@
 package com.genericclient;
 
+import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import java.awt.GridLayout;
-import javax.swing.Box;
+import java.awt.BorderLayout;
+import java.awt.event.ActionEvent;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
+import javax.swing.AbstractAction;
 import javax.swing.JButton;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextArea;
+import javax.swing.KeyStroke;
+import javax.swing.SwingUtilities;
 
 final class GenericClientConsolePanel extends JPanel
 {
-	private final GenericClientDashboardActions actions;
-	private final GenericClientLuaHost host;
-	private final JLabel lastResult = GenericClientDashboardStyle.value("Ready");
-	private final JTextArea input = GenericClientDashboardStyle.textArea("return gc.read(\"player\")", 5, false);
-	private final JTextArea output = GenericClientDashboardStyle.textArea("No result yet.", 8, true);
-	private final JTextArea npcs = GenericClientDashboardStyle.textArea("No NPC snapshot yet.", 13, true);
+	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+	private static final String RUN_ACTION = "genericclient.console.run";
+
+	private final JLabel lastResult = GenericClientDashboardStyle.mono("None yet");
+	private final JTextArea input = GenericClientDashboardStyle.textArea(
+		"return gc.read(\"player\")", true, false);
+	private final JTextArea output = GenericClientDashboardStyle.textArea(
+		"Results print here as JSON.", false, true);
+	private final JTextArea npcs = GenericClientDashboardStyle.textArea(
+		"Press NPC snapshot to list what is nearby.", false, true);
 
 	GenericClientConsolePanel(GenericClientDashboardActions actions, GenericClientLuaHost host)
 	{
-		this.actions = actions;
-		this.host = host;
-		setLayout(new java.awt.BorderLayout());
+		setLayout(new BorderLayout());
 		setBackground(GenericClientDashboardStyle.BACKGROUND);
-		JPanel page = GenericClientDashboardStyle.page();
 
-		JPanel tools = GenericClientDashboardStyle.section("Tools");
-		JPanel toolButtons = new JPanel(new GridLayout(1, 3, 4, 4));
-		toolButtons.setOpaque(false);
-		JButton diagnostics = GenericClientDashboardStyle.button("Status");
-		diagnostics.addActionListener(event -> actions.printDiagnostics());
-		toolButtons.add(diagnostics);
-		JButton npcButton = GenericClientDashboardStyle.button("NPCs");
-		npcButton.addActionListener(event -> actions.logNearbyNpcs());
-		toolButtons.add(npcButton);
-		JButton walk = GenericClientDashboardStyle.button("Walk test");
-		walk.addActionListener(event -> actions.walkToRandomTile());
-		toolButtons.add(walk);
-		tools.add(toolButtons);
-		tools.add(GenericClientDashboardStyle.row("Last", lastResult));
-		page.add(tools);
-		page.add(Box.createVerticalStrut(14));
-
-		JPanel repl = GenericClientDashboardStyle.section("Lua console");
-		repl.add(GenericClientDashboardStyle.scroll(input, 105));
-		JPanel replButtons = new JPanel(new GridLayout(1, 2, 4, 4));
-		replButtons.setOpaque(false);
+		input.setText("return gc.read(\"player\")");
 		JButton run = GenericClientDashboardStyle.primaryButton("Run");
 		run.addActionListener(event ->
 		{
 			output.setText("Running...");
-			host.evaluate(input.getText()).whenComplete((result, error) ->
-				javax.swing.SwingUtilities.invokeLater(() -> output.setText(error == null
-					? new GsonBuilder().setPrettyPrinting().create().toJson(result)
-					: error.getMessage())));
+			host.evaluate(input.getText()).whenComplete((result, error) -> SwingUtilities.invokeLater(() ->
+			{
+				output.setText(error == null ? GSON.toJson(result) : GenericClientDashboardStyle.message(error));
+				output.setCaretPosition(0);
+			}));
 		});
-		replButtons.add(run);
-		JButton reset = GenericClientDashboardStyle.button("Reset");
+		input.getInputMap(JComponent.WHEN_FOCUSED).put(
+			KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.CTRL_DOWN_MASK), RUN_ACTION);
+		input.getActionMap().put(RUN_ACTION, new AbstractAction()
+		{
+			@Override
+			public void actionPerformed(ActionEvent event)
+			{
+				run.doClick();
+			}
+		});
+		JButton reset = GenericClientDashboardStyle.ghostButton("Reset");
 		reset.addActionListener(event -> host.resetRepl().whenComplete((result, error) ->
-			javax.swing.SwingUtilities.invokeLater(() -> output.setText(
-				error == null ? result : error.getMessage()))));
-		replButtons.add(reset);
-		repl.add(replButtons);
-		output.setEditable(false);
-		repl.add(GenericClientDashboardStyle.scroll(output, 160));
-		page.add(repl);
-		page.add(Box.createVerticalStrut(14));
+			SwingUtilities.invokeLater(() -> output.setText(
+				error == null ? result : GenericClientDashboardStyle.message(error)))));
 
-		JPanel npcSection = GenericClientDashboardStyle.section("Nearby NPCs");
-		npcs.setEditable(false);
-		npcSection.add(GenericClientDashboardStyle.scroll(npcs, 260));
-		page.add(npcSection);
-		add(GenericClientDashboardStyle.pageScroll(page), java.awt.BorderLayout.CENTER);
+		GenericClientDashboardStyle.Card lua = GenericClientDashboardStyle.card("Lua", reset);
+		lua.put(GenericClientDashboardStyle.inset(input, 84))
+			.gap(10)
+			.put(GenericClientDashboardStyle.inline(10, run, GenericClientDashboardStyle.small("Ctrl+Enter runs the snippet")))
+			.gap(10)
+			.put(GenericClientDashboardStyle.inset(output, 132));
+
+		JButton status = GenericClientDashboardStyle.button("Status");
+		status.addActionListener(event -> actions.printDiagnostics());
+		JButton snapshot = GenericClientDashboardStyle.button("NPC snapshot");
+		snapshot.addActionListener(event -> actions.logNearbyNpcs());
+		JButton walk = GenericClientDashboardStyle.button("Walk test");
+		walk.addActionListener(event -> actions.walkToRandomTile());
+		JPanel result = GenericClientDashboardStyle.panel(new BorderLayout(10, 0));
+		result.add(GenericClientDashboardStyle.small("Last result"), BorderLayout.WEST);
+		result.add(lastResult, BorderLayout.CENTER);
+
+		GenericClientDashboardStyle.Card diagnostics = GenericClientDashboardStyle.card("Diagnostics");
+		diagnostics.put(GenericClientDashboardStyle.inline(8, status, snapshot, walk))
+			.gap(10)
+			.put(result)
+			.gap(12)
+			.put(GenericClientDashboardStyle.inset(npcs, 150));
+
+		JPanel page = GenericClientDashboardStyle.page();
+		page.add(GenericClientDashboardStyle.stack(16,
+			GenericClientDashboardStyle.pageHeader("Console"),
+			lua,
+			diagnostics), BorderLayout.NORTH);
+		add(GenericClientDashboardStyle.scroll(page), BorderLayout.CENTER);
 	}
 
 	void updateLastResult(String result)
 	{
-		lastResult.setText("<html>" + escape(result) + "</html>");
+		String text = result == null ? "" : result.trim();
+		lastResult.setText(text.isEmpty() ? "None yet" : text);
+		lastResult.setToolTipText(text.isEmpty() ? null : text);
 	}
 
 	void updateNpcDiagnostics(String diagnostics)
 	{
-		npcs.setText(diagnostics);
+		npcs.setText(diagnostics == null ? "" : diagnostics);
 		npcs.setCaretPosition(0);
-	}
-
-	private static String escape(String value)
-	{
-		return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
 	}
 }

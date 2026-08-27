@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -24,17 +25,22 @@ import java.util.regex.Pattern;
 
 final class GenericClientScriptRegistry
 {
-	private static final String SCHEMA = "genericclient_scripts.v1";
+	private static final String SCHEMA = "genericclient_scripts.v2";
+	private static final String LEGACY_SCHEMA = "genericclient_scripts.v1";
 	private static final String MANIFEST_FILE = "manifest.json";
 	private static final String RESOURCE_DIRECTORY = "/com/genericclient/scripts/";
 	private static final Pattern SCRIPT_ID = Pattern.compile("[a-z0-9][a-z0-9_-]*");
-	private static final String[] BUNDLED_FILES =
+	private static final String[] BUNDLED_SCRIPT_FILES =
 	{
-		MANIFEST_FILE,
-		"lumbridge-varrock.lua",
+		"walker.lua",
 		"npc-diagnostics.lua",
 		"walk-stress.lua"
 	};
+	private static final Set<String> LEGACY_BUNDLED_IDS = Set.of(
+		"lumbridge-varrock",
+		"npc-diagnostics",
+		"walk-stress",
+		"walker");
 
 	private final Path directory;
 	private volatile State state;
@@ -98,16 +104,8 @@ final class GenericClientScriptRegistry
 
 	synchronized void reload() throws IOException
 	{
-		ManifestFile manifest;
 		Path path = directory.resolve(MANIFEST_FILE);
-		try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8))
-		{
-			manifest = new Gson().fromJson(reader, ManifestFile.class);
-		}
-		catch (JsonParseException exception)
-		{
-			throw new IOException("Invalid script manifest JSON: " + path, exception);
-		}
+		ManifestFile manifest = readManifest(path);
 
 		if (manifest == null || !SCHEMA.equals(manifest.schema))
 		{
@@ -156,20 +154,135 @@ final class GenericClientScriptRegistry
 	private void installBundledFiles() throws IOException
 	{
 		Files.createDirectories(directory);
-		for (String file : BUNDLED_FILES)
+		Path manifestPath = directory.resolve(MANIFEST_FILE);
+		if (!Files.exists(manifestPath))
 		{
-			Path target = directory.resolve(file);
-			if (Files.exists(target))
+			copyBundledResource(MANIFEST_FILE, false);
+			for (String file : BUNDLED_SCRIPT_FILES)
 			{
-				continue;
-			}
-			try (InputStream input = GenericClientScriptRegistry.class.getResourceAsStream(RESOURCE_DIRECTORY + file))
-			{
-				if (input == null)
+				if (!Files.exists(directory.resolve(file)))
 				{
-					throw new IOException("Missing bundled script resource: " + file);
+					copyBundledResource(file, false);
 				}
-				Files.copy(input, target);
+			}
+			return;
+		}
+
+		ManifestFile existing = readManifest(manifestPath);
+		if (LEGACY_SCHEMA.equals(existing.schema))
+		{
+			migrateLegacyManifest(existing);
+			return;
+		}
+
+		for (String file : BUNDLED_SCRIPT_FILES)
+		{
+			if (!Files.exists(directory.resolve(file)))
+			{
+				copyBundledResource(file, false);
+			}
+		}
+	}
+
+	private void migrateLegacyManifest(ManifestFile existing) throws IOException
+	{
+		if (existing.scripts == null)
+		{
+			throw new IOException("Script manifest has no scripts array: " + directory.resolve(MANIFEST_FILE));
+		}
+
+		ManifestFile bundled = readBundledManifest();
+		List<Script> scripts = new ArrayList<>();
+		for (ManifestScript entry : bundled.scripts)
+		{
+			scripts.add(toScript(entry));
+		}
+		for (ManifestScript entry : existing.scripts)
+		{
+			if (entry != null && !LEGACY_BUNDLED_IDS.contains(entry.id))
+			{
+				scripts.add(toScript(entry));
+			}
+		}
+		for (String file : BUNDLED_SCRIPT_FILES)
+		{
+			copyBundledResource(file, true);
+		}
+		scripts.sort(Comparator.comparing(Script::getName, String.CASE_INSENSITIVE_ORDER));
+		writeManifest(scripts);
+	}
+
+	private Script toScript(ManifestScript entry) throws IOException
+	{
+		if (entry == null)
+		{
+			throw new IOException("Script manifest contains a null entry");
+		}
+		validateId(entry.id);
+		return new Script(
+			entry.id,
+			requireText(entry.name, "Script name"),
+			requireText(entry.description, "Script description"),
+			validateFileName(entry.file));
+	}
+
+	private static ManifestFile readManifest(Path path) throws IOException
+	{
+		try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8))
+		{
+			ManifestFile manifest = new Gson().fromJson(reader, ManifestFile.class);
+			if (manifest == null)
+			{
+				throw new IOException("Script manifest is empty: " + path);
+			}
+			return manifest;
+		}
+		catch (JsonParseException exception)
+		{
+			throw new IOException("Invalid script manifest JSON: " + path, exception);
+		}
+	}
+
+	private static ManifestFile readBundledManifest() throws IOException
+	{
+		try (InputStream input = GenericClientScriptRegistry.class.getResourceAsStream(
+			RESOURCE_DIRECTORY + MANIFEST_FILE))
+		{
+			if (input == null)
+			{
+				throw new IOException("Missing bundled script resource: " + MANIFEST_FILE);
+			}
+			ManifestFile manifest = new Gson().fromJson(
+				new InputStreamReader(input, StandardCharsets.UTF_8),
+				ManifestFile.class);
+			if (manifest == null || manifest.scripts == null)
+			{
+				throw new IOException("Bundled script manifest is empty");
+			}
+			return manifest;
+		}
+		catch (JsonParseException exception)
+		{
+			throw new IOException("Invalid bundled script manifest", exception);
+		}
+	}
+
+	private void copyBundledResource(String file, boolean replace) throws IOException
+	{
+		try (InputStream input = GenericClientScriptRegistry.class.getResourceAsStream(
+			RESOURCE_DIRECTORY + file))
+		{
+			if (input == null)
+			{
+				throw new IOException("Missing bundled script resource: " + file);
+			}
+			if (replace)
+			{
+				Files.copy(input, directory.resolve(file), StandardCopyOption.REPLACE_EXISTING);
+			}
+			else
+			{
+				Files.copy(input, directory.resolve(file));
 			}
 		}
 	}

@@ -1,11 +1,11 @@
 {
-  "schema": "genericclient_scripts.v1",
+  "schema": "genericclient_scripts.v2",
   "scripts": [
     {
-      "id": "lumbridge-varrock",
-      "name": "Walk to Varrock",
-      "description": "Walk from the current outdoor position to Varrock center.",
-      "file": "lumbridge-varrock.lua"
+      "id": "walker",
+      "name": "Walker",
+      "description": "Choose a destination and walk there from the current outdoor position.",
+      "file": "walker.lua"
     },
     {
       "id": "npc-diagnostics",

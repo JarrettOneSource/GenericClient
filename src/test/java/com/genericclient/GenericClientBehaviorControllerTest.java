@@ -132,6 +132,92 @@ public class GenericClientBehaviorControllerTest
 	}
 
 	@Test
+	public void manualEndCompletesOnlyAnActiveLongBreak() throws Exception
+	{
+		long accountHash = findHash(profile -> profile.getLongCadenceMinutes() < 55.0 &&
+			profile.getFavoredLongBreakMode() == GenericClientBehaviorProfile.LongBreakMode.LOGOUT);
+		Fixture fixture = fixture(0.000000000001, 0.99, 0.5);
+		try
+		{
+			fixture.controller.activateAccount(accountHash);
+			fixture.controller.setLoggedIn(true);
+			advanceActive(fixture, 25 * 60_000L);
+			CompletableFuture<Map<String, Object>> action = fixture.controller.afterAction(true);
+
+			assertEquals("long_break", fixture.controller.status().get("state"));
+			assertEquals("ended", fixture.controller.endLongBreak().get().get("status"));
+			assertEquals("completed", action.get().get("status"));
+			assertEquals("ready", fixture.controller.status().get("state"));
+			assertEquals(1, fixture.effects.ensureLoginCalls);
+			assertEquals(0, fixture.timer.activeSize());
+		}
+		finally
+		{
+			fixture.controller.close();
+		}
+	}
+
+	@Test
+	public void manualEndDoesNotDismissAMicroBreak() throws Exception
+	{
+		long accountHash = findHash(profile -> profile.getShortReleaseProbability() >= 0.85);
+		Fixture fixture = fixture(0.5, 0.0, 0.99);
+		try
+		{
+			fixture.controller.activateAccount(accountHash);
+			fixture.controller.setLoggedIn(true);
+			CompletableFuture<Map<String, Object>> action = fixture.controller.afterAction(true);
+
+			assertEquals("not_active", fixture.controller.endLongBreak().get().get("status"));
+			assertEquals("micro_break", fixture.controller.status().get("state"));
+			assertEquals(1, fixture.timer.activeSize());
+			fixture.timer.runNext();
+			assertEquals("completed", action.get().get("status"));
+		}
+		finally
+		{
+			fixture.controller.close();
+		}
+	}
+
+	@Test
+	public void manualEndWaitsForLogoutBeforeRestoringTheSession() throws Exception
+	{
+		long accountHash = findHash(profile -> profile.getLongCadenceMinutes() < 55.0 &&
+			profile.getFavoredLongBreakMode() == GenericClientBehaviorProfile.LongBreakMode.LOGOUT);
+		ManualClock clock = new ManualClock();
+		ManualTimer timer = new ManualTimer();
+		DelayedLogoutEffects effects = new DelayedLogoutEffects();
+		GenericClientBehaviorController controller = new GenericClientBehaviorController(
+			new GenericClientBehaviorStore(temporaryFolder.newFolder("delayed-logout").toPath()),
+			effects,
+			timer,
+			clock,
+			new SequenceRandom(0.000000000001, 0.99, 0.5),
+			message -> { });
+		Fixture fixture = new Fixture(controller, clock, timer, effects);
+		try
+		{
+			controller.activateAccount(accountHash);
+			controller.setLoggedIn(true);
+			advanceActive(fixture, 25 * 60_000L);
+			controller.afterAction(true);
+			CompletableFuture<Map<String, Object>> ended = controller.endLongBreak();
+
+			assertFalse(ended.isDone());
+			assertEquals(0, effects.ensureLoginCalls);
+			effects.logout.complete("logged_out");
+			assertEquals("ended", ended.get().get("status"));
+			assertEquals(1, effects.ensureLoginCalls);
+			assertEquals("ready", controller.status().get("state"));
+		}
+		finally
+		{
+			controller.close();
+		}
+	}
+
+	@Test
 	public void phaseRollsHeavilyThenHonorsGlobalAndNamedCooldowns() throws Exception
 	{
 		long accountHash = findHash(profile ->
@@ -390,6 +476,19 @@ public class GenericClientBehaviorControllerTest
 			return tasks.size();
 		}
 
+		private int activeSize()
+		{
+			int count = 0;
+			for (Task task : tasks)
+			{
+				if (!task.cancelled)
+				{
+					count++;
+				}
+			}
+			return count;
+		}
+
 		private long nextDelayMillis()
 		{
 			for (Task task : tasks)
@@ -430,11 +529,11 @@ public class GenericClientBehaviorControllerTest
 		}
 	}
 
-	private static final class FakeEffects implements GenericClientBehaviorController.BreakEffects
+	private static class FakeEffects implements GenericClientBehaviorController.BreakEffects
 	{
 		private final List<GenericClientBehaviorProfile.Edge> offscreenEdges = new ArrayList<>();
-		private int logoutCalls;
-		private int ensureLoginCalls;
+		protected int logoutCalls;
+		protected int ensureLoginCalls;
 
 		@Override
 		public CompletableFuture<String> moveOffscreen(GenericClientBehaviorProfile.Edge edge)
@@ -455,6 +554,18 @@ public class GenericClientBehaviorControllerTest
 		{
 			ensureLoginCalls++;
 			return CompletableFuture.completedFuture("logged_in");
+		}
+	}
+
+	private static final class DelayedLogoutEffects extends FakeEffects
+	{
+		private final CompletableFuture<String> logout = new CompletableFuture<>();
+
+		@Override
+		public CompletableFuture<String> logout()
+		{
+			logoutCalls++;
+			return logout;
 		}
 	}
 

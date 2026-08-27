@@ -35,6 +35,8 @@ final class GenericClientLuaScript implements AutoCloseable
 	private Wait wait;
 	private long nextRequestId;
 	private String currentPhase;
+	private List<GenericClientScriptInput> inputs = Collections.emptyList();
+	private Map<String, Object> resolvedInputs = Collections.emptyMap();
 
 	GenericClientLuaScript(GenericClientLuaHost host, String name, String source)
 	{
@@ -54,10 +56,25 @@ final class GenericClientLuaScript implements AutoCloseable
 		}
 	}
 
-	void activate()
+	void activate(Map<String, Object> suppliedInputs)
 	{
+		if (activated)
+		{
+			throw new IllegalStateException("Lua script is already activated");
+		}
 		activated = true;
-		dispatchWaitIfReady();
+		resolvedInputs = GenericClientScriptInput.resolve(inputs, suppliedInputs);
+		resume(resolvedInputs);
+	}
+
+	List<GenericClientScriptInput> getInputs()
+	{
+		return inputs;
+	}
+
+	Map<String, Object> getResolvedInputs()
+	{
+		return resolvedInputs;
 	}
 
 	void onGameTick(GenericClientSnapshot snapshot)
@@ -162,6 +179,9 @@ final class GenericClientLuaScript implements AutoCloseable
 		wait = null;
 		nextRequestId = 0;
 		currentPhase = null;
+		activated = false;
+		inputs = Collections.emptyList();
+		resolvedInputs = Collections.emptyMap();
 
 		try
 		{
@@ -169,11 +189,22 @@ final class GenericClientLuaScript implements AutoCloseable
 			lua.load(source);
 			lua.pCall(0, 1);
 			checkBudget();
+			if (!lua.isTable(-1))
+			{
+				throw new IllegalArgumentException("Lua script must return one descriptor table");
+			}
+			lua.getField(-1, "inputs");
+			Object rawInputs = lua.isNil(-1) ? null : normalizeLuaValue(lua.toObject(-1));
+			lua.pop(1);
+			inputs = GenericClientScriptInput.parse(rawInputs);
+
+			lua.getField(-1, "run");
 			if (!lua.isFunction(-1))
 			{
-				throw new IllegalArgumentException("Lua script must return one root function");
+				throw new IllegalArgumentException("Lua script descriptor requires a run function");
 			}
 			int rootFunctionReference = lua.ref();
+			lua.pop(1);
 
 			coroutine = lua.newThread();
 			coroutineReference = lua.ref();
@@ -184,7 +215,6 @@ final class GenericClientLuaScript implements AutoCloseable
 			lua.refGet(hookInstallerReference);
 			lua.refGet(coroutineReference);
 			lua.pCall(1, 0);
-			resume(null);
 		}
 		catch (RuntimeException exception)
 		{
@@ -408,6 +438,10 @@ final class GenericClientLuaScript implements AutoCloseable
 			{
 				return Wait.randomAction(++nextRequestId, timeout, breaksEnabled);
 			}
+			if ("mouse.offscreen".equals(type))
+			{
+				return Wait.mouseOffscreen(++nextRequestId, timeout);
+			}
 			if ("walk.to".equals(type))
 			{
 				if (!(action.get("destination") instanceof Map))
@@ -480,6 +514,10 @@ final class GenericClientLuaScript implements AutoCloseable
 		else if ("walk.random".equals(wait.actionType))
 		{
 			host.submitWalkRandom(this, wait.requestId, wait.breaksEnabled);
+		}
+		else if ("mouse.offscreen".equals(wait.actionType))
+		{
+			host.submitMouseOffscreen(this, wait.requestId);
 		}
 		else
 		{
@@ -566,7 +604,7 @@ final class GenericClientLuaScript implements AutoCloseable
 		}
 	}
 
-	private static Object normalizeLuaValue(Object value)
+	static Object normalizeLuaValue(Object value)
 	{
 		if (value instanceof Collection)
 		{
@@ -702,6 +740,12 @@ final class GenericClientLuaScript implements AutoCloseable
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "walk.to", destination, within, breaksEnabled, null);
+		}
+
+		private static Wait mouseOffscreen(long requestId, int timeoutTicks)
+		{
+			return new Wait(
+				WaitKind.ACTION, requestId, timeoutTicks, "mouse.offscreen", null, 0, false, null);
 		}
 
 		private static Wait phase(long requestId, String name, boolean breaksEnabled)

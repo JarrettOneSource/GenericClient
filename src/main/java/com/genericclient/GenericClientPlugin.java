@@ -650,6 +650,18 @@ public final class GenericClientPlugin extends Plugin
 					return exception.getMessage();
 				}
 			}
+
+			@Override
+			public java.util.concurrent.CompletableFuture<String> endLongBreak()
+			{
+				return behaviorController.endLongBreak().thenApply(receipt ->
+				{
+					refreshPanel();
+					return "ended".equals(receipt.get("status"))
+						? "Long break ended"
+						: "No long break is active";
+				});
+			}
 		};
 	}
 

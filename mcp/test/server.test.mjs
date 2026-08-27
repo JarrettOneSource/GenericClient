@@ -43,5 +43,15 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
 
   const response = await client.callTool({ name: "client_status", arguments: {} });
   assert.match(response.content[0].text, /LOGGED_IN/);
-  assert.deepEqual(calls, [{ method: "status", params: {} }]);
+  await client.callTool({
+    name: "script_run",
+    arguments: { id: "walker", inputs: { destination: "varrock_center" } },
+  });
+  assert.deepEqual(calls, [
+    { method: "status", params: {} },
+    {
+      method: "scripts.run",
+      params: { id: "walker", inputs: { destination: "varrock_center" } },
+    },
+  ]);
 });

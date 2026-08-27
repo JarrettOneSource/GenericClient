@@ -3,6 +3,7 @@ package com.genericclient;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 final class GenericClientTestSupport
 {
@@ -12,6 +13,13 @@ final class GenericClientTestSupport
 
 	static GenericClientBehaviorController behavior(Path directory) throws Exception
 	{
+		return behavior(directory, edge -> { });
+	}
+
+	static GenericClientBehaviorController behavior(
+		Path directory,
+		Consumer<GenericClientBehaviorProfile.Edge> offscreen) throws Exception
+	{
 		return new GenericClientBehaviorController(
 			new GenericClientBehaviorStore(directory),
 			new GenericClientBehaviorController.BreakEffects()
@@ -19,6 +27,7 @@ final class GenericClientTestSupport
 				@Override
 				public CompletableFuture<String> moveOffscreen(GenericClientBehaviorProfile.Edge edge)
 				{
+					offscreen.accept(edge);
 					return CompletableFuture.completedFuture("offscreen");
 				}
 

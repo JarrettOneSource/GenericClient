@@ -193,28 +193,32 @@ Use LuaJava 4.1.0 with PUC Lua 5.4. A Java 11 spike verified selective libraries
 
 Create restricted globals rather than `standardGlobals`: expose no Java bridge, filesystem, network, process, OS, or debug library to normal scripts. Install an internal instruction hook for per-resume budgets, enforce wall-clock deadlines and bounded event queues, and give each script its own VM/environment and lifecycle. Lua runs on a dedicated scheduler thread, never the client thread or Swing EDT.
 
-Scripts use one sequential root coroutine. `gc.await` yields in Lua rather than sleeping or yielding across a Java callback:
+Scripts use one sequential root coroutine. The source chunk returns a descriptor,
+and its `run(input)` function becomes that coroutine. `gc.await` yields in Lua
+rather than sleeping or yielding across a Java callback:
 
 ```lua
-return function()
-  while true do
-    gc.await { event = "game.tick" }
-    local banker = gc.read("npcs", {
-      where = { name = "Banker" },
-      within = 15,
-      action = "Bank",
-      limit = 1,
-    })[1]
+return {
+  run = function(input)
+    while true do
+      gc.await { event = "game.tick" }
+      local banker = gc.read("npcs", {
+        where = { name = "Banker" },
+        within = 15,
+        action = "Bank",
+        limit = 1,
+      })[1]
 
-    if banker then
-      local receipt = gc.await {
-        action = { type = "interact", target = banker.ref, option = "Bank" },
-        timeout = { game_ticks = 5 },
-      }
-      gc.log("info", "bank-action", receipt)
+      if banker then
+        local receipt = gc.await {
+          action = { type = "interact", target = banker.ref, option = "Bank" },
+          timeout = { game_ticks = 5 },
+        }
+        gc.log("info", "bank-action", receipt)
+      end
     end
-  end
-end
+  end,
+}
 ```
 
 Compiled Java modules remain a useful second extension type for performance-heavy pathfinding or domain libraries. JShell remains a developer console. An out-of-process controller is useful for multi-language tooling or crash isolation, but a second JVM per client is less resource-efficient than the in-process Lua runtime.

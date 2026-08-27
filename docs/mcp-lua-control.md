@@ -63,9 +63,9 @@ the same port in the MCP server configuration.
 | `lua_eval` | Execute an ad-hoc Lua snippet and receive its returned value. |
 | `lua_repl_reset` | Clear globals created by previous REPL calls. |
 | `script_list` | List scripts registered in the manifest. |
-| `script_get` | Read one script's metadata and source. |
+| `script_get` | Read one script's metadata, declared inputs, and source. |
 | `script_save` | Write a complete Lua file and register or update its manifest entry. |
-| `script_run` | Start a registered script by id. |
+| `script_run` | Start a registered script by id with optional input values. |
 | `script_stop` | Stop the active standalone script. |
 | `script_reload_manifest` | Reload the manifest after external file edits. |
 
@@ -113,6 +113,16 @@ local result = gc.await {
 return result
 ```
 
+`mouse.offscreen` parks the synthetic cursor at the current account profile's
+stable idle edge without rolling another break:
+
+```lua
+return gc.await {
+  action = { type = "mouse.offscreen" },
+  breaks = false,
+}
+```
+
 Each composite client interaction uses the account behavior profile by default.
 A time-sensitive task can bypass both break classes for all of its interactions:
 
@@ -140,12 +150,12 @@ Standalone scripts live in:
 ~/.runelite/genericclient/scripts/
 ```
 
-`manifest.json` is the registry shown in the RuneLite Scripts tab and returned by
+`manifest.json` is the registry shown on the dashboard's Automations page and returned by
 `script_list`:
 
 ```json
 {
-  "schema": "genericclient_scripts.v1",
+  "schema": "genericclient_scripts.v2",
   "scripts": [
     {
       "id": "where-am-i",
@@ -160,13 +170,16 @@ Standalone scripts live in:
 The matching `where-am-i.lua` is:
 
 ```lua
-return function()
-  gc.await { event = "game.tick" }
-  gc.log("info", "player", gc.read("player"))
-end
+return {
+  run = function(input)
+    gc.await { event = "game.tick" }
+    gc.log("info", "player", gc.read("player"))
+  end,
+}
 ```
 
-Every file returns one root function. Inside that function, scripts use only:
+Every file returns one descriptor table with a `run(input)` function. Inside
+that function, scripts use only:
 
 ```lua
 gc.read(subject, query)
@@ -175,9 +188,37 @@ gc.log(level, event, fields)
 gc.phase(name, options)
 ```
 
+A script can declare a dropdown without adding Java UI code:
+
+```lua
+return {
+  inputs = {
+    {
+      id = "destination",
+      label = "Destination",
+      type = "choice",
+      default = "grand_exchange",
+      choices = {
+        { value = "grand_exchange", label = "Grand Exchange" },
+        { value = "varrock_center", label = "Varrock Center" },
+      },
+    },
+  },
+  run = function(input)
+    gc.log("info", "selected", { destination = input.destination })
+  end,
+}
+```
+
+`script_get` returns this input metadata. `script_run` accepts an `inputs`
+object such as `{ "destination": "varrock_center" }`. Missing values use the
+declared defaults; unknown ids and values outside the declared choices fail
+before the script starts. The dashboard renders the same metadata and passes
+the selected values through the same validation path.
+
 The easiest programmatic path is `script_save`, which writes both the Lua file
 and manifest entry. For manual editing, add the file and manifest row, then
-press **Reload list** in the Scripts tab or call `script_reload_manifest`.
+press **Reload list** in Automations or call `script_reload_manifest`.
 
 Only one standalone script is active at a time. Starting another replaces it.
 The REPL is separate, so short interactive queries can run while a diagnostic

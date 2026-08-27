@@ -47,6 +47,7 @@ public class GenericClientControlServerTest
 				behavior.put("state", "ready");
 				behavior.put("profile", profile);
 				status.put("behavior", behavior);
+				status.put("lua", host.controlState());
 				return status;
 			},
 			message -> { });
@@ -63,13 +64,36 @@ public class GenericClientControlServerTest
 			assertEquals("completed", evalResult.get("status"));
 			assertEquals("Player", ((Map<String, Object>) evalResult.get("value")).get("name"));
 
+			Map<String, Object> statusResponse = post(server, "status", new LinkedHashMap<>());
+			Map<String, Object> statusResult = (Map<String, Object>) statusResponse.get("result");
+			assertTrue(((Map<String, Object>) statusResult.get("lua")).get("active_inputs") instanceof Map);
+
 			Map<String, Object> saveParameters = new LinkedHashMap<>();
 			saveParameters.put("id", "hello-world");
 			saveParameters.put("name", "Hello world");
 			saveParameters.put("description", "Log one message and finish.");
-			saveParameters.put("source", "return function() gc.log('info', 'hello') end\n");
+			saveParameters.put("source",
+				"return { inputs = {{ id = 'greeting', label = 'Greeting', type = 'choice', " +
+				"choices = {{ value = 'hello', label = 'Hello' }, " +
+				"{ value = 'goodbye', label = 'Goodbye' }} }}, " +
+				"run = function(input) gc.log('info', input.greeting) end }\n");
 			Map<String, Object> saved = post(server, "scripts.save", saveParameters);
 			assertEquals("hello-world", ((Map<String, Object>) saved.get("result")).get("id"));
+
+			Map<String, Object> getParameters = new LinkedHashMap<>();
+			getParameters.put("id", "hello-world");
+			Map<String, Object> fetched = post(server, "scripts.get", getParameters);
+			java.util.List<Map<String, Object>> inputs =
+				(java.util.List<Map<String, Object>>) ((Map<String, Object>) fetched.get("result")).get("inputs");
+			assertEquals("greeting", inputs.get(0).get("id"));
+			assertEquals(2, ((java.util.List<?>) inputs.get(0).get("choices")).size());
+
+			Map<String, Object> runParameters = new LinkedHashMap<>();
+			runParameters.put("id", "hello-world");
+			runParameters.put("inputs", Collections.singletonMap("greeting", "goodbye"));
+			assertTrue(((String) post(server, "scripts.run", runParameters).get("result"))
+				.contains("LUA_COMPLETED"));
+			assertTrue(host.getRecentLogs().contains("INFO goodbye"));
 
 			Map<String, Object> listed = post(server, "scripts.list", new LinkedHashMap<>());
 			assertTrue(((java.util.List<?>) listed.get("result")).size() >= 4);

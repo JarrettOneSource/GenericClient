@@ -5,7 +5,7 @@ import * as z from "zod/v4";
 
 import { GenericClientBridge } from "./bridge.mjs";
 
-const VERSION = "0.8.0";
+const VERSION = "0.9.0";
 
 function result(value) {
   return {
@@ -27,7 +27,7 @@ export function createServer(bridge = new GenericClientBridge()) {
         "Use lua_eval for ad-hoc exploration; its code is the body of a persistent Lua function, so return a value to receive it. " +
         "Available Lua primitives are gc.read(subject, query), gc.await(request), and gc.log(level, event, fields). " +
         "Each composite client interaction uses the seeded behavior profile unless breaks=false; gc.phase(name) performs a heavier phase evaluation. " +
-        "Use script_save for reusable standalone scripts, then script_run by id. Only one manifest script and one REPL execution run at a time.",
+        "Use script_save for reusable standalone scripts, then script_run by id with any declared input values. Only one manifest script and one REPL execution run at a time.",
     },
   );
 
@@ -190,15 +190,18 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Save Lua script",
       description:
-        "Create or replace a standalone Lua script and register it in scripts/manifest.json. Source must return one root function. Use a short lowercase id such as inspect-varrock-npcs.",
+        "Create or replace a standalone Lua script and register it in scripts/manifest.json. Source must return a descriptor table with a run function and optional inputs. Use a short lowercase id such as inspect-varrock-npcs.",
       inputSchema: z.object({
         id: z
           .string()
           .regex(/^[a-z0-9][a-z0-9_-]*$/)
           .describe("Stable lowercase script id."),
-        name: z.string().min(1).describe("Human-readable name shown in the RuneLite Scripts tab."),
+        name: z.string().min(1).describe("Human-readable name shown in Automations."),
         description: z.string().min(1).describe("One sentence explaining what the script does."),
-        source: z.string().min(1).describe("Complete Lua file returning one root function."),
+        source: z
+          .string()
+          .min(1)
+          .describe("Complete Lua file returning { inputs = {...}, run = function(input) ... end }."),
       }),
       annotations: {
         readOnlyHint: false,
@@ -216,9 +219,13 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Run Lua script",
       description:
-        "Start a registered standalone script by manifest id. It becomes the active script shown in the GenericClient dashboard.",
+        "Start a registered standalone script by manifest id. Pass values for inputs declared by the script descriptor. It becomes the active script shown in the GenericClient dashboard.",
       inputSchema: z.object({
         id: z.string().min(1).describe("Manifest script id."),
+        inputs: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe("Values keyed by the input ids returned by script_get."),
       }),
       annotations: {
         readOnlyHint: false,
@@ -227,7 +234,7 @@ export function createServer(bridge = new GenericClientBridge()) {
         openWorldHint: true,
       },
     },
-    async ({ id }) => result(await bridge.call("scripts.run", { id })),
+    async ({ id, inputs = {} }) => result(await bridge.call("scripts.run", { id, inputs })),
   );
 
   server.registerTool(

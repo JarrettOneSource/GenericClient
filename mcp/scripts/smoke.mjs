@@ -43,7 +43,7 @@ try {
     name: "MCP location check",
     description: "Log the current player snapshot once.",
     source:
-      'return function()\n  gc.await { event = "game.tick" }\n  gc.log("info", "mcp-location-check", gc.read("player"))\nend\n',
+      'return { run = function(input)\n  gc.await { event = "game.tick" }\n  gc.log("info", "mcp-location-check", gc.read("player"))\nend }\n',
   });
   const started = await call("script_run", { id: "mcp-location-check" });
   await new Promise((resolve) => setTimeout(resolve, 1_500));

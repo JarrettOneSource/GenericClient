@@ -36,13 +36,13 @@ On first startup, GenericClient installs the bundled profile at:
 ~/.runelite/genericclient/mouse-profiles/default.json
 ```
 
-The Settings tab selects one filename from that directory. Copy another profile
-into the directory, select it, and press **Reload**. A failed load leaves the
+The Settings page selects one filename from that directory. Copy another profile
+into the directory, select it, and press **Reload profile**. A failed load leaves the
 currently active profile unchanged and writes the parse error to `client.log`.
 
 The active account behavior profile controls the playback duration supplied to
 the matcher. Seeded values range from 300 through 650 milliseconds in 25 ms
-steps. **Mouse move ms** in the Behavior section saves an account-specific
+steps. **Move duration** in the Behavior section saves an account-specific
 override; **Use seeded** restores the derived value.
 
 ## Cursor effects
@@ -64,7 +64,7 @@ system cursor.
 
 ## Recording a profile
 
-The Settings tab provides **Record** and **Stop**.
+The Settings page has one **Record** button that turns into **Stop recording** while a session is active.
 While recording, manually move and click inside the RuneLite canvas. Generated
 GenericClient movement is excluded. The recorder:
 

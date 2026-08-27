@@ -232,9 +232,14 @@ account at the Grand Exchange. The final waypoint was never re-clicked. The
 comparable pre-fix walk used 15 clicks over 48 ticks and could replace a
 waypoint from four tiles away.
 
-The bundled [`lumbridge-varrock.lua`](../src/main/resources/com/genericclient/scripts/lumbridge-varrock.lua)
-targets `{ x = 3210, y = 3424, plane = 0 }` with a three-tile arrival
-radius and a 600-game-tick timeout.
+The bundled [`walker.lua`](../src/main/resources/com/genericclient/scripts/walker.lua)
+keeps its named destination catalog in Lua and exposes it as a dashboard
+dropdown. Its Varrock Center entry targets `{ x = 3210, y = 3424, plane = 0 }`
+with a three-tile arrival radius and a 600-game-tick timeout. The Java plugin
+continues to own the collision map, A* planning, projection, and click execution.
+After the terminal route receipt and arrival phase, the Lua script invokes the
+core `mouse.offscreen` action so the cursor finishes on the behavior profile's
+stable idle edge.
 
 The first attempt from Falador (`3007,3394`) reproduced an execution failure at
 the Falador garden trees: canvas points were either outside the viewport or had

@@ -9,7 +9,9 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -142,6 +144,12 @@ final class GenericClientControlServer implements AutoCloseable
 			Thread.currentThread().interrupt();
 			write(exchange, 503, error("Control request was interrupted"));
 		}
+		catch (RuntimeException exception)
+		{
+			reporter.accept("CONTROL_REQUEST_FAILED method=" + exchange.getRequestMethod() +
+				" message=" + exception.getMessage());
+			write(exchange, 500, error(exception.getMessage()));
+		}
 		catch (IOException exception)
 		{
 			write(exchange, 500, error(exception.getMessage()));
@@ -172,7 +180,17 @@ final class GenericClientControlServer implements AutoCloseable
 			case "scripts.list":
 				return luaHost.listScriptValues();
 			case "scripts.get":
-				return luaHost.getScriptValue(stringParameter(parameters, "id"));
+			{
+				String id = stringParameter(parameters, "id");
+				Map<String, Object> script = new LinkedHashMap<>(luaHost.getScriptValue(id));
+				List<Map<String, Object>> inputs = new ArrayList<>();
+				for (GenericClientScriptInput input : luaHost.describe(id).get(10, TimeUnit.SECONDS))
+				{
+					inputs.add(input.toMap());
+				}
+				script.put("inputs", inputs);
+				return script;
+			}
 			case "scripts.save":
 				return luaHost.saveScript(
 					stringParameter(parameters, "id"),
@@ -181,7 +199,9 @@ final class GenericClientControlServer implements AutoCloseable
 					stringParameter(parameters, "source"))
 					.get(10, TimeUnit.SECONDS);
 			case "scripts.run":
-				return luaHost.start(stringParameter(parameters, "id")).get(10, TimeUnit.SECONDS);
+				return luaHost.start(
+					stringParameter(parameters, "id"),
+					inputParameters(parameters)).get(10, TimeUnit.SECONDS);
 			case "scripts.stop":
 				return luaHost.stop().get(10, TimeUnit.SECONDS);
 			case "scripts.reload":
@@ -204,6 +224,29 @@ final class GenericClientControlServer implements AutoCloseable
 			throw new IllegalArgumentException("RPC parameter " + name + " must be a non-empty string");
 		}
 		return (String) value;
+	}
+
+	private static Map<String, Object> inputParameters(Map<String, Object> parameters)
+	{
+		Object rawInputs = parameters.get("inputs");
+		if (rawInputs == null)
+		{
+			return Collections.emptyMap();
+		}
+		if (!(rawInputs instanceof Map))
+		{
+			throw new IllegalArgumentException("RPC parameter inputs must be an object");
+		}
+		Map<String, Object> inputs = new LinkedHashMap<>();
+		for (Map.Entry<?, ?> entry : ((Map<?, ?>) rawInputs).entrySet())
+		{
+			if (!(entry.getKey() instanceof String) || !(entry.getValue() instanceof String))
+			{
+				throw new IllegalArgumentException("RPC script input values must be strings");
+			}
+			inputs.put((String) entry.getKey(), entry.getValue());
+		}
+		return inputs;
 	}
 
 	private static Map<String, Object> error(String message)

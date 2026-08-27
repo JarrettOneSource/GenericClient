@@ -20,8 +20,6 @@ import net.runelite.api.coords.WorldPoint;
 @Slf4j
 final class GenericClientLuaHost implements AutoCloseable
 {
-	static final String WALK_STRESS_SCRIPT = "walk-stress";
-	static final String LUMBRIDGE_VARROCK_SCRIPT = "lumbridge-varrock";
 	private static final String REPL_NAME = "Lua REPL";
 
 	private static final int LOG_HISTORY_SIZE = 80;
@@ -37,6 +35,7 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	private volatile String activeScript = "none";
 	private volatile String status = "IDLE";
+	private volatile Map<String, Object> activeInputs = Collections.emptyMap();
 	private volatile boolean closed;
 	private GenericClientSnapshot currentSnapshot;
 	private GenericClientLuaScript session;
@@ -72,6 +71,34 @@ final class GenericClientLuaHost implements AutoCloseable
 		return registry.list();
 	}
 
+	CompletableFuture<List<GenericClientScriptInput>> describe(String scriptId)
+	{
+		CompletableFuture<List<GenericClientScriptInput>> completion = new CompletableFuture<>();
+		scheduler.execute(() ->
+		{
+			try
+			{
+				GenericClientLuaScript descriptor = new GenericClientLuaScript(
+					this,
+					scriptId,
+					registry.readSource(scriptId));
+				try
+				{
+					completion.complete(descriptor.getInputs());
+				}
+				finally
+				{
+					descriptor.close();
+				}
+			}
+			catch (IOException | RuntimeException exception)
+			{
+				completion.completeExceptionally(exception);
+			}
+		});
+		return completion;
+	}
+
 	long getManifestRevision()
 	{
 		return registry.getRevision();
@@ -88,33 +115,42 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	CompletableFuture<String> start(String scriptId)
 	{
+		return start(scriptId, Collections.emptyMap());
+	}
+
+	CompletableFuture<String> start(String scriptId, Map<String, Object> suppliedInputs)
+	{
 		CompletableFuture<String> completion = new CompletableFuture<>();
 		scheduler.execute(() ->
 		{
+			GenericClientLuaScript candidate = null;
 			try
 			{
 				GenericClientScriptRegistry.Script definition = registry.get(scriptId);
-				GenericClientLuaScript candidate = new GenericClientLuaScript(
+				candidate = new GenericClientLuaScript(
 					this,
 					definition.getId(),
 					registry.readSource(definition.getId()));
+				Map<String, Object> resolvedInputs = GenericClientScriptInput.resolve(
+					candidate.getInputs(), suppliedInputs);
+				candidate.pinSnapshot(currentSnapshot);
+				candidate.activate(resolvedInputs);
 				if (candidate.isFinished() && "FAULTED".equals(candidate.getTerminalStatus()))
 				{
-					String fault = candidate.getFaultMessage();
-					candidate.close();
-					throw new IllegalArgumentException("Script faulted during initialization: " + fault);
+					throw new IllegalArgumentException(
+						"Script faulted during initialization: " + candidate.getFaultMessage());
 				}
 
 				GenericClientLuaScript previous = session;
 				session = candidate;
 				activeScript = scriptId;
+				activeInputs = resolvedInputs;
 				status = candidate.isFinished() ? candidate.getTerminalStatus() : "WAITING";
 				if (previous != null)
 				{
 					cancelWalkAction.accept("script_replaced");
 					previous.close();
 				}
-				candidate.activate();
 				String result;
 				if (candidate.isFinished())
 				{
@@ -130,6 +166,10 @@ final class GenericClientLuaHost implements AutoCloseable
 			}
 			catch (IOException | RuntimeException exception)
 			{
+				if (candidate != null && candidate != session)
+				{
+					candidate.close();
+				}
 				String result = "LUA_START_FAILED script=" + scriptId + " message=" + exception.getMessage();
 				publishStatus(result);
 				completion.completeExceptionally(exception);
@@ -145,7 +185,7 @@ final class GenericClientLuaHost implements AutoCloseable
 		{
 			return CompletableFuture.completedFuture("LUA_RELOAD_SKIPPED no_active_script");
 		}
-		return start(scriptName);
+		return start(scriptName, activeInputs);
 	}
 
 	CompletableFuture<String> stop()
@@ -224,6 +264,25 @@ final class GenericClientLuaHost implements AutoCloseable
 				result.put("reason", rootMessage(error));
 			}
 			return result;
+		}).whenComplete((receipt, error) -> completeAction(script, requestId, receipt, error));
+	}
+
+	void submitMouseOffscreen(GenericClientLuaScript script, long requestId)
+	{
+		behavior.moveMouseOffscreen().handle((result, error) ->
+		{
+			Map<String, Object> receipt = new LinkedHashMap<>();
+			if (error == null)
+			{
+				receipt.put("status", "moved");
+				receipt.put("result", result);
+			}
+			else
+			{
+				receipt.put("status", "rejected");
+				receipt.put("reason", rootMessage(error));
+			}
+			return receipt;
 		}).whenComplete((receipt, error) -> completeAction(script, requestId, receipt, error));
 	}
 
@@ -350,13 +409,14 @@ final class GenericClientLuaHost implements AutoCloseable
 			{
 				if (repl == null)
 				{
-					repl = new GenericClientLuaScript(this, REPL_NAME, "return function() end");
-					repl.activate();
+					repl = new GenericClientLuaScript(this, REPL_NAME, descriptor(""));
+					repl.activate(Collections.emptyMap());
 				}
 				repl.pinSnapshot(currentSnapshot);
 				replLogs.clear();
 				replCompletion = completion;
-				repl.startSource("return function()\n" + code + "\nend");
+				repl.startSource(descriptor(code));
+				repl.activate(Collections.emptyMap());
 				reconcileRepl();
 			}
 			catch (RuntimeException exception)
@@ -366,6 +426,11 @@ final class GenericClientLuaHost implements AutoCloseable
 			}
 		});
 		return completion;
+	}
+
+	private static String descriptor(String body)
+	{
+		return "return { run = function(input)\n" + body + "\nend }\n";
 	}
 
 	CompletableFuture<String> resetRepl()
@@ -453,6 +518,7 @@ final class GenericClientLuaHost implements AutoCloseable
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
 		value.put("active_script", activeScript);
+		value.put("active_inputs", new LinkedHashMap<>(activeInputs));
 		value.put("script_status", status);
 		value.put("repl_busy", replCompletion != null);
 		value.put("scripts", listScriptValues());
@@ -549,6 +615,7 @@ final class GenericClientLuaHost implements AutoCloseable
 			current.close();
 		}
 		activeScript = "none";
+		activeInputs = Collections.emptyMap();
 		status = "IDLE";
 	}
 

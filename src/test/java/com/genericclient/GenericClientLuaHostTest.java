@@ -10,6 +10,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import net.runelite.api.coords.WorldPoint;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -41,13 +43,13 @@ public class GenericClientLuaHostTest
 				"test",
 				"Test",
 				"Exercise reads, logs, and actions.",
-				"return function()\n" +
+				script(
 				"  gc.await { event = 'game.tick' }\n" +
 				"  local npcs = gc.read('npcs', { within = 15, limit = 1 })\n" +
 				"  gc.log('info', 'npc-count', { count = #npcs })\n" +
 				"  local receipt = gc.await { action = { type = 'walk.random' }, breaks = false }\n" +
-				"  gc.log('info', 'walk-result', receipt)\n" +
-				"end\n").get(2, TimeUnit.SECONDS);
+				"  gc.log('info', 'walk-result', receipt)"))
+				.get(2, TimeUnit.SECONDS);
 
 			host.start("test").get(2, TimeUnit.SECONDS);
 			host.publishGameTick(snapshot(1));
@@ -80,12 +82,12 @@ public class GenericClientLuaHostTest
 				"pinned",
 				"Pinned frame",
 				"Verify reads remain pinned for one resume.",
-				"return function()\n" +
+				script(
 				"  gc.await { event = 'game.tick' }\n" +
 				"  local first = gc.read('runtime').game_tick\n" +
 				"  local second = gc.read('runtime').game_tick\n" +
-				"  gc.log('info', 'pinned-frame', { first = first, second = second })\n" +
-				"end\n").get(2, TimeUnit.SECONDS);
+				"  gc.log('info', 'pinned-frame', { first = first, second = second })"))
+				.get(2, TimeUnit.SECONDS);
 
 			host.start("pinned").get(2, TimeUnit.SECONDS);
 			host.publishGameTick(snapshot(1));
@@ -117,7 +119,7 @@ public class GenericClientLuaHostTest
 				"infinite",
 				"Infinite",
 				"Exercise the instruction hook.",
-				"return function() while true do end end\n").get(2, TimeUnit.SECONDS);
+				script("while true do end")).get(2, TimeUnit.SECONDS);
 
 			try
 			{
@@ -151,7 +153,7 @@ public class GenericClientLuaHostTest
 				"invalid-breaks",
 				"Invalid breaks",
 				"Exercise break policy validation.",
-				"return function() gc.await { action = { type = 'walk.random' }, breaks = 'no' } end\n")
+				script("gc.await { action = { type = 'walk.random' }, breaks = 'no' }"))
 				.get(2, TimeUnit.SECONDS);
 			try
 			{
@@ -231,13 +233,13 @@ public class GenericClientLuaHostTest
 				"phase-test",
 				"Phase test",
 				"Exercise phase and action bypasses.",
-				"return function()\n" +
+				script(
 					"  local first = gc.phase('banking.complete', { breaks = false })\n" +
 					"  local second = gc.phase('banking.complete', { breaks = false })\n" +
 					"  local action = gc.await { action = { type = 'walk.random' }, breaks = false }\n" +
 					"  gc.log('info', 'phase-bypass', { first = first.status, second = second.status, " +
-					"action = action.status })\n" +
-					"end\n").get(2, TimeUnit.SECONDS);
+					"action = action.status })"))
+				.get(2, TimeUnit.SECONDS);
 
 			host.start("phase-test").get(2, TimeUnit.SECONDS);
 			waitForStatus(host, "COMPLETED");
@@ -250,6 +252,152 @@ public class GenericClientLuaHostTest
 		finally
 		{
 			host.close();
+		}
+	}
+
+	@Test
+	public void describesChoiceInputsAndPassesTheSelectedValueToRun() throws Exception
+	{
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("input-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("input-behavior").toPath()),
+			message -> { });
+		try
+		{
+			host.saveScript(
+				"input-test",
+				"Input test",
+				"Exercise descriptor inputs.",
+				"return {\n" +
+				"  inputs = {{ id = 'destination', label = 'Destination', type = 'choice',\n" +
+				"    default = 'grand_exchange', choices = {\n" +
+				"      { value = 'grand_exchange', label = 'Grand Exchange' },\n" +
+				"      { value = 'varrock_center', label = 'Varrock Center' },\n" +
+				"    } }},\n" +
+				"  run = function(input) gc.log('info', 'selected', input) end,\n" +
+				"}\n").get(2, TimeUnit.SECONDS);
+
+			List<GenericClientScriptInput> inputs = host.describe("input-test").get(2, TimeUnit.SECONDS);
+			assertEquals(1, inputs.size());
+			assertEquals("Destination", inputs.get(0).getLabel());
+			assertEquals("grand_exchange", inputs.get(0).getDefaultValue());
+
+			host.start("input-test", Collections.singletonMap("destination", "varrock_center"))
+				.get(2, TimeUnit.SECONDS);
+
+			assertEquals("COMPLETED", host.getStatus());
+			assertTrue(host.getRecentLogs().contains("destination=varrock_center"));
+			assertEquals("varrock_center",
+				((Map<?, ?>) host.controlState().get("active_inputs")).get("destination"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void rejectsValuesOutsideTheDeclaredChoices() throws Exception
+	{
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("invalid-input-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("invalid-input-behavior").toPath()),
+			message -> { });
+		try
+		{
+			host.saveScript(
+				"invalid-input",
+				"Invalid input",
+				"Exercise choice validation.",
+				"return { inputs = {{ id = 'place', label = 'Place', type = 'choice', " +
+					"choices = {{ value = 'varrock', label = 'Varrock' }} }}, " +
+					"run = function(input) return input.place end }\n")
+				.get(2, TimeUnit.SECONDS);
+
+			try
+			{
+				host.start("invalid-input", Collections.singletonMap("place", "lumbridge"))
+					.get(2, TimeUnit.SECONDS);
+				throw new AssertionError("Expected an invalid script input to fail");
+			}
+			catch (ExecutionException expected)
+			{
+				assertTrue(expected.getCause().getMessage().contains("Invalid value for script input place"));
+			}
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void walkerMapsTheSelectedLuaDestinationIntoTheCoreWalkAction() throws Exception
+	{
+		AtomicReference<WorldPoint> requestedDestination = new AtomicReference<>();
+		AtomicInteger requestedWithin = new AtomicInteger();
+		AtomicInteger requestedTimeout = new AtomicInteger();
+		AtomicInteger offscreenMoves = new AtomicInteger();
+		AtomicReference<GenericClientBehaviorProfile.Edge> offscreenEdge = new AtomicReference<>();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("walker-behavior").toPath(),
+			edge ->
+			{
+				offscreenEdge.set(edge);
+				offscreenMoves.incrementAndGet();
+			});
+		long behaviorHash = 0L;
+		while (GenericClientBehaviorProfile.fromAccountHash(behaviorHash)
+			.getShortReleaseProbability() > 0.10)
+		{
+			behaviorHash++;
+		}
+		behavior.activateAccount(behaviorHash);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("walker-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) ->
+			{
+				requestedDestination.set(destination);
+				requestedWithin.set(within);
+				requestedTimeout.set(timeout);
+				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
+				receipt.put("status", "arrived");
+				return CompletableFuture.completedFuture(receipt);
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			host.start("walker", Collections.singletonMap("destination", "edgeville_bank"))
+				.get(2, TimeUnit.SECONDS);
+			host.publishGameTick(snapshot(1));
+			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+			while (requestedDestination.get() == null && System.nanoTime() < deadline)
+			{
+				Thread.sleep(10);
+			}
+
+			assertEquals(new WorldPoint(3094, 3492, 0), requestedDestination.get());
+			assertEquals(3, requestedWithin.get());
+			assertEquals(600, requestedTimeout.get());
+			waitForStatus(host, "COMPLETED");
+			assertEquals(1, offscreenMoves.get());
+			assertEquals(GenericClientBehaviorProfile.fromAccountHash(behaviorHash).getIdleEdge(),
+				offscreenEdge.get());
+			assertTrue(host.getRecentLogs().contains("mouse=moved"));
+		}
+		finally
+		{
+			host.close();
+			behavior.close();
 		}
 	}
 
@@ -303,6 +451,11 @@ public class GenericClientLuaHostTest
 				-1,
 				null,
 				Collections.singletonList("Bank"))));
+	}
+
+	private static String script(String body)
+	{
+		return "return { run = function(input)\n" + body + "\nend }\n";
 	}
 
 	private static void waitForStatus(GenericClientLuaHost host, String expected) throws InterruptedException

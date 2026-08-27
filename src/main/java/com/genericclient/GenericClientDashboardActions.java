@@ -1,5 +1,7 @@
 package com.genericclient;
 
+import java.util.concurrent.CompletableFuture;
+
 interface GenericClientDashboardActions
 {
 	void printDiagnostics();
@@ -21,4 +23,6 @@ interface GenericClientDashboardActions
 	String saveBehaviorOverrides(GenericClientBehaviorOverrides overrides);
 
 	String resetBehaviorOverrides();
+
+	CompletableFuture<String> endLongBreak();
 }

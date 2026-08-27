@@ -29,6 +29,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 	private GenericClientBehaviorProfile generatedProfile;
 	private GenericClientBehaviorState state;
 	private CompletableFuture<Map<String, Object>> activeBreak;
+	private CompletableFuture<Void> activeBreakEffects = CompletableFuture.completedFuture(null);
 	private Cancellable breakTimer;
 	private long lastTickNanos;
 	private long activeMillisAtLastSave;
@@ -153,6 +154,17 @@ final class GenericClientBehaviorController implements AutoCloseable
 		return profile == null
 			? GenericClientBehaviorProfile.DEFAULT_MOUSE_MOVE_DURATION_MILLIS
 			: profile.getMouseMoveDurationMillis();
+	}
+
+	CompletableFuture<String> moveMouseOffscreen()
+	{
+		final GenericClientBehaviorProfile.Edge edge;
+		synchronized (this)
+		{
+			ensureProfile();
+			edge = profile.getIdleEdge();
+		}
+		return effects.moveOffscreen(edge);
 	}
 
 	synchronized void setLoggedIn(boolean loggedIn)
@@ -324,6 +336,29 @@ final class GenericClientBehaviorController implements AutoCloseable
 		return value;
 	}
 
+	CompletableFuture<Map<String, Object>> endLongBreak()
+	{
+		final CompletableFuture<Map<String, Object>> completion;
+		synchronized (this)
+		{
+			ensureOpen();
+			if (state == null || activeBreak == null || !"long".equals(state.getBreakType()))
+			{
+				return completed("not_active", "long");
+			}
+			if (breakTimer != null)
+			{
+				breakTimer.cancel();
+				breakTimer = null;
+			}
+			completion = activeBreak;
+			reporter.accept("BEHAVIOR_BREAK_END_REQUESTED type=long reason=manual");
+		}
+
+		finishActiveBreak();
+		return completion.thenApply(ignored -> receipt("ended", "long"));
+	}
+
 	synchronized boolean isPaused()
 	{
 		return activeBreak != null;
@@ -383,7 +418,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 		reporter.accept("BEHAVIOR_BREAK_STARTED type=" + type + " mode=" + mode +
 			" durationMillis=" + durationMillis + " reason=" + reason);
 
-		applyBreakEffects(type, mode);
+		activeBreakEffects = applyBreakEffects(type, mode);
 		breakTimer = timer.schedule(this::finishActiveBreak, durationMillis);
 		return activeBreak.thenApply(completed ->
 		{
@@ -397,6 +432,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 	{
 		final String type;
 		final CompletableFuture<Map<String, Object>> completion;
+		final CompletableFuture<Void> effectsCompletion;
 		synchronized (this)
 		{
 			if (activeBreak == null || state == null)
@@ -405,12 +441,13 @@ final class GenericClientBehaviorController implements AutoCloseable
 			}
 			type = state.getBreakType();
 			completion = activeBreak;
+			effectsCompletion = activeBreakEffects;
 			breakTimer = null;
 		}
 
-		CompletableFuture<String> ready = "long".equals(type)
+		CompletableFuture<String> ready = effectsCompletion.thenCompose(ignored -> "long".equals(type)
 			? effects.ensureLoggedIn()
-			: CompletableFuture.completedFuture("not_required");
+			: CompletableFuture.completedFuture("not_required"));
 		ready.whenComplete((ignored, error) ->
 		{
 			synchronized (GenericClientBehaviorController.this)
@@ -432,6 +469,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 				}
 				state.clearBreak();
 				activeBreak = null;
+				activeBreakEffects = CompletableFuture.completedFuture(null);
 				saveStateQuietly();
 				reporter.accept("BEHAVIOR_BREAK_COMPLETED type=" + type);
 				completion.complete(receipt("completed", type));
@@ -459,14 +497,14 @@ final class GenericClientBehaviorController implements AutoCloseable
 		}
 		activeBreak = new CompletableFuture<>();
 		breakTimer = timer.schedule(this::finishActiveBreak, remaining);
-		applyBreakEffects(state.getBreakType(), state.getLongBreakMode());
+		activeBreakEffects = applyBreakEffects(state.getBreakType(), state.getLongBreakMode());
 		reporter.accept("BEHAVIOR_BREAK_RESTORED type=" + state.getBreakType() +
 			" remainingMillis=" + remaining);
 	}
 
-	private void applyBreakEffects(String type, String mode)
+	private CompletableFuture<Void> applyBreakEffects(String type, String mode)
 	{
-		effects.moveOffscreen(profile.getIdleEdge())
+		return effects.moveOffscreen(profile.getIdleEdge())
 			.handle((ignored, error) ->
 			{
 				if (error != null)
@@ -481,12 +519,13 @@ final class GenericClientBehaviorController implements AutoCloseable
 			.thenCompose(ignored -> "long".equals(type) && "logout".equals(mode)
 				? effects.moveOffscreen(profile.getIdleEdge())
 				: CompletableFuture.completedFuture("not_required"))
-			.whenComplete((ignored, error) ->
+			.handle((ignored, error) ->
 			{
 				if (error != null)
 				{
 					reporter.accept("BEHAVIOR_LOGOUT_FAILED message=" + error.getMessage());
 				}
+				return null;
 			});
 	}
 
@@ -559,6 +598,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 			activeBreak.completeExceptionally(new IllegalStateException("Behavior break cancelled: " + reason));
 			activeBreak = null;
 		}
+		activeBreakEffects = CompletableFuture.completedFuture(null);
 	}
 
 	private void ensureOpen()
