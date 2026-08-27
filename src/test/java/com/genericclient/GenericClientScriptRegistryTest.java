@@ -80,6 +80,34 @@ public class GenericClientScriptRegistryTest
 			registry.readSource("custom"));
 		assertTrue(registry.readSource("npc-diagnostics").contains("run = function(input)"));
 		assertTrue(Files.readString(directory.resolve("manifest.json"))
-			.contains("genericclient_scripts.v2"));
+			.contains("genericclient_scripts.v3"));
+	}
+
+	@Test
+	public void refreshesVersionTwoBundledScriptsAndKeepsCustomEntries() throws Exception
+	{
+		Path directory = temporaryFolder.newFolder("version-two-scripts").toPath();
+		Files.writeString(directory.resolve("manifest.json"),
+			"{\n" +
+			"  \"schema\": \"genericclient_scripts.v2\",\n" +
+			"  \"scripts\": [\n" +
+			"    { \"id\": \"walker\", \"name\": \"Walker\", " +
+				"\"description\": \"Old Walker\", \"file\": \"walker.lua\" },\n" +
+			"    { \"id\": \"custom\", \"name\": \"Custom\", " +
+				"\"description\": \"Keep me\", \"file\": \"custom.lua\" }\n" +
+			"  ]\n" +
+			"}\n");
+		Files.writeString(directory.resolve("walker.lua"), "return { run = function(input) end }\n");
+		Files.writeString(directory.resolve("custom.lua"),
+			"return { run = function(input) return 'custom' end }\n");
+
+		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
+
+		assertEquals("Custom", registry.get("custom").getName());
+		assertTrue(registry.readSource("walker").contains("gc.overlay"));
+		assertEquals("return { run = function(input) return 'custom' end }\n",
+			registry.readSource("custom"));
+		assertTrue(Files.readString(directory.resolve("manifest.json"))
+			.contains("genericclient_scripts.v3"));
 	}
 }

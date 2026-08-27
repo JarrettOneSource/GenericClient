@@ -38,6 +38,7 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
     "script_save",
     "script_run",
     "script_stop",
+    "script_action",
     "script_reload_manifest",
   ]);
 
@@ -47,11 +48,13 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
     name: "script_run",
     arguments: { id: "walker", inputs: { destination: "varrock_center" } },
   });
+  await client.callTool({ name: "script_action", arguments: { action: "snapshot_now" } });
   assert.deepEqual(calls, [
     { method: "status", params: {} },
     {
       method: "scripts.run",
       params: { id: "walker", inputs: { destination: "varrock_center" } },
     },
+    { method: "scripts.action", params: { action: "snapshot_now" } },
   ]);
 });

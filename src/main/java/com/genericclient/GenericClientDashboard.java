@@ -23,6 +23,7 @@ import javax.swing.WindowConstants;
 final class GenericClientDashboard implements AutoCloseable
 {
 	private static final String AUTOMATIONS = "Automations";
+	private static final String ACTIVE_SCRIPT = "Active Script";
 	private static final String CONSOLE = "Console";
 	private static final String SETTINGS = "Settings";
 	private static final int SIDEBAR_WIDTH = 204;
@@ -35,6 +36,7 @@ final class GenericClientDashboard implements AutoCloseable
 	private final JLabel connection = GenericClientDashboardStyle.strong("Starting");
 	private final JLabel activity = GenericClientDashboardStyle.small(" ");
 	private final LongBreakBanner longBreak;
+	private final GenericClientActiveScriptPanel activeScript;
 	private final GenericClientScriptsPanel scripts;
 	private final GenericClientConsolePanel console;
 	private final GenericClientSettingsPanel settings;
@@ -45,15 +47,18 @@ final class GenericClientDashboard implements AutoCloseable
 	{
 		this.owner = owner;
 		longBreak = new LongBreakBanner(actions);
+		activeScript = new GenericClientActiveScriptPanel(host);
 		scripts = new GenericClientScriptsPanel(host);
 		console = new GenericClientConsolePanel(actions, host);
 		settings = new GenericClientSettingsPanel(actions);
 		cards.setBackground(GenericClientDashboardStyle.BACKGROUND);
+		cards.add(activeScript, ACTIVE_SCRIPT);
 		cards.add(scripts, AUTOMATIONS);
 		cards.add(console, CONSOLE);
 		cards.add(settings, SETTINGS);
 
 		navigation = Arrays.asList(
+			nav(ACTIVE_SCRIPT, GenericClientDashboardStyle.NavGlyph.ACTIVE),
 			nav(AUTOMATIONS, GenericClientDashboardStyle.NavGlyph.PLAY),
 			nav(CONSOLE, GenericClientDashboardStyle.NavGlyph.CONSOLE),
 			nav(SETTINGS, GenericClientDashboardStyle.NavGlyph.SLIDERS));
@@ -109,7 +114,11 @@ final class GenericClientDashboard implements AutoCloseable
 
 	void updateLuaState(String activeScript, String scriptStatus, String logs)
 	{
-		runOnEdt(() -> scripts.update(activeScript, scriptStatus, logs));
+		runOnEdt(() ->
+		{
+			this.activeScript.update();
+			scripts.update(activeScript, scriptStatus, logs);
+		});
 	}
 
 	void updateMouseState(

@@ -1,5 +1,6 @@
 package com.genericclient;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -36,7 +37,10 @@ final class GenericClientLuaScript implements AutoCloseable
 	private long nextRequestId;
 	private String currentPhase;
 	private List<GenericClientScriptInput> inputs = Collections.emptyList();
+	private List<GenericClientScriptAction> actions = Collections.emptyList();
 	private Map<String, Object> resolvedInputs = Collections.emptyMap();
+	private volatile List<GenericClientOverlayRow> overlayRows = Collections.emptyList();
+	private final ArrayDeque<String> pendingActions = new ArrayDeque<>();
 
 	GenericClientLuaScript(GenericClientLuaHost host, String name, String source)
 	{
@@ -75,6 +79,47 @@ final class GenericClientLuaScript implements AutoCloseable
 	Map<String, Object> getResolvedInputs()
 	{
 		return resolvedInputs;
+	}
+
+	List<GenericClientScriptAction> getActions()
+	{
+		return actions;
+	}
+
+	List<GenericClientOverlayRow> getOverlayRows()
+	{
+		return overlayRows;
+	}
+
+	String queueAction(String actionId)
+	{
+		if (finished)
+		{
+			throw new IllegalStateException("Lua script is not running");
+		}
+		boolean declared = false;
+		for (GenericClientScriptAction action : actions)
+		{
+			if (action.getId().equals(actionId))
+			{
+				declared = true;
+				break;
+			}
+		}
+		if (!declared)
+		{
+			throw new IllegalArgumentException("Unknown active script action: " + actionId);
+		}
+		if (pendingActions.contains(actionId))
+		{
+			return "already_queued";
+		}
+		if (pendingActions.size() >= 8)
+		{
+			throw new IllegalStateException("Active script action queue is full");
+		}
+		pendingActions.addLast(actionId);
+		return "queued";
 	}
 
 	void onGameTick(GenericClientSnapshot snapshot)
@@ -181,7 +226,10 @@ final class GenericClientLuaScript implements AutoCloseable
 		currentPhase = null;
 		activated = false;
 		inputs = Collections.emptyList();
+		actions = Collections.emptyList();
 		resolvedInputs = Collections.emptyMap();
+		overlayRows = Collections.emptyList();
+		pendingActions.clear();
 
 		try
 		{
@@ -197,6 +245,10 @@ final class GenericClientLuaScript implements AutoCloseable
 			Object rawInputs = lua.isNil(-1) ? null : normalizeLuaValue(lua.toObject(-1));
 			lua.pop(1);
 			inputs = GenericClientScriptInput.parse(rawInputs);
+			lua.getField(-1, "actions");
+			Object rawActions = lua.isNil(-1) ? null : normalizeLuaValue(lua.toObject(-1));
+			lua.pop(1);
+			actions = GenericClientScriptAction.parse(rawActions);
 
 			lua.getField(-1, "run");
 			if (!lua.isFunction(-1))
@@ -237,6 +289,10 @@ final class GenericClientLuaScript implements AutoCloseable
 		lua.setGlobal("__gc_read");
 		lua.push((JFunction) this::writeLog);
 		lua.setGlobal("__gc_log");
+		lua.push((JFunction) this::writeOverlay);
+		lua.setGlobal("__gc_overlay");
+		lua.push((JFunction) this::nextAction);
+		lua.setGlobal("__gc_next_action");
 		lua.push((JFunction) this::budgetHook);
 		lua.setGlobal("__gc_budget_hook");
 
@@ -251,10 +307,14 @@ final class GenericClientLuaScript implements AutoCloseable
 		lua.run(
 			"local host_read = __gc_read\n" +
 			"local host_log = __gc_log\n" +
+			"local host_overlay = __gc_overlay\n" +
+			"local host_next_action = __gc_next_action\n" +
 			"local host_yield = coroutine.yield\n" +
 			"gc = {}\n" +
 			"gc.read = host_read\n" +
 			"gc.log = host_log\n" +
+			"gc.overlay = host_overlay\n" +
+			"gc.next_action = host_next_action\n" +
 			"gc.await = function(request)\n" +
 			"  local response = host_yield({ protocol = 'gc.await.v1', request = request })\n" +
 			"  if response and response.host_error then error(response.host_error, 2) end\n" +
@@ -277,6 +337,8 @@ final class GenericClientLuaScript implements AutoCloseable
 			"collectgarbage = nil\n" +
 			"__gc_read = nil\n" +
 			"__gc_log = nil\n" +
+			"__gc_overlay = nil\n" +
+			"__gc_next_action = nil\n" +
 			"__gc_budget_hook = nil");
 
 	}
@@ -314,6 +376,43 @@ final class GenericClientLuaScript implements AutoCloseable
 		Object fields = state.getTop() >= 3 ? state.toObject(3) : null;
 		host.scriptLog(name, level, event, normalizeLuaValue(fields));
 		return 0;
+	}
+
+	private int writeOverlay(Lua state)
+	{
+		try
+		{
+			Object value = null;
+			if (state.getTop() >= 1 && !state.isNil(1))
+			{
+				if (!state.isTable(1))
+				{
+					throw new IllegalArgumentException("gc.overlay requires a row array or nil");
+				}
+				value = normalizeLuaValue(state.toObject(1));
+			}
+			overlayRows = GenericClientOverlayRow.parse(value);
+			return 0;
+		}
+		catch (RuntimeException exception)
+		{
+			state.push(exception.getMessage());
+			return -1;
+		}
+	}
+
+	private int nextAction(Lua state)
+	{
+		String action = pendingActions.pollFirst();
+		if (action == null)
+		{
+			state.pushNil();
+		}
+		else
+		{
+			state.push(action);
+		}
+		return 1;
 	}
 
 	private int budgetHook(Lua state)

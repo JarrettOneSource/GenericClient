@@ -55,12 +55,22 @@ return {
     local place = places[input.destination]
     assert(place, "Unknown Walker destination: " .. tostring(input.destination))
 
+    gc.overlay {
+      { label = "Destination", value = place.label },
+      { label = "State", value = "Starting" },
+    }
+
     gc.await { event = "game.tick" }
     gc.log("info", "walker-start", {
       place = place.label,
       destination = place.destination,
       from = gc.read("player").world,
     })
+
+    gc.overlay {
+      { label = "Destination", value = place.label },
+      { label = "State", value = "Walking" },
+    }
 
     local result = gc.await {
       action = {
@@ -72,7 +82,16 @@ return {
     }
 
     if result.status == "arrived" then
+      gc.overlay {
+        { label = "Destination", value = place.label },
+        { label = "State", value = "Arrived" },
+      }
       gc.phase("travel." .. input.destination .. ".arrived")
+    else
+      gc.overlay {
+        { label = "Destination", value = place.label },
+        { label = "State", value = result.status },
+      }
     end
 
     local idle = gc.await {

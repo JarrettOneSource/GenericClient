@@ -67,6 +67,7 @@ the same port in the MCP server configuration.
 | `script_save` | Write a complete Lua file and register or update its manifest entry. |
 | `script_run` | Start a registered script by id with optional input values. |
 | `script_stop` | Stop the active standalone script. |
+| `script_action` | Queue one action declared by the running script. |
 | `script_reload_manifest` | Reload the manifest after external file edits. |
 
 Start with `client_status` so coordinates and login state come from the current
@@ -155,7 +156,7 @@ Standalone scripts live in:
 
 ```json
 {
-  "schema": "genericclient_scripts.v2",
+  "schema": "genericclient_scripts.v3",
   "scripts": [
     {
       "id": "where-am-i",
@@ -186,6 +187,8 @@ gc.read(subject, query)
 gc.await(request)
 gc.log(level, event, fields)
 gc.phase(name, options)
+gc.overlay(rows)
+gc.next_action()
 ```
 
 A script can declare a dropdown without adding Java UI code:
@@ -204,17 +207,34 @@ return {
       },
     },
   },
+  actions = {
+    { id = "refresh", label = "Refresh" },
+  },
   run = function(input)
+    gc.overlay {
+      { label = "Destination", value = input.destination },
+    }
+    local action = gc.next_action()
     gc.log("info", "selected", { destination = input.destination })
   end,
 }
 ```
 
-`script_get` returns this input metadata. `script_run` accepts an `inputs`
+`script_get` returns the input and action metadata. `script_run` accepts an `inputs`
 object such as `{ "destination": "varrock_center" }`. Missing values use the
 declared defaults; unknown ids and values outside the declared choices fail
 before the script starts. The dashboard renders the same metadata and passes
 the selected values through the same validation path.
+
+The Active Script page shows the resolved configuration and immediate Restart
+and Stop controls. Descriptor actions become compact buttons and are also
+available through `script_action`. They enter a bounded queue; the Lua root
+coroutine consumes them cooperatively with `gc.next_action()` at a safe point.
+
+Every running standalone script automatically gets a compact RuneLite overlay
+with its display name and wall-clock runtime. `gc.overlay` may add up to three
+label/value rows. Passing `nil` clears those rows, and the whole overlay hides
+when the script stops or completes.
 
 The easiest programmatic path is `script_save`, which writes both the Lua file
 and manifest entry. For manual editing, add the file and manifest row, then

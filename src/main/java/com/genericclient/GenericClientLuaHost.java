@@ -14,6 +14,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.LongSupplier;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.coords.WorldPoint;
 
@@ -30,12 +32,14 @@ final class GenericClientLuaHost implements AutoCloseable
 	private final Consumer<String> cancelWalkAction;
 	private final GenericClientBehaviorController behavior;
 	private final Consumer<String> statusSink;
+	private final LongSupplier clock;
 	private final ExecutorService scheduler;
 	private final ArrayDeque<String> recentLogs = new ArrayDeque<>();
 
 	private volatile String activeScript = "none";
 	private volatile String status = "IDLE";
 	private volatile Map<String, Object> activeInputs = Collections.emptyMap();
+	private volatile ActiveRun activeRun;
 	private volatile boolean closed;
 	private GenericClientSnapshot currentSnapshot;
 	private GenericClientLuaScript session;
@@ -51,12 +55,32 @@ final class GenericClientLuaHost implements AutoCloseable
 		GenericClientBehaviorController behavior,
 		Consumer<String> statusSink) throws IOException
 	{
+		this(
+			scriptsDirectory,
+			walkRandomAction,
+			walkToAction,
+			cancelWalkAction,
+			behavior,
+			statusSink,
+			System::nanoTime);
+	}
+
+	GenericClientLuaHost(
+		Path scriptsDirectory,
+		WalkRandomAction walkRandomAction,
+		WalkToAction walkToAction,
+		Consumer<String> cancelWalkAction,
+		GenericClientBehaviorController behavior,
+		Consumer<String> statusSink,
+		LongSupplier clock) throws IOException
+	{
 		this.registry = new GenericClientScriptRegistry(scriptsDirectory);
 		this.walkRandomAction = walkRandomAction;
 		this.walkToAction = walkToAction;
 		this.cancelWalkAction = cancelWalkAction;
 		this.behavior = behavior;
 		this.statusSink = statusSink;
+		this.clock = clock;
 		this.scheduler = Executors.newSingleThreadExecutor(runnable ->
 		{
 			Thread thread = new Thread(runnable, "GenericClient-Lua");
@@ -73,23 +97,27 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	CompletableFuture<List<GenericClientScriptInput>> describe(String scriptId)
 	{
-		CompletableFuture<List<GenericClientScriptInput>> completion = new CompletableFuture<>();
+		return inspect(scriptId, GenericClientLuaScript::getInputs);
+	}
+
+	CompletableFuture<List<GenericClientScriptAction>> describeActions(String scriptId)
+	{
+		return inspect(scriptId, GenericClientLuaScript::getActions);
+	}
+
+	private <T> CompletableFuture<T> inspect(
+		String scriptId,
+		Function<GenericClientLuaScript, T> reader)
+	{
+		CompletableFuture<T> completion = new CompletableFuture<>();
 		scheduler.execute(() ->
 		{
-			try
+			try (GenericClientLuaScript descriptor = new GenericClientLuaScript(
+				this,
+				scriptId,
+				registry.readSource(scriptId)))
 			{
-				GenericClientLuaScript descriptor = new GenericClientLuaScript(
-					this,
-					scriptId,
-					registry.readSource(scriptId));
-				try
-				{
-					completion.complete(descriptor.getInputs());
-				}
-				finally
-				{
-					descriptor.close();
-				}
+				completion.complete(reader.apply(descriptor));
 			}
 			catch (IOException | RuntimeException exception)
 			{
@@ -146,6 +174,12 @@ final class GenericClientLuaHost implements AutoCloseable
 				activeScript = scriptId;
 				activeInputs = resolvedInputs;
 				status = candidate.isFinished() ? candidate.getTerminalStatus() : "WAITING";
+				activeRun = new ActiveRun(
+					definition,
+					candidate,
+					resolvedInputs,
+					status,
+					clock.getAsLong());
 				if (previous != null)
 				{
 					cancelWalkAction.accept("script_replaced");
@@ -197,6 +231,32 @@ final class GenericClientLuaHost implements AutoCloseable
 			String result = "LUA_STOPPED";
 			publishStatus(result);
 			completion.complete(result);
+		});
+		return completion;
+	}
+
+	CompletableFuture<String> triggerAction(String actionId)
+	{
+		CompletableFuture<String> completion = new CompletableFuture<>();
+		scheduler.execute(() ->
+		{
+			try
+			{
+				GenericClientLuaScript current = session;
+				if (current == null)
+				{
+					throw new IllegalStateException("No script is running");
+				}
+				String result = current.queueAction(actionId);
+				String receipt = "SCRIPT_ACTION_" + result.toUpperCase(java.util.Locale.ROOT) +
+					" script=" + activeScript + " action=" + actionId;
+				publishStatus(receipt);
+				completion.complete(receipt);
+			}
+			catch (RuntimeException exception)
+			{
+				completion.completeExceptionally(exception);
+			}
 		});
 		return completion;
 	}
@@ -517,6 +577,7 @@ final class GenericClientLuaHost implements AutoCloseable
 	Map<String, Object> controlState()
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
+		value.put("active", getActiveScriptView().toMap());
 		value.put("active_script", activeScript);
 		value.put("active_inputs", new LinkedHashMap<>(activeInputs));
 		value.put("script_status", status);
@@ -562,6 +623,14 @@ final class GenericClientLuaHost implements AutoCloseable
 		}
 	}
 
+	GenericClientActiveScript getActiveScriptView()
+	{
+		ActiveRun run = activeRun;
+		return run == null
+			? GenericClientActiveScript.none()
+			: run.snapshot(clock.getAsLong());
+	}
+
 	private void reconcileScript(GenericClientLuaScript expected)
 	{
 		if (expected == repl)
@@ -579,6 +648,11 @@ final class GenericClientLuaHost implements AutoCloseable
 			return;
 		}
 		status = expected.getTerminalStatus();
+		ActiveRun run = activeRun;
+		if (run != null && run.script == expected)
+		{
+			run.finish(status, expected.getOverlayRows(), clock.getAsLong());
+		}
 		publishStatus("LUA_" + status + " script=" + activeScript);
 		cancelWalkAction.accept("script_finished");
 		expected.close();
@@ -616,6 +690,7 @@ final class GenericClientLuaHost implements AutoCloseable
 		}
 		activeScript = "none";
 		activeInputs = Collections.emptyMap();
+		activeRun = null;
 		status = "IDLE";
 	}
 
@@ -661,6 +736,57 @@ final class GenericClientLuaHost implements AutoCloseable
 		finally
 		{
 			scheduler.shutdownNow();
+		}
+	}
+
+	private static final class ActiveRun
+	{
+		private final GenericClientScriptRegistry.Script definition;
+		private final GenericClientLuaScript script;
+		private final Map<String, Object> values;
+		private final long startedNanos;
+		private volatile String status;
+		private volatile long finishedNanos = -1L;
+		private volatile List<GenericClientOverlayRow> terminalOverlay = Collections.emptyList();
+
+		private ActiveRun(
+			GenericClientScriptRegistry.Script definition,
+			GenericClientLuaScript script,
+			Map<String, Object> values,
+			String status,
+			long startedNanos)
+		{
+			this.definition = definition;
+			this.script = script;
+			this.values = values;
+			this.status = status;
+			this.startedNanos = startedNanos;
+		}
+
+		private void finish(String terminalStatus, List<GenericClientOverlayRow> overlay, long nowNanos)
+		{
+			status = terminalStatus;
+			terminalOverlay = overlay;
+			finishedNanos = nowNanos;
+		}
+
+		private GenericClientActiveScript snapshot(long nowNanos)
+		{
+			long end = finishedNanos < 0L ? nowNanos : finishedNanos;
+			long runtimeMillis = TimeUnit.NANOSECONDS.toMillis(Math.max(0L, end - startedNanos));
+			List<GenericClientOverlayRow> overlay = finishedNanos < 0L
+				? script.getOverlayRows()
+				: terminalOverlay;
+			return new GenericClientActiveScript(
+				definition.getId(),
+				definition.getName(),
+				definition.getDescription(),
+				status,
+				runtimeMillis,
+				script.getInputs(),
+				values,
+				script.getActions(),
+				overlay);
 		}
 	}
 

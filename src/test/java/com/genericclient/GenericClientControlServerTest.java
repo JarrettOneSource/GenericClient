@@ -76,7 +76,10 @@ public class GenericClientControlServerTest
 				"return { inputs = {{ id = 'greeting', label = 'Greeting', type = 'choice', " +
 				"choices = {{ value = 'hello', label = 'Hello' }, " +
 				"{ value = 'goodbye', label = 'Goodbye' }} }}, " +
-				"run = function(input) gc.log('info', input.greeting) end }\n");
+				"actions = {{ id = 'refresh', label = 'Refresh' }}, " +
+				"run = function(input) gc.log('info', input.greeting); while true do " +
+				"gc.await { event = 'game.tick' }; local action = gc.next_action(); " +
+				"if action then gc.log('info', action); return action end end end }\n");
 			Map<String, Object> saved = post(server, "scripts.save", saveParameters);
 			assertEquals("hello-world", ((Map<String, Object>) saved.get("result")).get("id"));
 
@@ -87,13 +90,27 @@ public class GenericClientControlServerTest
 				(java.util.List<Map<String, Object>>) ((Map<String, Object>) fetched.get("result")).get("inputs");
 			assertEquals("greeting", inputs.get(0).get("id"));
 			assertEquals(2, ((java.util.List<?>) inputs.get(0).get("choices")).size());
+			java.util.List<Map<String, Object>> actions =
+				(java.util.List<Map<String, Object>>) ((Map<String, Object>) fetched.get("result")).get("actions");
+			assertEquals("refresh", actions.get(0).get("id"));
 
 			Map<String, Object> runParameters = new LinkedHashMap<>();
 			runParameters.put("id", "hello-world");
 			runParameters.put("inputs", Collections.singletonMap("greeting", "goodbye"));
 			assertTrue(((String) post(server, "scripts.run", runParameters).get("result"))
-				.contains("LUA_COMPLETED"));
+				.contains("LUA_STARTED"));
 			assertTrue(host.getRecentLogs().contains("INFO goodbye"));
+			Map<String, Object> actionParameters = new LinkedHashMap<>();
+			actionParameters.put("action", "refresh");
+			assertTrue(((String) post(server, "scripts.action", actionParameters).get("result"))
+				.contains("SCRIPT_ACTION_QUEUED"));
+			host.publishGameTick(snapshot(10));
+			long actionDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+			while (!host.getRecentLogs().contains("INFO refresh") && System.nanoTime() < actionDeadline)
+			{
+				Thread.sleep(10);
+			}
+			assertTrue(host.getRecentLogs().contains("INFO refresh"));
 
 			Map<String, Object> listed = post(server, "scripts.list", new LinkedHashMap<>());
 			assertTrue(((java.util.List<?>) listed.get("result")).size() >= 4);

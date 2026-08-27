@@ -84,6 +84,7 @@ public final class GenericClientPlugin extends Plugin
 
 	private GenericClientDashboard panel;
 	private GenericClientBreakOverlay breakOverlay;
+	private GenericClientScriptOverlay scriptOverlay;
 	private GenericClientControlServer controlServer;
 	private GenericClientGameInput gameInput;
 	private GenericClientSyntheticMouse syntheticMouse;
@@ -178,6 +179,7 @@ public final class GenericClientPlugin extends Plugin
 			walker::cancelActive,
 			behaviorController,
 			this::publishResult);
+		scriptOverlay = new GenericClientScriptOverlay(luaHost::getActiveScriptView);
 		controlServer = new GenericClientControlServer(
 			config.controlPort(),
 			luaHost,
@@ -199,6 +201,7 @@ public final class GenericClientPlugin extends Plugin
 
 		overlayManager.add(mouseEffectOverlay);
 		overlayManager.add(breakOverlay);
+		overlayManager.add(scriptOverlay);
 		clientToolbar.addNavigation(navigationButton);
 		refreshPanel();
 		panelRefreshFuture = executor.scheduleAtFixedRate(this::refreshPanel, 1L, 1L, TimeUnit.SECONDS);
@@ -285,6 +288,11 @@ public final class GenericClientPlugin extends Plugin
 		{
 			overlayManager.remove(breakOverlay);
 			breakOverlay = null;
+		}
+		if (scriptOverlay != null)
+		{
+			overlayManager.remove(scriptOverlay);
+			scriptOverlay = null;
 		}
 		if (navigationButton != null)
 		{

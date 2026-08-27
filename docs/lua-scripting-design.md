@@ -10,12 +10,14 @@ Build GenericClient scripting as an in-process, sequential-coroutine Lua host ov
 
 Use **LuaJava 4.1.0 with native PUC Lua 5.4** for the first implementation. Keep the runtime behind an internal seam, but ship only the Lua 5.4 adapter initially. A deterministic fake adapter is sufficient to test `ScriptHost`; a second production VM is not useful enough to justify LuaJ's language mismatch and one-Java-thread-per-coroutine behavior.
 
-Expose exactly three script-facing primitives:
+Expose five script-facing primitives:
 
 ```lua
 gc.read(subject, query) -- inspect one pinned immutable frame
 gc.await(request)       -- yield for a tick, event, or semantic action receipt
 gc.log(level, event, fields)
+gc.overlay(rows)        -- publish up to three compact label/value rows
+gc.next_action()        -- consume one dashboard action id, or nil
 ```
 
 `gc.phase(name, options)` is a Lua convenience wrapper over `gc.await`; it does
@@ -36,6 +38,9 @@ The current checkout implements:
 - per-interaction `breaks=false`, phase transitions, seeded mouse timing, and a
   behavior controller that pauses coroutine action progression without blocking control;
 - `gc.log` to `client.log` and the GenericClient dashboard;
+- `gc.overlay` plus the automatic name/runtime game overlay;
+- descriptor-declared Active Script buttons consumed cooperatively through
+  `gc.next_action`;
 - manifest-registered one-file descriptor scripts with start/reload/stop
   controls, validated `choice` inputs, and generic dashboard controls;
 - a loopback control bridge and stdio MCP server for live status, REPL evaluation,
@@ -62,6 +67,27 @@ normalized dialog, target references, and additional semantic actions remain
 intentionally absent until a concrete automation requires each one.
 
 ### Live verification receipt
+
+GenericClient 0.10.0's tested standalone artifact has SHA-256
+`f710afc53f3b158c44f2897b865ca27d0df12dd072c3032d002ee2d26c60926c`.
+The exact installed artifact started through the Jagex Launcher on stock
+RuneLite 1.12.37 and upgraded the live v2 manifest to v3 while preserving its
+custom MCP script. Nearby NPC diagnostics then proved the complete active
+presentation path:
+
+- `client_status.lua.active` reported the script, increasing wall runtime,
+  declared `snapshot_now` action, and overlay values;
+- the 53-pixel-high game overlay showed only name, runtime, NPC count, and last
+  tick;
+- Active Script showed the same running script, runtime, `Snapshot now`,
+  Restart, and Stop without diagnostics clutter;
+- clicking `Snapshot now` queued and consumed the action on the next game tick;
+- Stop returned `active: {}`, changed the host to `IDLE`, and removed the game
+  overlay;
+- completed Walker remained available on Active Script with its Destination
+  configuration and frozen terminal runtime.
+
+The artifact passed 81 Java tests plus three Node MCP tests.
 
 GenericClient 0.9.0's final standalone artifact has SHA-256
 `1734728e4f285a194a338452ad89b9935468e922a4cc0ddf24b5d73bc7905828`.
@@ -352,7 +378,7 @@ This yields excellent static validation, conflict arbitration, convergence diagn
 
 ## Selected Lua interface
 
-The initial interface has exactly three functions.
+The active interface has five functions.
 
 ### `gc.read(subject, query)`
 
@@ -429,6 +455,28 @@ After bootstrap, scripts receive only the wrapped `gc.await`; the raw coroutine 
 
 Produces a structured record. The host automatically attaches script ID, generation, source line, epoch, frame sequence, client cycle, and game tick.
 
+### `gc.overlay(rows)`
+
+Publishes zero to three compact label/value rows. RuneLite supplies the script
+name and elapsed wall-clock runtime automatically. Passing `nil` or an empty
+array clears the script rows. The overlay is visible only while the standalone
+script is running; scripts do not control coordinates, colors, fonts, or draw
+arbitrary shapes.
+
+```lua
+gc.overlay {
+  { label = "Destination", value = "Varrock" },
+  { label = "State", value = "Walking" },
+}
+```
+
+### `gc.next_action()`
+
+Returns and removes one action ID queued from Active Script or MCP, or returns
+`nil`. Actions are declared in the descriptor and processed only when the root
+coroutine reaches a safe polling point. This preserves the one-coroutine model;
+immediate lifecycle operations remain the host-owned Stop and Restart buttons.
+
 ### Complete example
 
 Each script chunk returns a descriptor. The host validates optional inputs and
@@ -436,6 +484,9 @@ uses `run(input)` as the root coroutine:
 
 ```lua
 return {
+  actions = {
+    { id = "snapshot_now", label = "Snapshot now" },
+  },
   run = function(input)
     gc.log("info", "nearby-diagnostics.started")
 
@@ -446,6 +497,14 @@ return {
         within = 15,
         limit = 50,
       })
+
+      if gc.next_action() == "snapshot_now" then
+        gc.log("info", "manual-snapshot")
+      end
+
+      gc.overlay {
+        { label = "Nearby NPCs", value = #npcs },
+      }
 
       gc.log("info", "nearby-npcs", { count = #npcs })
     end
@@ -528,15 +587,19 @@ return {
       },
     },
   },
+  actions = {
+    { id = "refresh", label = "Refresh" },
+  },
   run = function(input)
     -- script body
   end,
 }
 ```
 
-Walker is the concrete requirement that introduced the small `choice` input
-schema. Additional input types, multi-file packages, and dependency metadata
-remain deferred until an automation requires them.
+Walker introduced the small `choice` input schema. Active Script introduced
+bounded action metadata, `gc.next_action`, and three-row overlay publication.
+Additional input types, multi-file packages, and dependency metadata remain
+deferred until an automation requires them.
 
 Version the GenericClient scripting interface independently of RuneLite and Lua:
 
@@ -645,7 +708,7 @@ Required tests:
 
 1. Define the smallest immutable frame needed by a diagnostic script: runtime, local player, nearby NPCs, inventory, widgets/dialog, and generation-bearing references.
 2. Define semantic action requests and receipts, then build the client-thread dispatcher for walk, NPC/object/widget interaction, and dialog actions.
-3. Add LuaJava 4.1.0 with released PUC Lua 5.4 natives, the restricted bootstrap, private count/deadline hook, one state and root coroutine per script, and the three-function `gc` interface.
+3. Add LuaJava 4.1.0 with released PUC Lua 5.4 natives, the restricted bootstrap, private count/deadline hook, one state and root coroutine per script, and the narrow `gc` interface.
 4. Add one vertical integration script that logs nearby NPCs, interacts with a selected target, handles dialog, and proves that RuneLite's client thread never blocks.
 5. Add atomic file reload, panel start/stop/reload/status controls, structured logs, and fault traces.
 6. Add a compact frame/event/intent/receipt journal and replay the integration script without RuneLite.

@@ -1,6 +1,7 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Collections;
@@ -10,6 +11,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import net.runelite.api.coords.WorldPoint;
 import org.junit.Rule;
@@ -20,6 +22,30 @@ public class GenericClientLuaHostTest
 {
 	@Rule
 	public TemporaryFolder temporaryFolder = new TemporaryFolder();
+
+	@Test
+	public void installsBundledScriptsWithoutStartingDiagnostics() throws Exception
+	{
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("idle-start-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("idle-start-behavior").toPath()),
+			message -> { });
+		try
+		{
+			assertTrue(host.listScripts().stream()
+				.anyMatch(script -> "npc-diagnostics".equals(script.getId())));
+			assertEquals("none", host.getActiveScript());
+			assertEquals("IDLE", host.getStatus());
+			assertFalse(host.getActiveScriptView().isPresent());
+		}
+		finally
+		{
+			host.close();
+		}
+	}
 
 	@Test
 	public void runsTickReadLogAndRealActionShapeEndToEnd() throws Exception
@@ -425,6 +451,64 @@ public class GenericClientLuaHostTest
 			{
 				assertEquals("Lua host stopped", expected.getCause().getMessage());
 			}
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void exposesRuntimeOverlayAndCooperativeScriptActions() throws Exception
+	{
+		AtomicLong clock = new AtomicLong(TimeUnit.SECONDS.toNanos(10));
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("presentation-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("presentation-behavior").toPath()),
+			message -> { },
+			clock::get);
+		try
+		{
+			host.saveScript(
+				"presentation",
+				"Presentation",
+				"Exercise active script presentation.",
+				"return {\n" +
+				"  actions = {{ id = 'refresh', label = 'Refresh' }},\n" +
+				"  run = function(input)\n" +
+				"    gc.overlay {{ label = 'State', value = 'Waiting' }}\n" +
+				"    while true do\n" +
+				"      gc.await { event = 'game.tick' }\n" +
+				"      local action = gc.next_action()\n" +
+				"      if action then\n" +
+				"        gc.overlay {{ label = 'Action', value = action }}\n" +
+				"        gc.log('info', 'action-consumed', { id = action })\n" +
+				"        return action\n" +
+				"      end\n" +
+				"    end\n" +
+				"  end,\n" +
+				"}\n").get(2, TimeUnit.SECONDS);
+
+			host.start("presentation").get(2, TimeUnit.SECONDS);
+			clock.addAndGet(TimeUnit.MILLISECONDS.toNanos(5_500));
+			GenericClientActiveScript running = host.getActiveScriptView();
+			assertEquals("Presentation", running.getName());
+			assertEquals(5_500L, running.getRuntimeMillis());
+			assertEquals("refresh", running.getActions().get(0).getId());
+			assertEquals("Waiting", running.getOverlayRows().get(0).getValue());
+
+			assertTrue(host.triggerAction("refresh").get(2, TimeUnit.SECONDS).contains("QUEUED"));
+			host.publishGameTick(snapshot(1));
+			waitForStatus(host, "COMPLETED");
+
+			GenericClientActiveScript completed = host.getActiveScriptView();
+			assertEquals(5_500L, completed.getRuntimeMillis());
+			assertEquals("refresh", completed.getOverlayRows().get(0).getValue());
+			assertTrue(host.getRecentLogs().contains("action-consumed"));
+			assertEquals("presentation", ((Map<?, ?>) host.controlState().get("active")).get("id"));
 		}
 		finally
 		{

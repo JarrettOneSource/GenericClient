@@ -189,6 +189,12 @@ final class GenericClientControlServer implements AutoCloseable
 					inputs.add(input.toMap());
 				}
 				script.put("inputs", inputs);
+				List<Map<String, Object>> actions = new ArrayList<>();
+				for (GenericClientScriptAction action : luaHost.describeActions(id).get(10, TimeUnit.SECONDS))
+				{
+					actions.add(action.toMap());
+				}
+				script.put("actions", actions);
 				return script;
 			}
 			case "scripts.save":
@@ -202,6 +208,9 @@ final class GenericClientControlServer implements AutoCloseable
 				return luaHost.start(
 					stringParameter(parameters, "id"),
 					inputParameters(parameters)).get(10, TimeUnit.SECONDS);
+			case "scripts.action":
+				return luaHost.triggerAction(stringParameter(parameters, "action"))
+					.get(10, TimeUnit.SECONDS);
 			case "scripts.stop":
 				return luaHost.stop().get(10, TimeUnit.SECONDS);
 			case "scripts.reload":

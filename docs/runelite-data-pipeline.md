@@ -180,7 +180,7 @@ ClientThread -> target re-resolution -> Client.menuAction -> action receipt
 - Build world/object caches from spawn/despawn events and periodically reconcile them against a complete scene scan.
 - Record frames, events, intents, and receipts so scripts can be replay-tested without a live client.
 
-The selected Lua interface is deliberately smaller than a module for every RuneLite concept: `gc.read(subject, query)`, `gc.await(request)`, and `gc.log(level, event, fields)`. Subjects and semantic action request types can grow without expanding the top-level host seam. The complete scripting design is in [`lua-scripting-design.md`](lua-scripting-design.md).
+The selected Lua interface is deliberately smaller than a module for every RuneLite concept: `gc.read(subject, query)`, `gc.await(request)`, `gc.log(level, event, fields)`, `gc.overlay(rows)`, and `gc.next_action()`. Subjects and semantic action request types can grow without expanding the top-level host seam. The complete scripting design is in [`lua-scripting-design.md`](lua-scripting-design.md).
 
 ### Lua runtime
 
@@ -281,7 +281,7 @@ Use one game client per JVM. The injected client and RuneLite contain substantia
 
 1. Extract the smallest immutable player/NPC/inventory/widget/dialog frame from the current plugin and add epoch/generation references.
 2. Add a client-thread `ActionDispatcher` that re-resolves references and uses `Client.menuAction`; preserve the current template-generated synthetic canvas adapter as an optional visible-mode implementation.
-3. Embed LuaJava 4.1.0 plus PUC Lua 5.4, the three-function interface, one scheduler thread, one state/root coroutine per script, hidden instruction/deadline hooks, structured logs, and atomic one-file reload.
+3. Embed LuaJava 4.1.0 plus PUC Lua 5.4, the narrow scripting interface, one scheduler thread, one state/root coroutine per script, hidden instruction/deadline hooks, structured logs, and atomic one-file reload.
 4. Prove one vertical script that logs nearby NPCs, interacts with a selected target, handles dialog, and never blocks RuneLite's client thread.
 5. Add a compact frame/event/intent/receipt journal and replay that script without RuneLite.
 6. Expand snapshot subjects and action types only when concrete scripts require them.

@@ -5,7 +5,7 @@ import * as z from "zod/v4";
 
 import { GenericClientBridge } from "./bridge.mjs";
 
-const VERSION = "0.9.0";
+const VERSION = "0.10.0";
 
 function result(value) {
   return {
@@ -25,9 +25,9 @@ export function createServer(bridge = new GenericClientBridge()) {
       instructions:
         "GenericClient controls the live RuneLite client through Lua. Call client_status first. " +
         "Use lua_eval for ad-hoc exploration; its code is the body of a persistent Lua function, so return a value to receive it. " +
-        "Available Lua primitives are gc.read(subject, query), gc.await(request), and gc.log(level, event, fields). " +
+        "Available Lua primitives are gc.read, gc.await, gc.log, gc.overlay, and gc.next_action. " +
         "Each composite client interaction uses the seeded behavior profile unless breaks=false; gc.phase(name) performs a heavier phase evaluation. " +
-        "Use script_save for reusable standalone scripts, then script_run by id with any declared input values. Only one manifest script and one REPL execution run at a time.",
+        "Use script_save for reusable standalone scripts, script_run with declared inputs, and script_action for declared buttons. Only one manifest script and one REPL execution run at a time.",
     },
   );
 
@@ -190,7 +190,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Save Lua script",
       description:
-        "Create or replace a standalone Lua script and register it in scripts/manifest.json. Source must return a descriptor table with a run function and optional inputs. Use a short lowercase id such as inspect-varrock-npcs.",
+        "Create or replace a standalone Lua script and register it in scripts/manifest.json. Source must return a descriptor table with a run function and optional inputs/actions. Use a short lowercase id such as inspect-varrock-npcs.",
       inputSchema: z.object({
         id: z
           .string()
@@ -251,6 +251,25 @@ export function createServer(bridge = new GenericClientBridge()) {
       },
     },
     async () => result(await bridge.call("scripts.stop")),
+  );
+
+  server.registerTool(
+    "script_action",
+    {
+      title: "Trigger active script action",
+      description:
+        "Queue one action declared by the running script. The Lua coroutine consumes it cooperatively with gc.next_action().",
+      inputSchema: z.object({
+        action: z.string().min(1).describe("Declared action id from client_status or script_get."),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ action }) => result(await bridge.call("scripts.action", { action })),
   );
 
   server.registerTool(

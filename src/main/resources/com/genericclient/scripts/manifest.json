@@ -1,5 +1,5 @@
 {
-  "schema": "genericclient_scripts.v2",
+  "schema": "genericclient_scripts.v3",
   "scripts": [
     {
       "id": "walker",

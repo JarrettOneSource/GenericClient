@@ -35,6 +35,8 @@ through `ExternalPluginManager.loadBuiltin` without development mode.
 
 Click the GenericClient toolbar icon to open the resizable dashboard popout:
 
+- **Active Script** shows the current script, elapsed runtime, configuration,
+  cooperative script buttons, Restart, and Stop.
 - **Automations** runs manifest scripts and shows their output.
 - **Console** contains the Lua REPL plus the three diagnostic actions.
 - **Settings** contains mouse movement/trail options and the behavior profile.
@@ -58,7 +60,8 @@ Editable scripts are installed in:
 stable id, display name, description, and Lua filename. Press **Reload
 manifest** after editing it manually.
 
-`npc-diagnostics.lua` can log nearby NPC snapshots on demand. `walk-stress.lua`
+`npc-diagnostics.lua` is never started automatically; run it on demand when a
+snapshot stream is needed. `walk-stress.lua`
 is a manual three-click stress script that uses the existing ground-tile
 interaction. `walker.lua` exposes a destination dropdown and can walk to the
 Grand Exchange, Varrock, Edgeville, Falador, Draynor, or Lumbridge through the
@@ -71,6 +74,8 @@ gc.read(subject, query)
 gc.await(request)
 gc.log(level, event, fields)
 gc.phase(name, options)
+gc.overlay(rows)
+gc.next_action()
 ```
 
 Implemented reads are `runtime`, `player`, `npcs`, and `behavior`. Implemented waits are
@@ -119,9 +124,9 @@ and it does not yet overlay the loaded scene's dynamic collision. Exact design,
 map provenance, diagnostics, and live receipts are in
 [`docs/walker-design.md`](docs/walker-design.md).
 
-Each Lua file returns a descriptor. The optional `inputs` array tells the
-dashboard what controls to render; `run(input)` receives the selected values.
-The first concrete input type is `choice`:
+Each Lua file returns a descriptor. The optional `inputs` and `actions` arrays
+tell the dashboard what controls to render; `run(input)` receives the selected
+values. The first concrete input type is `choice`:
 
 ```lua
 return {
@@ -137,23 +142,36 @@ return {
       },
     },
   },
+  actions = {
+    { id = "refresh", label = "Refresh" },
+  },
   run = function(input)
     gc.await { event = "game.tick" }
+    gc.overlay {
+      { label = "Destination", value = input.destination },
+      { label = "State", value = "Waiting" },
+    }
+    local action = gc.next_action()
     gc.log("info", "selected", { destination = input.destination })
   end,
 }
 ```
 
 The dashboard and `script_run` validate supplied values against that descriptor.
+Active Script buttons enqueue their declared ID; Lua consumes one queued ID at
+a safe point with `gc.next_action()`. Stop and Restart remain immediate host
+actions. `gc.overlay` accepts at most three label/value rows. While a script is
+running, RuneLite renders those rows beneath a compact automatic name/runtime
+header; the overlay disappears when the script stops or completes.
 The destination names and coordinates in Walker stay in Lua; collision loading,
 pathfinding, camera projection, and synthetic clicking stay in the Java plugin.
 After its route and arrival phase finish, Walker uses `mouse.offscreen` to park
 the synthetic cursor at the active behavior profile's stable idle edge.
 
-On first 0.9 startup, a version-1 manifest is upgraded and its bundled scripts
-are replaced with descriptor-based versions. Custom entries and files are kept;
-custom scripts written for 0.8 must change their root return value from a
-function to `{ run = function(input) ... end }`.
+On first 0.10 startup, a version-1 or version-2 manifest is upgraded and its
+bundled scripts are refreshed. Custom entries and files are kept. Custom scripts
+written for 0.8 must change their root return value from a function to
+`{ run = function(input) ... end }`.
 
 The active design is documented in
 [`docs/lua-scripting-design.md`](docs/lua-scripting-design.md). The packet-driven
@@ -220,11 +238,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.9.0.jar`
-- `build/libs/GenericClient-0.9.0-all.jar`
+- `build/libs/generic-client-0.10.0.jar`
+- `build/libs/GenericClient-0.10.0-all.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.9.0-all.jar
+java -ea -jar build/libs/GenericClient-0.10.0-all.jar
 ```

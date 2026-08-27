@@ -25,8 +25,10 @@ import java.util.regex.Pattern;
 
 final class GenericClientScriptRegistry
 {
-	private static final String SCHEMA = "genericclient_scripts.v2";
-	private static final String LEGACY_SCHEMA = "genericclient_scripts.v1";
+	private static final String SCHEMA = "genericclient_scripts.v3";
+	private static final Set<String> PREVIOUS_SCHEMAS = Set.of(
+		"genericclient_scripts.v1",
+		"genericclient_scripts.v2");
 	private static final String MANIFEST_FILE = "manifest.json";
 	private static final String RESOURCE_DIRECTORY = "/com/genericclient/scripts/";
 	private static final Pattern SCRIPT_ID = Pattern.compile("[a-z0-9][a-z0-9_-]*");
@@ -36,7 +38,7 @@ final class GenericClientScriptRegistry
 		"npc-diagnostics.lua",
 		"walk-stress.lua"
 	};
-	private static final Set<String> LEGACY_BUNDLED_IDS = Set.of(
+	private static final Set<String> BUNDLED_IDS = Set.of(
 		"lumbridge-varrock",
 		"npc-diagnostics",
 		"walk-stress",
@@ -169,9 +171,9 @@ final class GenericClientScriptRegistry
 		}
 
 		ManifestFile existing = readManifest(manifestPath);
-		if (LEGACY_SCHEMA.equals(existing.schema))
+		if (PREVIOUS_SCHEMAS.contains(existing.schema))
 		{
-			migrateLegacyManifest(existing);
+			migrateBundledManifest(existing);
 			return;
 		}
 
@@ -184,7 +186,7 @@ final class GenericClientScriptRegistry
 		}
 	}
 
-	private void migrateLegacyManifest(ManifestFile existing) throws IOException
+	private void migrateBundledManifest(ManifestFile existing) throws IOException
 	{
 		if (existing.scripts == null)
 		{
@@ -199,7 +201,7 @@ final class GenericClientScriptRegistry
 		}
 		for (ManifestScript entry : existing.scripts)
 		{
-			if (entry != null && !LEGACY_BUNDLED_IDS.contains(entry.id))
+			if (entry != null && !BUNDLED_IDS.contains(entry.id))
 			{
 				scripts.add(toScript(entry));
 			}

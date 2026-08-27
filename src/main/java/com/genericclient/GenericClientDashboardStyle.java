@@ -95,6 +95,7 @@ final class GenericClientDashboardStyle
 
 	enum NavGlyph
 	{
+		ACTIVE,
 		PLAY,
 		CONSOLE,
 		SLIDERS
@@ -493,6 +494,10 @@ final class GenericClientDashboardStyle
 		copy.setStroke(new BasicStroke(1.7f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
 		switch (glyph)
 		{
+			case ACTIVE:
+				copy.draw(new Ellipse2D.Float(x + 3, y + 3, 10, 10));
+				copy.fill(new Ellipse2D.Float(x + 6, y + 6, 4, 4));
+				break;
 			case PLAY:
 			{
 				Path2D.Float play = new Path2D.Float();
