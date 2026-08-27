@@ -20,7 +20,6 @@ import net.runelite.api.coords.WorldPoint;
 @Slf4j
 final class GenericClientLuaHost implements AutoCloseable
 {
-	static final String DIAGNOSTIC_SCRIPT = "npc-diagnostics";
 	static final String WALK_STRESS_SCRIPT = "walk-stress";
 	static final String LUMBRIDGE_VARROCK_SCRIPT = "lumbridge-varrock";
 	private static final String REPL_NAME = "Lua REPL";

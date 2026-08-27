@@ -49,10 +49,14 @@ override; **Use seeded** restores the derived value.
 
 Settings offers three client-only effects:
 
-- **Off** draws nothing.
+- **Off** disables the trail/path decoration.
 - **Trail** draws PMouse's green 1.8-second fading cursor trail.
 - **Path** draws the current generated route in cyan and completed progress in
   green.
+
+The synthetic cursor itself is always visible. Inside the canvas it is drawn as
+a white pointer with a green origin mark. Off-canvas idle is represented by a
+small directional badge pinned to the matching canvas edge.
 
 The port keeps the original PMouse colors, line weights, point limits, and
 cosine fade. It draws in a RuneLite overlay and does not move the operating

@@ -16,10 +16,8 @@ import java.util.concurrent.CompletableFuture;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
-import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JTabbedPane;
-import javax.swing.Scrollable;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -30,7 +28,7 @@ public class GenericClientDashboardTest
 	public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
 	@Test
-	public void keepsTheDashboardToThreeFocusedTabs() throws Exception
+	public void keepsThePopoutToThreeFocusedDestinations() throws Exception
 	{
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("scripts").toPath(),
@@ -41,26 +39,21 @@ public class GenericClientDashboardTest
 			message -> { });
 		try
 		{
-			GenericClientDashboard dashboard = new GenericClientDashboard(new FakeActions(), host);
-			JTabbedPane tabs = find(dashboard, JTabbedPane.class);
-			assertEquals(3, tabs.getTabCount());
-			assertEquals("Scripts", tabs.getTitleAt(0));
-			assertEquals("Console", tabs.getTitleAt(1));
-			assertEquals("Settings", tabs.getTitleAt(2));
-			for (int index = 0; index < tabs.getTabCount(); index++)
-			{
-				JScrollPane scroll = find((Container) tabs.getComponentAt(index), JScrollPane.class);
-				Scrollable page = (Scrollable) scroll.getViewport().getView();
-				assertTrue(page.getScrollableTracksViewportWidth());
-			}
+			GenericClientDashboard dashboard = new GenericClientDashboard(null, new FakeActions(), host);
+			JPanel content = dashboard.getContent();
+			assertTrue(findOrNull(content, JTabbedPane.class) == null);
+			assertTrue(buttonOrNull(content, "Automations") != null);
+			assertTrue(buttonOrNull(content, "Console") != null);
+			assertTrue(buttonOrNull(content, "Settings") != null);
 
-			List<String> labels = labels(dashboard);
+			List<String> labels = labels(content);
 			assertTrue(labels.contains("Micro chance %"));
 			assertTrue(labels.contains("Mouse move ms"));
 			assertTrue(labels.contains("Effect"));
 			assertFalse(labels.contains("Game ticks"));
 			assertFalse(labels.contains("Long pressure"));
 			assertFalse(labels.contains("Nearby NPCs:"));
+			dashboard.close();
 		}
 		finally
 		{

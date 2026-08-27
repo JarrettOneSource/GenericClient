@@ -5,6 +5,7 @@ import java.awt.GridLayout;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import javax.swing.Box;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
@@ -12,7 +13,6 @@ import javax.swing.JPanel;
 import javax.swing.JSpinner;
 import javax.swing.JTextArea;
 import javax.swing.SpinnerNumberModel;
-import net.runelite.client.ui.ColorScheme;
 
 final class GenericClientSettingsPanel extends JPanel
 {
@@ -54,18 +54,22 @@ final class GenericClientSettingsPanel extends JPanel
 	{
 		this.actions = actions;
 		setLayout(new java.awt.BorderLayout());
-		setBackground(ColorScheme.DARK_GRAY_COLOR);
-		setControlWidth(mouseEffect, 86);
-		setControlWidth(mouseProfile, 86);
-		setControlWidth(longStyle, 86);
-		setControlWidth(idleEdge, 86);
+		setBackground(GenericClientDashboardStyle.BACKGROUND);
+		setControlWidth(mouseEffect, 180);
+		setControlWidth(mouseProfile, 180);
+		setControlWidth(longStyle, 180);
+		setControlWidth(idleEdge, 180);
+		GenericClientDashboardStyle.styleControl(mouseEffect);
+		GenericClientDashboardStyle.styleControl(mouseProfile);
+		GenericClientDashboardStyle.styleControl(longStyle);
+		GenericClientDashboardStyle.styleControl(idleEdge);
 		JPanel page = GenericClientDashboardStyle.page();
 
 		JPanel mouse = GenericClientDashboardStyle.section("Mouse");
 		mouse.add(GenericClientDashboardStyle.settingRow("Effect", mouseEffect));
 		mouse.add(GenericClientDashboardStyle.settingRow("Profile", mouseProfile));
 		JPanel mouseButtons = new JPanel(new GridLayout(1, 3, 4, 4));
-		mouseButtons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		mouseButtons.setOpaque(false);
 		JButton reload = GenericClientDashboardStyle.button("Reload");
 		reload.addActionListener(event -> actions.reloadMouseProfile());
 		mouseButtons.add(reload);
@@ -76,12 +80,13 @@ final class GenericClientSettingsPanel extends JPanel
 		mouse.add(mouseButtons);
 		mouse.add(recordingState);
 		page.add(mouse);
+		page.add(Box.createVerticalStrut(14));
 
 		JPanel behavior = GenericClientDashboardStyle.section("Behavior");
 		behavior.add(behaviorSource);
 		behaviorSummary.setEditable(false);
 		behaviorSummary.setFont(behaviorSource.getFont());
-		behavior.add(GenericClientDashboardStyle.scroll(behaviorSummary, 105));
+		behavior.add(GenericClientDashboardStyle.scroll(behaviorSummary, 125));
 		behavior.add(GenericClientDashboardStyle.settingRow("Micro chance %", microChance));
 		behavior.add(GenericClientDashboardStyle.settingRow("Micro length s", microLength));
 		behavior.add(GenericClientDashboardStyle.settingRow("Micro tail %", microTail));
@@ -93,8 +98,8 @@ final class GenericClientSettingsPanel extends JPanel
 		behavior.add(GenericClientDashboardStyle.settingRow("Idle side", idleEdge));
 		behavior.add(GenericClientDashboardStyle.settingRow("Mouse move ms", mouseDuration));
 		JPanel behaviorButtons = new JPanel(new GridLayout(1, 2, 4, 4));
-		behaviorButtons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		JButton save = GenericClientDashboardStyle.button("Save custom");
+		behaviorButtons.setOpaque(false);
+		JButton save = GenericClientDashboardStyle.primaryButton("Save custom");
 		save.addActionListener(event -> saveBehavior());
 		behaviorButtons.add(save);
 		JButton seeded = GenericClientDashboardStyle.button("Use seeded");
@@ -111,7 +116,7 @@ final class GenericClientSettingsPanel extends JPanel
 
 		wireMouseActions();
 		wireBehaviorDirtyState();
-		add(new javax.swing.JScrollPane(page), java.awt.BorderLayout.CENTER);
+		add(GenericClientDashboardStyle.pageScroll(page), java.awt.BorderLayout.CENTER);
 	}
 
 	void updateMouse(
@@ -270,7 +275,8 @@ final class GenericClientSettingsPanel extends JPanel
 		JSpinner spinner = new JSpinner(new SpinnerNumberModel(value, minimum, maximum, step));
 		spinner.setEditor(new JSpinner.NumberEditor(spinner,
 			step.doubleValue() < 1.0 ? "0.0" : "0"));
-		setControlWidth(spinner, 72);
+		GenericClientDashboardStyle.styleControl(spinner);
+		setControlWidth(spinner, 120);
 		return spinner;
 	}
 

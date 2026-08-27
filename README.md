@@ -33,9 +33,9 @@ Copy-Item "$env:LOCALAPPDATA\RuneLite\config.stock.json" `
 This launches the current stock RuneLite release and loads `GenericClientPlugin`
 through `ExternalPluginManager.loadBuiltin` without development mode.
 
-After logging in, open the three-tab GenericClient dashboard:
+Click the GenericClient toolbar icon to open the resizable dashboard popout:
 
-- **Scripts** runs manifest scripts and shows their output.
+- **Automations** runs manifest scripts and shows their output.
 - **Console** contains the Lua REPL plus the three diagnostic actions.
 - **Settings** contains mouse movement/trail options and the behavior profile.
 
@@ -55,8 +55,8 @@ Editable scripts are installed in:
 stable id, display name, description, and Lua filename. Press **Reload
 manifest** after editing it manually.
 
-`npc-diagnostics.lua` starts with the plugin and logs nearby NPC snapshots every
-five game ticks. `walk-stress.lua` is a manual three-click stress script that
+`npc-diagnostics.lua` can log nearby NPC snapshots on demand. `walk-stress.lua`
+is a manual three-click stress script that
 uses the existing ground-tile interaction. `lumbridge-varrock.lua` walks
 to Varrock and has been live-tested from Falador using the same public
 `walk.to` action.
@@ -161,7 +161,9 @@ Mouse movement uses a local Template Match implementation with the bundled
 6,069-trajectory recorded profile. Generated paths are injected into RuneLite's
 canvas; only manual profile recording reads the real cursor. The dashboard can
 show PMouse's fading **Trail**, the active **Path** with green progress, or no
-effect. Profiles live in:
+extra effect. A synthetic cursor is always drawn on the game canvas; when it
+moves off-canvas, a small arrow is pinned to the corresponding edge. Profiles
+live in:
 
 ```text
 ~/.runelite/genericclient/mouse-profiles/
@@ -190,11 +192,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.7.0.jar`
-- `build/libs/GenericClient-0.7.0-all.jar`
+- `build/libs/generic-client-0.8.0.jar`
+- `build/libs/GenericClient-0.8.0-all.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.7.0-all.jar
+java -ea -jar build/libs/GenericClient-0.8.0-all.jar
 ```

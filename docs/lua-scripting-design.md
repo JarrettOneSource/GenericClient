@@ -35,7 +35,7 @@ The current checkout implements:
 - per-interaction `breaks=false`, phase transitions, seeded mouse timing, and a
   behavior controller that pauses coroutine action progression without blocking control;
 - `gc.log` to `client.log` and the GenericClient dashboard;
-- manifest-registered one-file scripts with start/reload/stop controls and automatic NPC diagnostics;
+- manifest-registered one-file scripts with start/reload/stop controls and on-demand NPC diagnostics;
 - a loopback control bridge and stdio MCP server for live status, REPL evaluation,
   script registration, and on-demand execution;
 - a bounded three-click `walk-stress.lua` automation;
@@ -59,6 +59,13 @@ normalized dialog, target references, and additional semantic actions remain
 intentionally absent until a concrete automation requires each one.
 
 ### Live verification receipt
+
+GenericClient 0.8.0 had SHA-256
+`0abcc592b262f93531102ecce75fbdf7d33b375a6cc187623e4c71c72370d197`.
+The exact installed artifact opened its resizable dashboard from RuneLite's
+toolbar, rendered the persistent synthetic cursor, showed a directional
+off-canvas badge, and displayed an active-break-only `MICRO · 5s` pill. It
+passed 63 Java tests plus three Node MCP tests.
 
 GenericClient 0.7.0 had SHA-256
 `aaf462ae63fe050a6b55d35a6e65ab499649902e4660d776bf420293597f6cd0`.

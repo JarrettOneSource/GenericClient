@@ -41,7 +41,7 @@ import net.runelite.client.ui.overlay.OverlayManager;
 @Slf4j
 @PluginDescriptor(
 	name = "GenericClient",
-	description = "Lua automation dashboard with seeded behavior profiles and synthetic client input",
+	description = "Popout Lua automation dashboard with seeded behavior profiles and synthetic client input",
 	tags = {"genericclient", "diagnostics", "lua", "scripting", "mouse", "mcp", "behavior", "dashboard"},
 	loadInSafeMode = false
 )
@@ -83,6 +83,7 @@ public final class GenericClientPlugin extends Plugin
 	private boolean initialNpcSnapshotLogged;
 
 	private GenericClientDashboard panel;
+	private GenericClientBreakOverlay breakOverlay;
 	private GenericClientControlServer controlServer;
 	private GenericClientGameInput gameInput;
 	private GenericClientSyntheticMouse syntheticMouse;
@@ -154,6 +155,11 @@ public final class GenericClientPlugin extends Plugin
 			GenericClientBehaviorController.systemClock(),
 			GenericClientBehaviorController.secureRandom(),
 			this::publishResult);
+		breakOverlay = new GenericClientBreakOverlay(() ->
+		{
+			GenericClientBehaviorController behaviors = behaviorController;
+			return behaviors == null ? null : behaviors.status();
+		});
 		gameInput = new GenericClientGameInput(
 			client,
 			clientThread,
@@ -180,15 +186,19 @@ public final class GenericClientPlugin extends Plugin
 			this::controlStatus,
 			this::publishResult);
 		controlServer.start();
-		panel = new GenericClientDashboard(dashboardActions(), luaHost);
+		panel = new GenericClientDashboard(
+			javax.swing.SwingUtilities.getWindowAncestor(client.getCanvas()),
+			dashboardActions(),
+			luaHost);
 		navigationButton = NavigationButton.builder()
 			.tooltip("GenericClient")
 			.icon(createIcon())
 			.priority(1)
-			.panel(panel)
+			.onClick(panel::open)
 			.build();
 
 		overlayManager.add(mouseEffectOverlay);
+		overlayManager.add(breakOverlay);
 		clientToolbar.addNavigation(navigationButton);
 		refreshPanel();
 		panelRefreshFuture = executor.scheduleAtFixedRate(this::refreshPanel, 1L, 1L, TimeUnit.SECONDS);
@@ -214,7 +224,6 @@ public final class GenericClientPlugin extends Plugin
 		{
 			activateBehaviorProfile();
 		}
-		luaHost.start(GenericClientLuaHost.DIAGNOSTIC_SCRIPT);
 	}
 
 	@Override
@@ -225,6 +234,11 @@ public final class GenericClientPlugin extends Plugin
 		{
 			panelRefreshFuture.cancel(false);
 			panelRefreshFuture = null;
+		}
+		if (panel != null)
+		{
+			panel.close();
+			panel = null;
 		}
 		if (controlServer != null)
 		{
@@ -267,6 +281,11 @@ public final class GenericClientPlugin extends Plugin
 			syntheticMouse = null;
 		}
 		overlayManager.remove(mouseEffectOverlay);
+		if (breakOverlay != null)
+		{
+			overlayManager.remove(breakOverlay);
+			breakOverlay = null;
+		}
 		if (navigationButton != null)
 		{
 			clientToolbar.removeNavigation(navigationButton);

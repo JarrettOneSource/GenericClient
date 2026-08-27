@@ -5,7 +5,7 @@ import * as z from "zod/v4";
 
 import { GenericClientBridge } from "./bridge.mjs";
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
 
 function result(value) {
   return {

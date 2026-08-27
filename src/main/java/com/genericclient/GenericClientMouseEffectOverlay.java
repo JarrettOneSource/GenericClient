@@ -6,6 +6,7 @@ import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.Point;
 import java.awt.RenderingHints;
+import java.awt.geom.Path2D;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -44,6 +45,8 @@ final class GenericClientMouseEffectOverlay extends Overlay
 	private final ArrayDeque<TrailPoint> trail = new ArrayDeque<>();
 	private List<PathPoint> activePath = Collections.emptyList();
 	private int activePathIndex = -1;
+	private Point cursorPoint = new Point(0, 0);
+	private boolean cursorOutside;
 
 	@Inject
 	private GenericClientMouseEffectOverlay(Client client, GenericClientConfig config)
@@ -86,6 +89,19 @@ final class GenericClientMouseEffectOverlay extends Overlay
 			{
 				trail.removeFirst();
 			}
+		}
+	}
+
+	void updateCursor(Point point, boolean outside)
+	{
+		if (point == null)
+		{
+			return;
+		}
+		synchronized (lock)
+		{
+			cursorPoint = new Point(point);
+			cursorOutside = outside;
 		}
 	}
 
@@ -140,17 +156,16 @@ final class GenericClientMouseEffectOverlay extends Overlay
 	public Dimension render(Graphics2D graphics)
 	{
 		GenericClientMouseEffect selected = effect.get();
-		if (selected == GenericClientMouseEffect.OFF)
-		{
-			clear();
-			return null;
-		}
 
 		Graphics2D copy = (Graphics2D) graphics.create();
 		try
 		{
 			copy.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-			if (selected == GenericClientMouseEffect.TRAIL)
+			if (selected == GenericClientMouseEffect.OFF)
+			{
+				clear();
+			}
+			else if (selected == GenericClientMouseEffect.TRAIL)
 			{
 				drawTrail(copy);
 			}
@@ -158,12 +173,103 @@ final class GenericClientMouseEffectOverlay extends Overlay
 			{
 				drawPath(copy);
 			}
+			drawCursor(copy);
 		}
 		finally
 		{
 			copy.dispose();
 		}
 		return null;
+	}
+
+	private void drawCursor(Graphics2D graphics)
+	{
+		Point point;
+		boolean outside;
+		synchronized (lock)
+		{
+			point = new Point(cursorPoint);
+			outside = cursorOutside;
+		}
+		if (outside || !inside(point))
+		{
+			drawOffscreenIndicator(graphics, point);
+			return;
+		}
+
+		int x = Math.max(1, Math.min(Math.max(1, canvasWidth.getAsInt() - 17), point.x));
+		int y = Math.max(1, Math.min(Math.max(1, canvasHeight.getAsInt() - 22), point.y));
+		Path2D cursor = new Path2D.Double();
+		cursor.moveTo(x, y);
+		cursor.lineTo(x, y + 18);
+		cursor.lineTo(x + 5, y + 13);
+		cursor.lineTo(x + 10, y + 21);
+		cursor.lineTo(x + 14, y + 19);
+		cursor.lineTo(x + 9, y + 11);
+		cursor.lineTo(x + 16, y + 10);
+		cursor.closePath();
+
+		graphics.translate(1, 1);
+		graphics.setColor(new Color(0, 0, 0, 180));
+		graphics.fill(cursor);
+		graphics.translate(-1, -1);
+		graphics.setColor(new Color(245, 248, 250, 245));
+		graphics.fill(cursor);
+		graphics.setStroke(new BasicStroke(1.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+		graphics.setColor(new Color(20, 25, 31, 235));
+		graphics.draw(cursor);
+		graphics.setColor(TRAIL_COLOR);
+		graphics.fillOval(x + 2, y + 3, 4, 4);
+	}
+
+	private void drawOffscreenIndicator(Graphics2D graphics, Point point)
+	{
+		int width = Math.max(1, canvasWidth.getAsInt());
+		int height = Math.max(1, canvasHeight.getAsInt());
+		int x;
+		int y;
+		Direction direction;
+		if (point.x < 0)
+		{
+			x = 11;
+			y = clamp(point.y, 11, height - 12);
+			direction = Direction.LEFT;
+		}
+		else if (point.x >= width)
+		{
+			x = width - 12;
+			y = clamp(point.y, 11, height - 12);
+			direction = Direction.RIGHT;
+		}
+		else if (point.y < 0)
+		{
+			x = clamp(point.x, 11, width - 12);
+			y = 11;
+			direction = Direction.TOP;
+		}
+		else
+		{
+			x = clamp(point.x, 11, width - 12);
+			y = height - 12;
+			direction = Direction.BOTTOM;
+		}
+
+		graphics.setColor(new Color(12, 17, 23, 220));
+		graphics.fillOval(x - 10, y - 10, 20, 20);
+		graphics.setStroke(new BasicStroke(1.4f));
+		graphics.setColor(new Color(TRAIL_COLOR.getRed(), TRAIL_COLOR.getGreen(), TRAIL_COLOR.getBlue(), 235));
+		graphics.drawOval(x - 10, y - 10, 20, 20);
+		Path2D arrow = direction.arrow(x, y);
+		graphics.fill(arrow);
+	}
+
+	private static int clamp(int value, int minimum, int maximum)
+	{
+		if (maximum < minimum)
+		{
+			return Math.max(0, maximum / 2);
+		}
+		return Math.max(minimum, Math.min(maximum, value));
 	}
 
 	private void drawTrail(Graphics2D graphics)
@@ -262,6 +368,46 @@ final class GenericClientMouseEffectOverlay extends Overlay
 	{
 		activePath = Collections.emptyList();
 		activePathIndex = -1;
+	}
+
+	private enum Direction
+	{
+		LEFT,
+		RIGHT,
+		TOP,
+		BOTTOM;
+
+		private Path2D arrow(int x, int y)
+		{
+			Path2D path = new Path2D.Double();
+			switch (this)
+			{
+				case LEFT:
+					path.moveTo(x - 6, y);
+					path.lineTo(x + 3, y - 5);
+					path.lineTo(x + 3, y + 5);
+					break;
+				case RIGHT:
+					path.moveTo(x + 6, y);
+					path.lineTo(x - 3, y - 5);
+					path.lineTo(x - 3, y + 5);
+					break;
+				case TOP:
+					path.moveTo(x, y - 6);
+					path.lineTo(x - 5, y + 3);
+					path.lineTo(x + 5, y + 3);
+					break;
+				case BOTTOM:
+					path.moveTo(x, y + 6);
+					path.lineTo(x - 5, y - 3);
+					path.lineTo(x + 5, y - 3);
+					break;
+				default:
+					throw new IllegalStateException("Unknown direction: " + this);
+			}
+			path.closePath();
+			return path;
+		}
 	}
 
 	private static final class TrailPoint

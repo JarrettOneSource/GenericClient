@@ -2,13 +2,13 @@ package com.genericclient;
 
 import java.awt.Dimension;
 import java.awt.GridLayout;
+import javax.swing.Box;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
-import net.runelite.client.ui.ColorScheme;
 
 final class GenericClientScriptsPanel extends JPanel
 {
@@ -23,20 +23,21 @@ final class GenericClientScriptsPanel extends JPanel
 	{
 		this.host = host;
 		setLayout(new java.awt.BorderLayout());
-		setBackground(ColorScheme.DARK_GRAY_COLOR);
+		setBackground(GenericClientDashboardStyle.BACKGROUND);
 		JPanel page = GenericClientDashboardStyle.page();
 
 		JPanel runner = GenericClientDashboardStyle.section("Scripts");
 		runner.add(GenericClientDashboardStyle.row("Active", status));
 		scripts.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
+		GenericClientDashboardStyle.styleControl(scripts);
 		scripts.addActionListener(event -> updateDescription());
 		runner.add(scripts);
 		description.setEditable(false);
 		runner.add(GenericClientDashboardStyle.scroll(description, 55));
 
-		JPanel buttons = new JPanel(new GridLayout(2, 2, 4, 4));
-		buttons.setBackground(ColorScheme.DARKER_GRAY_COLOR);
-		JButton run = GenericClientDashboardStyle.button("Run");
+		JPanel buttons = new JPanel(new GridLayout(1, 4, 8, 0));
+		buttons.setOpaque(false);
+		JButton run = GenericClientDashboardStyle.primaryButton("Run");
 		run.addActionListener(event ->
 		{
 			GenericClientScriptRegistry.Script selected =
@@ -59,12 +60,13 @@ final class GenericClientScriptsPanel extends JPanel
 		buttons.add(refresh);
 		runner.add(buttons);
 		page.add(runner);
+		page.add(Box.createVerticalStrut(14));
 
 		JPanel output = GenericClientDashboardStyle.section("Output");
 		logs.setEditable(false);
-		output.add(GenericClientDashboardStyle.scroll(logs, 250));
+		output.add(GenericClientDashboardStyle.scroll(logs, 360));
 		page.add(output);
-		add(new javax.swing.JScrollPane(page), java.awt.BorderLayout.CENTER);
+		add(GenericClientDashboardStyle.pageScroll(page), java.awt.BorderLayout.CENTER);
 		refreshScripts();
 	}
 

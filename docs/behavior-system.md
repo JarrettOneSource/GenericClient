@@ -32,6 +32,9 @@ rare short and long breaks.
 The dashboard and MCP status expose a title and plain-language summary generated
 only from these numeric values. That text never feeds back into behavior.
 
+While a break is active, a small top-center overlay shows only its kind and
+remaining time. It disappears completely when the profile is ready.
+
 ### Manual overrides
 
 The Settings tab can override the understandable profile controls per account:

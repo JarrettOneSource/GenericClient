@@ -97,6 +97,7 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		this.effects = effects;
 		this.reporter = reporter;
 		this.randomSupplier = randomSupplier;
+		effects.updateCursor(this.position, this.outside);
 		canvas.addMouseMotionListener(realMouseListener);
 		canvas.addMouseListener(realMouseListener);
 	}
@@ -252,10 +253,14 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 	private void dispatchMove(Point point, int pathIndex)
 	{
 		dispatchMouse(MouseEvent.MOUSE_MOVED, point, 0, MouseEvent.NOBUTTON, false);
+		boolean pointOutside;
 		synchronized (this)
 		{
 			position = new Point(point);
+			outside = !inside(point);
+			pointOutside = outside;
 		}
+		effects.updateCursor(point, pointOutside);
 		effects.recordPoint(point);
 		effects.advancePath(pathIndex);
 	}
@@ -268,6 +273,7 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		}
 		position = event.getPoint();
 		outside = exited || !inside(position);
+		effects.updateCursor(position, outside);
 		effects.recordPoint(position);
 	}
 
@@ -293,6 +299,7 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 			activeMove = null;
 			pending.removeIf(ScheduledFuture::isDone);
 		}
+		effects.updateCursor(destination, destinationOutside);
 		completion.complete("SYNTHETIC_MOUSE_MOVED destination=" + destination.x + "," + destination.y +
 			" outside=" + destinationOutside);
 	}

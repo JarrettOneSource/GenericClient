@@ -34,16 +34,18 @@ public class GenericClientMouseEffectOverlayTest
 			() -> 300,
 			() -> 200,
 			clock::get);
+		overlay.updateCursor(new Point(150, 100), false);
+		int cursorPixels = coloredPixels(render(overlay));
 		overlay.recordPoint(new Point(20, 20));
 		clock.addAndGet(20L);
 		overlay.recordPoint(new Point(80, 60));
 
 		BufferedImage visible = render(overlay);
-		assertTrue(coloredPixels(visible) > 20);
+		assertTrue(coloredPixels(visible) > cursorPixels + 20);
 
 		clock.addAndGet(1_801L);
 		BufferedImage expired = render(overlay);
-		assertEquals(0, coloredPixels(expired));
+		assertEquals(cursorPixels, coloredPixels(expired));
 	}
 
 	@Test
@@ -56,6 +58,8 @@ public class GenericClientMouseEffectOverlayTest
 			() -> 300,
 			() -> 200,
 			System::currentTimeMillis);
+		overlay.updateCursor(new Point(150, 100), false);
+		int cursorPixels = coloredPixels(render(overlay));
 		List<GenericClientMouseMatcher.PathPoint> path = GenericClientMouseMatcher.generate(
 			loadProfile(),
 			new Point(20, 30),
@@ -71,7 +75,7 @@ public class GenericClientMouseEffectOverlayTest
 		assertTrue(countBlue(image) > 10);
 
 		overlay.endPath();
-		assertEquals(0, coloredPixels(render(overlay)));
+		assertEquals(cursorPixels, coloredPixels(render(overlay)));
 	}
 
 	@Test
@@ -85,15 +89,32 @@ public class GenericClientMouseEffectOverlayTest
 			() -> 300,
 			() -> 200,
 			clock::get);
+		overlay.updateCursor(new Point(150, 100), false);
+		int cursorPixels = coloredPixels(render(overlay));
 		overlay.recordPoint(new Point(20, 20));
 		clock.addAndGet(20L);
 		overlay.recordPoint(new Point(80, 60));
 		assertTrue(coloredPixels(render(overlay)) > 0);
 
 		effect.set(GenericClientMouseEffect.OFF);
-		assertEquals(0, coloredPixels(render(overlay)));
+		assertEquals(cursorPixels, coloredPixels(render(overlay)));
 		effect.set(GenericClientMouseEffect.TRAIL);
-		assertEquals(0, coloredPixels(render(overlay)));
+		assertEquals(cursorPixels, coloredPixels(render(overlay)));
+	}
+
+	@Test
+	public void showsAnEdgeIndicatorWhenTheSyntheticCursorIsOffscreen()
+	{
+		GenericClientMouseEffectOverlay overlay = new GenericClientMouseEffectOverlay(
+			() -> GenericClientMouseEffect.OFF,
+			() -> 300,
+			() -> 200,
+			System::currentTimeMillis);
+		overlay.updateCursor(new Point(-40, 80), true);
+
+		BufferedImage image = render(overlay);
+		assertTrue(coloredPixels(image) > 40);
+		assertTrue(coloredPixels(image.getSubimage(0, 60, 25, 40)) > 40);
 	}
 
 	private GenericClientMouseProfile loadProfile() throws Exception
