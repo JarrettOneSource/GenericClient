@@ -1,6 +1,18 @@
 {
-  "schema": "genericclient_scripts.v3",
+  "schema": "genericclient_scripts.v7",
   "scripts": [
+    {
+      "id": "aio-melee",
+      "name": "AIO Melee Trainer",
+      "description": "Train Attack, Strength, or Defence to an exact target with method selection and recovery receipts.",
+      "file": "aio-melee.lua"
+    },
+    {
+      "id": "account-auditor",
+      "name": "Account Auditor",
+      "description": "Inspect live skills, items, quests, offers, and known cash without changing the account.",
+      "file": "account-auditor.lua"
+    },
     {
       "id": "walker",
       "name": "Walker",

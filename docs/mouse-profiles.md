@@ -56,7 +56,10 @@ Settings offers three client-only effects:
 
 The synthetic cursor itself is always visible. Inside the canvas it is drawn as
 a white pointer with a green origin mark. Off-canvas idle is represented by a
-small directional badge pinned to the matching canvas edge.
+small directional badge pinned to the matching canvas edge. The account keeps
+the same seeded idle side, but every return randomizes the off-screen depth and
+the coordinate along that edge before generating the recorded path. Re-entry
+therefore does not retrace the exact point where the cursor previously left.
 
 The port keeps the original PMouse colors, line weights, point limits, and
 cosine fade. It draws in a RuneLite overlay and does not move the operating

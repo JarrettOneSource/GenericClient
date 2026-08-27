@@ -87,6 +87,8 @@ public final class GenericClientPlugin extends Plugin
 	private GenericClientScriptOverlay scriptOverlay;
 	private GenericClientControlServer controlServer;
 	private GenericClientGameInput gameInput;
+	private GenericClientNpcInput npcInput;
+	private GenericClientCombatInput combatInput;
 	private GenericClientSyntheticMouse syntheticMouse;
 	private GenericClientSessionController sessionController;
 	private GenericClientBehaviorController behaviorController;
@@ -97,6 +99,8 @@ public final class GenericClientPlugin extends Plugin
 	private Path mouseProfilesDirectory;
 	private volatile GenericClientMouseProfile mouseProfile;
 	private volatile GenericClientSnapshot latestSnapshot;
+	private final GenericClientBankCache bankCache = new GenericClientBankCache();
+	private final GenericClientQuestCache questCache = new GenericClientQuestCache();
 	private ScheduledFuture<?> panelRefreshFuture;
 
 	@Override
@@ -124,7 +128,7 @@ public final class GenericClientPlugin extends Plugin
 			this::publishResult);
 		sessionController = new GenericClientSessionController(
 			GenericClientSessionController.runeliteView(client, clientThread),
-			GenericClientSessionController.syntheticInput(syntheticMouse),
+			GenericClientSessionController.syntheticInput(syntheticMouse, client.getCanvas()),
 			executor,
 			this::publishResult);
 		behaviorController = new GenericClientBehaviorController(
@@ -168,15 +172,32 @@ public final class GenericClientPlugin extends Plugin
 			syntheticMouse,
 			behaviorController,
 			this::publishResult);
+		npcInput = new GenericClientNpcInput(
+			client,
+			clientThread,
+			executor,
+			syntheticMouse,
+			behaviorController,
+			this::publishResult);
+		combatInput = new GenericClientCombatInput(
+			client,
+			clientThread,
+			executor,
+			syntheticMouse,
+			behaviorController,
+			this::publishResult);
 		mouseRecorder = new GenericClientMouseRecorder(
 			client.getCanvas(),
-			() -> gameInput.isRunning() || syntheticMouse.isMoving());
+			() -> gameInput.isRunning() || npcInput.isRunning() || combatInput.isRunning() ||
+				syntheticMouse.isMoving());
 		walker = new GenericClientWalker(gameInput, collisionMap, this::publishResult);
 		luaHost = new GenericClientLuaHost(
 			net.runelite.client.RuneLite.RUNELITE_DIR.toPath().resolve("genericclient").resolve("scripts"),
 			gameInput::walkToRandomTile,
 			walker::walkTo,
-			walker::cancelActive,
+			npcInput::interact,
+			combatInput::setMode,
+			this::cancelActiveActions,
 			behaviorController,
 			this::publishResult);
 		scriptOverlay = new GenericClientScriptOverlay(luaHost::getActiveScriptView);
@@ -186,6 +207,8 @@ public final class GenericClientPlugin extends Plugin
 			sessionController::logout,
 			sessionController::ensureLoggedIn,
 			this::controlStatus,
+			this::accountNote,
+			this::setAccountNote,
 			this::publishResult);
 		controlServer.start();
 		panel = new GenericClientDashboard(
@@ -253,11 +276,6 @@ public final class GenericClientPlugin extends Plugin
 			luaHost.close();
 			luaHost = null;
 		}
-		if (behaviorController != null)
-		{
-			behaviorController.close();
-			behaviorController = null;
-		}
 		if (walker != null)
 		{
 			walker.close();
@@ -277,6 +295,21 @@ public final class GenericClientPlugin extends Plugin
 		{
 			gameInput.close();
 			gameInput = null;
+		}
+		if (npcInput != null)
+		{
+			npcInput.close();
+			npcInput = null;
+		}
+		if (combatInput != null)
+		{
+			combatInput.close();
+			combatInput = null;
+		}
+		if (behaviorController != null)
+		{
+			behaviorController.close();
+			behaviorController = null;
 		}
 		if (syntheticMouse != null)
 		{
@@ -324,6 +357,8 @@ public final class GenericClientPlugin extends Plugin
 	@Subscribe
 	public void onAccountHashChanged(AccountHashChanged event)
 	{
+		bankCache.clear();
+		questCache.clear();
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
 			activateBehaviorProfile();
@@ -334,7 +369,7 @@ public final class GenericClientPlugin extends Plugin
 	public void onGameTick(GameTick event)
 	{
 		tickCount++;
-		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(client, tickCount);
+		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(client, tickCount, bankCache, questCache);
 		latestSnapshot = snapshot;
 		nearbyNpcCount = snapshot.countNearbyNpcs(config.npcLogRadius());
 		GenericClientBehaviorController behaviors = behaviorController;
@@ -374,6 +409,11 @@ public final class GenericClientPlugin extends Plugin
 		if (input != null)
 		{
 			input.onMenuOptionClicked(event);
+		}
+		GenericClientNpcInput npc = npcInput;
+		if (npc != null)
+		{
+			npc.onMenuOptionClicked(event);
 		}
 	}
 
@@ -440,7 +480,7 @@ public final class GenericClientPlugin extends Plugin
 			return;
 		}
 
-		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(client, tickCount);
+		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(client, tickCount, bankCache, questCache);
 		initialNpcSnapshotLogged = true;
 		nearbyNpcCount = snapshot.countNearbyNpcs(config.npcLogRadius());
 		int logged = Math.min(nearbyNpcCount, NPC_LOG_LIMIT);
@@ -722,6 +762,42 @@ public final class GenericClientPlugin extends Plugin
 		GenericClientControlServer bridge = controlServer;
 		value.put("control_url", bridge == null ? null : bridge.getUrl());
 		return value;
+	}
+
+	private void cancelActiveActions(String reason)
+	{
+		GenericClientWalker activeWalker = walker;
+		if (activeWalker != null)
+		{
+			activeWalker.cancelActive(reason);
+		}
+		GenericClientNpcInput activeNpcInput = npcInput;
+		if (activeNpcInput != null)
+		{
+			activeNpcInput.cancel(reason);
+		}
+		GenericClientCombatInput activeCombatInput = combatInput;
+		if (activeCombatInput != null)
+		{
+			activeCombatInput.cancel(reason);
+		}
+	}
+
+	private String accountNote()
+	{
+		return configManager.getConfiguration("notes", "notesData");
+	}
+
+	private java.util.concurrent.CompletableFuture<String> setAccountNote(String note)
+	{
+		java.util.concurrent.CompletableFuture<String> completion = new java.util.concurrent.CompletableFuture<>();
+		clientThread.invoke(() ->
+		{
+			configManager.setConfiguration("notes", "notesData", note);
+			publishResult("ACCOUNT_NOTE_UPDATED characters=" + note.length());
+			completion.complete("ACCOUNT_NOTE_UPDATED");
+		});
+		return completion;
 	}
 
 	private void refreshPanel()

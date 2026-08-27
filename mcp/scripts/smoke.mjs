@@ -20,6 +20,7 @@ try {
   await client.connect(transport);
   const tools = await client.listTools();
   const status = await call("client_status");
+  const account = await call("account_snapshot");
   const behaviorProfile = await call("behavior_profile");
   const behaviorStatus = await call("behavior_status");
   const lua = await call("lua_eval", {
@@ -60,6 +61,7 @@ try {
       {
         tools: tools.tools.map((tool) => tool.name),
         status,
+        account,
         behavior_profile: behaviorProfile,
         behavior_status: behaviorStatus,
         lua,

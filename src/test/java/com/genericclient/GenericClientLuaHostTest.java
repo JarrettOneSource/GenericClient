@@ -40,6 +40,13 @@ public class GenericClientLuaHostTest
 			assertEquals("none", host.getActiveScript());
 			assertEquals("IDLE", host.getStatus());
 			assertFalse(host.getActiveScriptView().isPresent());
+			List<GenericClientScriptInput> meleeInputs = host.describe("aio-melee")
+				.get(2, TimeUnit.SECONDS);
+			assertEquals(3, meleeInputs.size());
+			assertEquals("skill", meleeInputs.get(0).getId());
+			assertEquals("target_level", meleeInputs.get(1).getId());
+			assertEquals("stop_after_kill", host.describeActions("aio-melee")
+				.get(2, TimeUnit.SECONDS).get(0).getId());
 		}
 		finally
 		{
@@ -85,6 +92,140 @@ public class GenericClientLuaHostTest
 			assertTrue(host.getRecentLogs().contains("npc-count"));
 			assertTrue(host.getRecentLogs().contains("walk-result"));
 			assertTrue(host.getRecentLogs().contains("dispatched"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void dispatchesNpcInteractionWithExplicitTargetAndBreakPolicy() throws Exception
+	{
+		AtomicReference<String> request = new AtomicReference<>();
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("npc-action-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(name, action, within, breaks) ->
+			{
+				request.set(name + ":" + action + ":" + within + ":" + breaks);
+				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
+				receipt.put("status", "dispatched");
+				receipt.put("result", "menu_action_executed");
+				return CompletableFuture.completedFuture(receipt);
+			},
+			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("npc-action-behavior").toPath()),
+			message -> { });
+		try
+		{
+			host.saveScript(
+				"npc-action",
+				"NPC action",
+				"Exercise npc.interact dispatch.",
+				script(
+					"local receipt = gc.await { action = { type = 'npc.interact', " +
+					"name = 'Banker', action = 'Bank', within = 7 }, breaks = false }\n" +
+					"gc.log('info', 'npc-result', receipt)"))
+				.get(2, TimeUnit.SECONDS);
+
+			host.start("npc-action").get(2, TimeUnit.SECONDS);
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals("Banker:Bank:7:false", request.get());
+			assertTrue(host.getRecentLogs().contains("npc-result"));
+			assertTrue(host.getRecentLogs().contains("menu_action_executed"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void dispatchesCombatStyleSelection() throws Exception
+	{
+		AtomicReference<String> request = new AtomicReference<>();
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("combat-style-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(name, action, within, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(style, breaks) ->
+			{
+				request.set(style + ":" + breaks);
+				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
+				receipt.put("status", "set");
+				receipt.put("style_index", (long) style);
+				return CompletableFuture.completedFuture(receipt);
+			},
+			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("combat-style-behavior").toPath()),
+			message -> { });
+		try
+		{
+			host.saveScript(
+				"combat-style",
+				"Combat style",
+				"Exercise combat.set_style dispatch.",
+				script(
+					"local receipt = gc.await { action = { type = 'combat.set_style', style = 3 }, " +
+					"breaks = false }\n" +
+					"gc.log('info', 'style-result', receipt)"))
+				.get(2, TimeUnit.SECONDS);
+
+			host.start("combat-style").get(2, TimeUnit.SECONDS);
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals("3:false", request.get());
+			assertTrue(host.getRecentLogs().contains("style-result"));
+			assertTrue(host.getRecentLogs().contains("style_index=3.0"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void dispatchesAutoRetaliateSelection() throws Exception
+	{
+		AtomicReference<String> request = new AtomicReference<>();
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("auto-retaliate-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(name, action, within, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(mode, breaks) ->
+			{
+				request.set(mode + ":" + breaks);
+				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
+				receipt.put("status", "set");
+				receipt.put("enabled", mode == 5);
+				return CompletableFuture.completedFuture(receipt);
+			},
+			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("auto-retaliate-behavior").toPath()),
+			message -> { });
+		try
+		{
+			host.saveScript(
+				"auto-retaliate",
+				"Auto retaliate",
+				"Exercise combat.set_auto_retaliate dispatch.",
+				script(
+					"local receipt = gc.await { action = { type = 'combat.set_auto_retaliate', " +
+					"enabled = false }, breaks = false }\n" +
+					"gc.log('info', 'retaliate-result', receipt)"))
+				.get(2, TimeUnit.SECONDS);
+
+			host.start("auto-retaliate").get(2, TimeUnit.SECONDS);
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals("4:false", request.get());
+			assertTrue(host.getRecentLogs().contains("retaliate-result"));
+			assertTrue(host.getRecentLogs().contains("enabled=false"));
 		}
 		finally
 		{
@@ -514,6 +655,121 @@ public class GenericClientLuaHostTest
 		{
 			host.close();
 		}
+	}
+
+	@Test
+	public void runsTheBundledAccountAuditorAgainstOnePinnedFrame() throws Exception
+	{
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("account-auditor-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> { },
+			GenericClientTestSupport.behavior(temporaryFolder.newFolder("account-auditor-behavior").toPath()),
+			message -> { });
+		try
+		{
+			host.start("account-auditor").get(2, TimeUnit.SECONDS);
+			host.publishGameTick(accountSnapshot(91));
+			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+			while (!host.getRecentLogs().contains("account-audit") && System.nanoTime() < deadline)
+			{
+				Thread.sleep(10);
+			}
+
+			GenericClientActiveScript active = host.getActiveScriptView();
+			assertEquals("Account Auditor", active.getName());
+			assertEquals("refresh", active.getActions().get(0).getId());
+			assertEquals("Audited", active.getOverlayRows().get(0).getValue());
+			assertTrue(host.getRecentLogs().contains("INFO account-audit"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void completesAioMeleeWithoutTrainingWhenTheExactTargetIsAlreadyMet() throws Exception
+	{
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("aio-melee-behavior").toPath());
+		behavior.activateAccount(123L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("aio-melee-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(name, action, within, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(mode, breaks) ->
+			{
+				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
+				receipt.put("status", "unchanged");
+				return CompletableFuture.completedFuture(receipt);
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			Map<String, Object> inputs = new java.util.LinkedHashMap<>();
+			inputs.put("skill", "attack");
+			inputs.put("target_level", "2");
+			inputs.put("method", "auto");
+			host.start("aio-melee", inputs).get(2, TimeUnit.SECONDS);
+			host.publishGameTick(accountSnapshot(92, 2, 83));
+			waitForStatus(host, "COMPLETED");
+
+			assertTrue(host.getRecentLogs().contains("target_already_met"));
+			assertEquals("Target already met", host.getActiveScriptView().getOverlayRows().get(2).getValue());
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	private static GenericClientSnapshot accountSnapshot(long tick)
+	{
+		return accountSnapshot(tick, 1, 12);
+	}
+
+	private static GenericClientSnapshot accountSnapshot(long tick, int attackLevel, int attackXp)
+	{
+		GenericClientAccountSnapshot.ContainerSnapshot inventory =
+			new GenericClientAccountSnapshot.ContainerSnapshot(
+				true,
+				28,
+				Collections.singletonList(new GenericClientAccountSnapshot.ItemSnapshot(
+					0,
+					null,
+					net.runelite.api.gameval.ItemID.COINS,
+					1_000,
+					"Coins",
+					true,
+					true,
+					true,
+					Collections.emptyList())));
+		GenericClientAccountSnapshot account = new GenericClientAccountSnapshot(
+			true,
+			36,
+			Collections.singletonList(new GenericClientAccountSnapshot.SkillSnapshot(
+				"attack", attackLevel, attackLevel, attackXp)),
+			inventory,
+			GenericClientAccountSnapshot.ContainerSnapshot.unavailable(),
+			GenericClientAccountSnapshot.BankSnapshot.unknown(),
+			GenericClientAccountSnapshot.QuestListSnapshot.unavailable(),
+			GenericClientAccountSnapshot.GrandExchangeSnapshot.unavailable(),
+			GenericClientAccountSnapshot.CashSnapshot.from(
+				inventory,
+				GenericClientAccountSnapshot.BankSnapshot.unknown()));
+		return new GenericClientSnapshot(
+			tick,
+			"LOGGED_IN",
+			231,
+			new GenericClientSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
+			Collections.emptyList(),
+			account);
 	}
 
 	private static GenericClientSnapshot snapshot(long tick)

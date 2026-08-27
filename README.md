@@ -67,6 +67,14 @@ interaction. `walker.lua` exposes a destination dropdown and can walk to the
 Grand Exchange, Varrock, Edgeville, Falador, Draynor, or Lumbridge through the
 same public `walk.to` action.
 
+`account-auditor.lua` produces a read-only skills/items/quests/cash receipt and
+stays available for manual refresh. `aio-melee.lua` trains Attack, Strength, or
+Defence to a declared target, selects the matching combat style, chooses its
+method from live level state, guards low Hitpoints and account caps, supports a
+cooperative stop-after-kill action, disengages at the target, and returns an XP
+receipt. Its currently implemented low-level method is deliberately limited to
+Lumbridge goblins; later methods belong in the same script.
+
 The current scripting interface intentionally contains only:
 
 ```lua
@@ -78,10 +86,44 @@ gc.overlay(rows)
 gc.next_action()
 ```
 
-Implemented reads are `runtime`, `player`, `npcs`, and `behavior`. Implemented waits are
-game ticks, tick counts, `walk.random`, `walk.to`, and `mouse.offscreen`. New
-snapshot subjects and semantic actions are added when an automation actually
-needs them.
+Implemented reads are `runtime`, `player`, `npcs`, `behavior`, `skills`,
+`inventory`, `equipment`, `bank`, `quests`, `grand_exchange`, `cash`, and the
+combined `account` frame. `combat` reports the current attack-style index and
+auto-retaliate state. A bank read explicitly reports `unknown`, `open`, or
+`cached`; it never treats an unseen bank as empty. Implemented waits are game
+ticks, tick counts, `walk.random`, `walk.to`, and `mouse.offscreen`. New semantic
+actions are added when an automation actually needs them. `npc.interact`
+selects the nearest matching NPC, resolves the requested menu option, and uses
+the same template-generated synthetic cursor for either a left-click or
+context-menu interaction.
+
+```lua
+local result = gc.await {
+  action = {
+    type = "npc.interact",
+    name = "Banker",
+    action = "Bank",
+    within = 8,
+  },
+  breaks = false,
+}
+```
+
+Combat settings use semantic client interactions too:
+
+```lua
+local result = gc.await {
+  action = { type = "combat.set_style", style = 0 },
+  breaks = false,
+}
+```
+
+```lua
+local result = gc.await {
+  action = { type = "combat.set_auto_retaliate", enabled = false },
+  breaks = false,
+}
+```
 
 `walk.to` plans ordinary ground routes against a pinned global collision map.
 For each leg it turns the client camera, selects the farthest currently
@@ -166,9 +208,11 @@ header; the overlay disappears when the script stops or completes.
 The destination names and coordinates in Walker stay in Lua; collision loading,
 pathfinding, camera projection, and synthetic clicking stay in the Java plugin.
 After its route and arrival phase finish, Walker uses `mouse.offscreen` to park
-the synthetic cursor at the active behavior profile's stable idle edge.
+the synthetic cursor at the active behavior profile's stable idle edge. The
+next action randomizes a different coordinate along that same side before
+generating its return path.
 
-On first 0.10 startup, a version-1 or version-2 manifest is upgraded and its
+On first 0.11 startup, a version-1 through version-6 manifest is upgraded and its
 bundled scripts are refreshed. Custom entries and files are kept. Custom scripts
 written for 0.8 must change their root return value from a function to
 `{ run = function(input) ... end }`.
@@ -238,11 +282,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.10.0.jar`
-- `build/libs/GenericClient-0.10.0-all.jar`
+- `build/libs/generic-client-0.11.0.jar`
+- `build/libs/GenericClient-0.11.0-all.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.10.0-all.jar
+java -ea -jar build/libs/GenericClient-0.11.0-all.jar
 ```

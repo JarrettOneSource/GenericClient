@@ -1,7 +1,10 @@
 package com.genericclient;
 
+import java.awt.Canvas;
+import java.awt.EventQueue;
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -12,6 +15,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.Perspective;
+import net.runelite.api.Player;
+import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetInfo;
@@ -34,8 +40,19 @@ final class GenericClientSessionController implements AutoCloseable
 		WidgetInfo.RESIZABLE_MINIMAP_LOGOUT_BUTTON.getId(),
 		WidgetInfo.RESIZABLE_VIEWPORT_BOTTOM_LINE_LOGOUT_BUTTON.getId()
 	};
-	private static final int[] CLICK_TO_PLAY_WIDGETS = {InterfaceID.WelcomeScreen.PLAY};
-	private static final int[] WELCOME_ROOT_WIDGETS = {InterfaceID.WelcomeScreen.UNIVERSE};
+	private static final int[] CLICK_TO_PLAY_WIDGETS =
+	{
+		InterfaceID.WelcomeScreen.PLAY,
+		InterfaceID.WelcomeScreen.PLAY_HIGHLIGHT,
+		InterfaceID.WelcomeScreen.CLICKHERE_TEXT,
+		InterfaceID.WelcomeScreen.BANNER_HIGHLIGHT
+	};
+	private static final int[] WELCOME_ROOT_WIDGETS =
+	{
+		InterfaceID.WelcomeScreen.UNIVERSE,
+		InterfaceID.WelcomeScreen.CONTENT,
+		InterfaceID.WelcomeScreen.BANNER
+	};
 
 	private final SessionView view;
 	private final Input input;
@@ -48,6 +65,7 @@ final class GenericClientSessionController implements AutoCloseable
 	private CompletableFuture<String> activeOperation;
 	private boolean loginClickIssued;
 	private int loginScreenAttempt;
+	private int logoutEscapeAttempts;
 	private boolean closed;
 
 	GenericClientSessionController(
@@ -126,10 +144,23 @@ final class GenericClientSessionController implements AutoCloseable
 				});
 				return result;
 			}
+
+			@Override
+			public CompletableFuture<Boolean> worldReady()
+			{
+				CompletableFuture<Boolean> result = new CompletableFuture<>();
+				clientThread.invoke(() ->
+				{
+					Player player = client.getLocalPlayer();
+					LocalPoint local = player == null ? null : player.getLocalLocation();
+					result.complete(local != null && Perspective.getCanvasTilePoly(client, local) != null);
+				});
+				return result;
+			}
 		};
 	}
 
-	static Input syntheticInput(GenericClientSyntheticMouse mouse)
+	static Input syntheticInput(GenericClientSyntheticMouse mouse, Canvas canvas)
 	{
 		return new Input()
 		{
@@ -143,6 +174,27 @@ final class GenericClientSessionController implements AutoCloseable
 			public CompletableFuture<String> click()
 			{
 				return mouse.click(MouseEvent.BUTTON1);
+			}
+
+			@Override
+			public CompletableFuture<String> pressEscape()
+			{
+				CompletableFuture<String> result = new CompletableFuture<>();
+				EventQueue.invokeLater(() ->
+				{
+					if (canvas == null || !canvas.isShowing())
+					{
+						result.completeExceptionally(new IllegalStateException("Client canvas is unavailable"));
+						return;
+					}
+					long when = System.currentTimeMillis();
+					canvas.dispatchEvent(new KeyEvent(
+						canvas, KeyEvent.KEY_PRESSED, when, 0, KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED));
+					canvas.dispatchEvent(new KeyEvent(
+						canvas, KeyEvent.KEY_RELEASED, when, 0, KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED));
+					result.complete("escape");
+				});
+				return result;
 			}
 		};
 	}
@@ -166,6 +218,7 @@ final class GenericClientSessionController implements AutoCloseable
 			}
 			activeOperation = new CompletableFuture<>();
 			operation = activeOperation;
+			logoutEscapeAttempts = 0;
 		}
 		reporter.accept("SESSION_LOGOUT_STARTED");
 		long deadline = System.currentTimeMillis() + timeoutMillis;
@@ -225,9 +278,29 @@ final class GenericClientSessionController implements AutoCloseable
 			}
 			view.visibleWidget(LOGOUT_TABS).whenComplete((tab, tabError) ->
 			{
-				if (tabError != null || tab == null)
+				if (tabError != null)
 				{
-					failActive(tabError == null ? "No visible logout tab" : tabError.getMessage());
+					failActive(tabError.getMessage());
+					return;
+				}
+				if (tab == null)
+				{
+					if (logoutEscapeAttempts >= 3)
+					{
+						failActive("No visible logout tab after closing modal interfaces");
+						return;
+					}
+					logoutEscapeAttempts++;
+					reporter.accept("SESSION_LOGOUT_MODAL_CLOSE attempt=" + logoutEscapeAttempts);
+					input.pressEscape().whenComplete((ignored, escapeError) ->
+					{
+						if (escapeError != null)
+						{
+							failActive(escapeError.getMessage());
+							return;
+						}
+						schedule(() -> openLogoutPanel(deadline), pollMillis);
+					});
 					return;
 				}
 				clickBounds(tab).whenComplete((ignored, clickError) ->
@@ -324,19 +397,23 @@ final class GenericClientSessionController implements AutoCloseable
 					}
 					if (root == null)
 					{
-						completeActive("SESSION_LOGGED_IN");
-						return;
-					}
-					clickPoint(clickToPlayFallbackPoint(view.canvasWidth(), view.canvasHeight()))
-						.whenComplete((ignored, fallbackError) ->
+						view.worldReady().whenComplete((ready, readyError) ->
 						{
-							if (fallbackError != null)
+							if (readyError != null)
 							{
-								failActive(fallbackError.getMessage());
+								failActive(readyError.getMessage());
 								return;
 							}
-							completeActive("SESSION_LOGGED_IN_AND_PLAYING");
+							if (Boolean.TRUE.equals(ready))
+							{
+								completeActive("SESSION_LOGGED_IN");
+								return;
+							}
+							clickFallbackAndWait(deadline);
 						});
+						return;
+					}
+					clickFallbackAndWait(deadline);
 				});
 				return;
 			}
@@ -347,8 +424,45 @@ final class GenericClientSessionController implements AutoCloseable
 					failActive(clickError.getMessage());
 					return;
 				}
-				completeActive("SESSION_LOGGED_IN_AND_PLAYING");
+				waitForWorldReady(deadline);
 			});
+		});
+	}
+
+	private void clickFallbackAndWait(long deadline)
+	{
+		clickPoint(clickToPlayFallbackPoint(view.canvasWidth(), view.canvasHeight()))
+			.whenComplete((ignored, error) ->
+			{
+				if (error != null)
+				{
+					failActive(error.getMessage());
+					return;
+				}
+				waitForWorldReady(deadline);
+			});
+	}
+
+	private void waitForWorldReady(long deadline)
+	{
+		if (expired(deadline))
+		{
+			failActive("Timed out dismissing click-to-play");
+			return;
+		}
+		view.worldReady().whenComplete((ready, error) ->
+		{
+			if (error != null)
+			{
+				failActive(error.getMessage());
+				return;
+			}
+			if (Boolean.TRUE.equals(ready))
+			{
+				completeActive("SESSION_LOGGED_IN_AND_PLAYING");
+				return;
+			}
+			schedule(() -> waitForWorldReady(deadline), pollMillis);
 		});
 	}
 
@@ -473,6 +587,8 @@ final class GenericClientSessionController implements AutoCloseable
 		int canvasHeight();
 
 		CompletableFuture<Rectangle> visibleWidget(int... candidates);
+
+		CompletableFuture<Boolean> worldReady();
 	}
 
 	interface Input
@@ -480,5 +596,7 @@ final class GenericClientSessionController implements AutoCloseable
 		CompletableFuture<String> move(Point point);
 
 		CompletableFuture<String> click();
+
+		CompletableFuture<String> pressEscape();
 	}
 }

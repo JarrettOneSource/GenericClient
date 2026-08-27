@@ -26,6 +26,7 @@ final class GenericClientSnapshot
 	private final int gameRevision;
 	private final PlayerSnapshot player;
 	private final List<NpcSnapshot> npcs;
+	private final GenericClientAccountSnapshot account;
 
 	GenericClientSnapshot(
 		long gameTick,
@@ -34,14 +35,35 @@ final class GenericClientSnapshot
 		PlayerSnapshot player,
 		List<NpcSnapshot> npcs)
 	{
+		this(gameTick, gameState, gameRevision, player, npcs, GenericClientAccountSnapshot.empty());
+	}
+
+	GenericClientSnapshot(
+		long gameTick,
+		String gameState,
+		int gameRevision,
+		PlayerSnapshot player,
+		List<NpcSnapshot> npcs,
+		GenericClientAccountSnapshot account)
+	{
 		this.gameTick = gameTick;
 		this.gameState = gameState;
 		this.gameRevision = gameRevision;
 		this.player = player;
 		this.npcs = Collections.unmodifiableList(new ArrayList<>(npcs));
+		this.account = account;
 	}
 
 	static GenericClientSnapshot capture(Client client, long gameTick)
+	{
+		return capture(client, gameTick, null, null);
+	}
+
+	static GenericClientSnapshot capture(
+		Client client,
+		long gameTick,
+		GenericClientBankCache bankCache,
+		GenericClientQuestCache questCache)
 	{
 		Player localPlayer = client.getLocalPlayer();
 		PlayerSnapshot playerSnapshot = null;
@@ -56,7 +78,9 @@ final class GenericClientSnapshot
 				playerPoint.getX(),
 				playerPoint.getY(),
 				playerPoint.getPlane(),
-				worldView.getId());
+				worldView.getId(),
+				localPlayer.getAnimation(),
+				localPlayer.getInteracting() == null ? null : localPlayer.getInteracting().getName());
 
 			for (NPC npc : worldView.npcs())
 			{
@@ -90,7 +114,8 @@ final class GenericClientSnapshot
 			client.getGameState().name(),
 			client.getRevision(),
 			playerSnapshot,
-			npcSnapshots);
+			npcSnapshots,
+			GenericClientAccountSnapshot.capture(client, bankCache, questCache, gameTick));
 	}
 
 	Object read(String subject, Map<?, ?> query)
@@ -101,8 +126,20 @@ final class GenericClientSnapshot
 				return runtimeMap();
 			case "player":
 				return player == null ? null : player.toMap(gameState);
+			case "account":
+				return accountMap();
 			case "npcs":
 				return queryNpcs(query);
+			case "skills":
+			case "inventory":
+			case "equipment":
+			case "bank":
+			case "quests":
+			case "ge":
+			case "grand_exchange":
+			case "cash":
+			case "combat":
+				return account.read(subject);
 			default:
 				throw new IllegalArgumentException("unknown subject: " + subject);
 		}
@@ -179,6 +216,15 @@ final class GenericClientSnapshot
 		return runtime;
 	}
 
+	private Map<String, Object> accountMap()
+	{
+		Map<String, Object> value = new LinkedHashMap<>();
+		value.put("runtime", runtimeMap());
+		value.put("player", player == null ? null : player.toMap(gameState));
+		value.putAll(account.toMap());
+		return value;
+	}
+
 	private List<Map<String, Object>> queryNpcs(Map<?, ?> query)
 	{
 		int within = intValue(query == null ? null : query.get("within"), Integer.MAX_VALUE);
@@ -245,14 +291,30 @@ final class GenericClientSnapshot
 		private final int y;
 		private final int plane;
 		private final int worldViewId;
+		private final int animation;
+		private final String interacting;
 
 		PlayerSnapshot(String name, int x, int y, int plane, int worldViewId)
+		{
+			this(name, x, y, plane, worldViewId, -1, null);
+		}
+
+		PlayerSnapshot(
+			String name,
+			int x,
+			int y,
+			int plane,
+			int worldViewId,
+			int animation,
+			String interacting)
 		{
 			this.name = name;
 			this.x = x;
 			this.y = y;
 			this.plane = plane;
 			this.worldViewId = worldViewId;
+			this.animation = animation;
+			this.interacting = interacting;
 		}
 
 		Map<String, Object> toMap(String gameState)
@@ -262,6 +324,8 @@ final class GenericClientSnapshot
 			value.put("name", name);
 			value.put("world", worldMap(x, y, plane));
 			value.put("world_view", (long) worldViewId);
+			value.put("animation", (long) animation);
+			value.put("interacting", interacting);
 			return value;
 		}
 

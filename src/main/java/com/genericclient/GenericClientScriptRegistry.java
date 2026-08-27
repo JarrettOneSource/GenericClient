@@ -25,20 +25,28 @@ import java.util.regex.Pattern;
 
 final class GenericClientScriptRegistry
 {
-	private static final String SCHEMA = "genericclient_scripts.v3";
+	private static final String SCHEMA = "genericclient_scripts.v7";
 	private static final Set<String> PREVIOUS_SCHEMAS = Set.of(
 		"genericclient_scripts.v1",
-		"genericclient_scripts.v2");
+		"genericclient_scripts.v2",
+		"genericclient_scripts.v3",
+		"genericclient_scripts.v4",
+		"genericclient_scripts.v5",
+		"genericclient_scripts.v6");
 	private static final String MANIFEST_FILE = "manifest.json";
 	private static final String RESOURCE_DIRECTORY = "/com/genericclient/scripts/";
 	private static final Pattern SCRIPT_ID = Pattern.compile("[a-z0-9][a-z0-9_-]*");
 	private static final String[] BUNDLED_SCRIPT_FILES =
 	{
+		"account-auditor.lua",
+		"aio-melee.lua",
 		"walker.lua",
 		"npc-diagnostics.lua",
 		"walk-stress.lua"
 	};
 	private static final Set<String> BUNDLED_IDS = Set.of(
+		"account-auditor",
+		"aio-melee",
 		"lumbridge-varrock",
 		"npc-diagnostics",
 		"walk-stress",

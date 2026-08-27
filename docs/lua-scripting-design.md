@@ -31,9 +31,12 @@ The current checkout implements:
 
 - LuaJava 4.1.0 with native PUC Lua 5.4 in the standalone fat JAR;
 - one active standalone script plus one persistent REPL state on one scheduler thread;
-- `gc.read` subjects `runtime`, `player`, `behavior`, and bounded `npcs` queries;
+- `gc.read` subjects `runtime`, `player`, `behavior`, `skills`, `inventory`,
+  `equipment`, `bank`, `quests`, `grand_exchange`, `cash`, `combat`, the combined
+  `account` frame, and bounded `npcs` queries;
 - `gc.await` for `game.tick`, tick counts, the synthetic `walk.random` action,
-  the same-plane `walk.to` ground-route action, and profile-owned
+  the same-plane `walk.to` ground-route action, `npc.interact`,
+  `combat.set_style`, `combat.set_auto_retaliate`, and profile-owned
   `mouse.offscreen` idle placement;
 - per-interaction `breaks=false`, phase transitions, seeded mouse timing, and a
   behavior controller that pauses coroutine action progression without blocking control;
@@ -43,11 +46,13 @@ The current checkout implements:
   `gc.next_action`;
 - manifest-registered one-file descriptor scripts with start/reload/stop
   controls, validated `choice` inputs, and generic dashboard controls;
-- a loopback control bridge and stdio MCP server for live status, REPL evaluation,
-  script registration, and on-demand execution;
+- a loopback control bridge and stdio MCP server for live/account status, bound
+  RuneLite Notes, REPL evaluation, script registration, and on-demand execution;
 - a bounded three-click `walk-stress.lua` automation;
 - `walker.lua`, whose Lua-owned destination catalog drives the Java-owned
   collision planner and synthetic interaction pipeline;
+- the read-only `account-auditor.lua` and cap-aware `aio-melee.lua` standalone
+  scripts;
 - per-resume instruction/deadline interruption and pinned-frame reads;
 - focused tests for NPC queries, coroutine/action flow, pinned frames, and infinite-loop termination.
 
@@ -62,11 +67,31 @@ The MCP and manifest interface is documented in
 
 The walker adds only the collision reader, A* planner, and route lifecycle needed
 by this automation. Its implementation status and limits are documented in
-[`walker-design.md`](walker-design.md). Objects, inventories, widgets,
-normalized dialog, target references, and additional semantic actions remain
-intentionally absent until a concrete automation requires each one.
+[`walker-design.md`](walker-design.md). Object/item/widget actions, normalized
+dialog, and durable target references remain intentionally absent until a
+concrete automation requires each one.
 
 ### Live verification receipt
+
+GenericClient 0.11.0's tested and installed standalone artifact has SHA-256
+`a132b3d4b249dd326dc714062ed2803969006ea8638bd1cb304232be17d004c0`.
+On stock RuneLite 1.12.37/game revision 240 it:
+
+- migrated the installed manifest to v7 while preserving its custom script;
+- reconciled exact skills, 24 bank item slots, three finished quests, one GE
+  offer, and the configured cash reserve through Account Auditor;
+- updated the bound account Notes text through the control bridge;
+- opened the GE bank through a two-click synthetic `npc.interact` context menu;
+- closed that modal bank with a synthetic Escape and completed logout/re-login;
+- randomized right-edge re-entry from `(834,103)` to `(797,262)` before applying
+  the recorded movement path;
+- fixed and regression-tested click-to-play world readiness and WorldView NPC
+  menu resolution after live failures exposed both seams;
+- ran AIO Melee to its bounded Attack 2 target, ending at 84 XP with a terminal
+  receipt, no active target, an off-screen synthetic cursor, and 6/10 Hitpoints;
+- disabled auto-retaliate through two synthetic combat-interface clicks after a
+  traversal exposed 8 XP of implicit retaliation, ending at 92 Attack XP;
+- passed 105 Java tests plus three Node MCP tests.
 
 GenericClient 0.10.0's tested standalone artifact has SHA-256
 `f710afc53f3b158c44f2897b865ca27d0df12dd072c3032d002ee2d26c60926c`.
@@ -92,7 +117,7 @@ The artifact passed 81 Java tests plus three Node MCP tests.
 GenericClient 0.9.0's final standalone artifact has SHA-256
 `1734728e4f285a194a338452ad89b9935468e922a4cc0ddf24b5d73bc7905828`.
 The exact installed artifact started through the Jagex Launcher on stock
-RuneLite 1.12.37, returned complete `client_status`, loaded `genericBoss`'s
+RuneLite 1.12.37, returned complete `client_status`, loaded the test account's
 custom 99% micro profile without changing its precise seeded duration/cadence
 values, and completed Walker at the Grand Exchange with `mouse=moved` after a
 real 5.3-second phase micro break. The same 0.9 acceptance sequence also:

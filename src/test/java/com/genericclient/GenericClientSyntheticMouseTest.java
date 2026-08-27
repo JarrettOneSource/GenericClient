@@ -63,9 +63,18 @@ public class GenericClientSyntheticMouseTest
 	{
 		Canvas canvas = canvas();
 		List<Integer> events = new ArrayList<>();
+		List<Point> enteredPoints = new ArrayList<>();
 		MouseAdapter listener = listener(events);
 		canvas.addMouseMotionListener(listener);
 		canvas.addMouseListener(listener);
+		canvas.addMouseListener(new MouseAdapter()
+		{
+			@Override
+			public void mouseEntered(MouseEvent event)
+			{
+				enteredPoints.add(event.getPoint());
+			}
+		});
 		canvas.addFocusListener(new FocusAdapter()
 		{
 			@Override
@@ -96,6 +105,8 @@ public class GenericClientSyntheticMouseTest
 			assertFalse(mouse.isOutside());
 			assertTrue(events.contains(FocusEvent.FOCUS_GAINED));
 			assertTrue(events.contains(MouseEvent.MOUSE_ENTERED));
+			assertEquals(1, enteredPoints.size());
+			assertTrue(enteredPoints.get(0).y != outside.y);
 			assertEquals(new Point(80, 90), mouse.getPosition());
 		}
 		finally
@@ -103,6 +114,27 @@ public class GenericClientSyntheticMouseTest
 			mouse.close();
 			executor.shutdownNow();
 		}
+	}
+
+	@Test
+	public void reentersFromADifferentPointOnTheSameEdge()
+	{
+		Point left = GenericClientSyntheticMouse.randomizedReentryStart(
+			new Point(-20, 100), 800, 600, new Random(7));
+		Point right = GenericClientSyntheticMouse.randomizedReentryStart(
+			new Point(820, 500), 800, 600, new Random(8));
+		Point top = GenericClientSyntheticMouse.randomizedReentryStart(
+			new Point(300, -20), 800, 600, new Random(9));
+
+		assertTrue(left.x < 0);
+		assertTrue(left.y >= 0 && left.y < 600);
+		assertTrue(left.y != 100);
+		assertTrue(right.x >= 800);
+		assertTrue(right.y >= 0 && right.y < 600);
+		assertTrue(right.y != 500);
+		assertTrue(top.y < 0);
+		assertTrue(top.x >= 0 && top.x < 800);
+		assertTrue(top.x != 300);
 	}
 
 	@Test

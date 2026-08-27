@@ -29,7 +29,9 @@ final class GenericClientLuaHost implements AutoCloseable
 	private final GenericClientScriptRegistry registry;
 	private final WalkRandomAction walkRandomAction;
 	private final WalkToAction walkToAction;
-	private final Consumer<String> cancelWalkAction;
+	private final NpcInteractAction npcInteractAction;
+	private final CombatModeAction combatModeAction;
+	private final Consumer<String> cancelAction;
 	private final GenericClientBehaviorController behavior;
 	private final Consumer<String> statusSink;
 	private final LongSupplier clock;
@@ -51,7 +53,7 @@ final class GenericClientLuaHost implements AutoCloseable
 		Path scriptsDirectory,
 		WalkRandomAction walkRandomAction,
 		WalkToAction walkToAction,
-		Consumer<String> cancelWalkAction,
+		Consumer<String> cancelAction,
 		GenericClientBehaviorController behavior,
 		Consumer<String> statusSink) throws IOException
 	{
@@ -59,7 +61,9 @@ final class GenericClientLuaHost implements AutoCloseable
 			scriptsDirectory,
 			walkRandomAction,
 			walkToAction,
-			cancelWalkAction,
+			unsupportedNpcInteractAction(),
+			unsupportedCombatModeAction(),
+			cancelAction,
 			behavior,
 			statusSink,
 			System::nanoTime);
@@ -69,7 +73,95 @@ final class GenericClientLuaHost implements AutoCloseable
 		Path scriptsDirectory,
 		WalkRandomAction walkRandomAction,
 		WalkToAction walkToAction,
-		Consumer<String> cancelWalkAction,
+		NpcInteractAction npcInteractAction,
+		Consumer<String> cancelAction,
+		GenericClientBehaviorController behavior,
+		Consumer<String> statusSink) throws IOException
+	{
+		this(
+			scriptsDirectory,
+			walkRandomAction,
+			walkToAction,
+			npcInteractAction,
+			unsupportedCombatModeAction(),
+			cancelAction,
+			behavior,
+			statusSink,
+			System::nanoTime);
+	}
+
+	GenericClientLuaHost(
+		Path scriptsDirectory,
+		WalkRandomAction walkRandomAction,
+		WalkToAction walkToAction,
+		NpcInteractAction npcInteractAction,
+		CombatModeAction combatModeAction,
+		Consumer<String> cancelAction,
+		GenericClientBehaviorController behavior,
+		Consumer<String> statusSink) throws IOException
+	{
+		this(
+			scriptsDirectory,
+			walkRandomAction,
+			walkToAction,
+			npcInteractAction,
+			combatModeAction,
+			cancelAction,
+			behavior,
+			statusSink,
+			System::nanoTime);
+	}
+
+	GenericClientLuaHost(
+		Path scriptsDirectory,
+		WalkRandomAction walkRandomAction,
+		WalkToAction walkToAction,
+		Consumer<String> cancelAction,
+		GenericClientBehaviorController behavior,
+		Consumer<String> statusSink,
+		LongSupplier clock) throws IOException
+	{
+		this(
+			scriptsDirectory,
+			walkRandomAction,
+			walkToAction,
+			unsupportedNpcInteractAction(),
+			unsupportedCombatModeAction(),
+			cancelAction,
+			behavior,
+			statusSink,
+			clock);
+	}
+
+	GenericClientLuaHost(
+		Path scriptsDirectory,
+		WalkRandomAction walkRandomAction,
+		WalkToAction walkToAction,
+		NpcInteractAction npcInteractAction,
+		Consumer<String> cancelAction,
+		GenericClientBehaviorController behavior,
+		Consumer<String> statusSink,
+		LongSupplier clock) throws IOException
+	{
+		this(
+			scriptsDirectory,
+			walkRandomAction,
+			walkToAction,
+			npcInteractAction,
+			unsupportedCombatModeAction(),
+			cancelAction,
+			behavior,
+			statusSink,
+			clock);
+	}
+
+	GenericClientLuaHost(
+		Path scriptsDirectory,
+		WalkRandomAction walkRandomAction,
+		WalkToAction walkToAction,
+		NpcInteractAction npcInteractAction,
+		CombatModeAction combatModeAction,
+		Consumer<String> cancelAction,
 		GenericClientBehaviorController behavior,
 		Consumer<String> statusSink,
 		LongSupplier clock) throws IOException
@@ -77,7 +169,9 @@ final class GenericClientLuaHost implements AutoCloseable
 		this.registry = new GenericClientScriptRegistry(scriptsDirectory);
 		this.walkRandomAction = walkRandomAction;
 		this.walkToAction = walkToAction;
-		this.cancelWalkAction = cancelWalkAction;
+		this.npcInteractAction = npcInteractAction;
+		this.combatModeAction = combatModeAction;
+		this.cancelAction = cancelAction;
 		this.behavior = behavior;
 		this.statusSink = statusSink;
 		this.clock = clock;
@@ -141,6 +235,23 @@ final class GenericClientLuaHost implements AutoCloseable
 		return snapshot == null ? null : snapshot.read(subject, query);
 	}
 
+	CompletableFuture<Object> readCurrentSnapshot(String subject)
+	{
+		CompletableFuture<Object> completion = new CompletableFuture<>();
+		scheduler.execute(() ->
+		{
+			try
+			{
+				completion.complete(readSnapshot(currentSnapshot, subject, Collections.emptyMap()));
+			}
+			catch (RuntimeException exception)
+			{
+				completion.completeExceptionally(exception);
+			}
+		});
+		return completion;
+	}
+
 	CompletableFuture<String> start(String scriptId)
 	{
 		return start(scriptId, Collections.emptyMap());
@@ -182,7 +293,7 @@ final class GenericClientLuaHost implements AutoCloseable
 					clock.getAsLong());
 				if (previous != null)
 				{
-					cancelWalkAction.accept("script_replaced");
+					cancelAction.accept("script_replaced");
 					previous.close();
 				}
 				String result;
@@ -327,6 +438,69 @@ final class GenericClientLuaHost implements AutoCloseable
 		}).whenComplete((receipt, error) -> completeAction(script, requestId, receipt, error));
 	}
 
+	void submitNpcInteract(
+		GenericClientLuaScript script,
+		long requestId,
+		String name,
+		String action,
+		int within,
+		boolean breaksEnabled)
+	{
+		npcInteractAction.interact(name, action, within, breaksEnabled).handle((receipt, error) ->
+		{
+			Map<String, Object> result = receipt == null
+				? new LinkedHashMap<>()
+				: new LinkedHashMap<>(receipt);
+			if (error != null)
+			{
+				result.put("status", "rejected");
+				result.put("result", rootMessage(error));
+			}
+			return result;
+		}).whenComplete((receipt, error) -> completeAction(script, requestId, receipt, error));
+	}
+
+	void submitCombatSetStyle(
+		GenericClientLuaScript script,
+		long requestId,
+		int styleIndex,
+		boolean breaksEnabled)
+	{
+		combatModeAction.setMode(styleIndex, breaksEnabled).handle((receipt, error) ->
+		{
+			Map<String, Object> result = receipt == null
+				? new LinkedHashMap<>()
+				: new LinkedHashMap<>(receipt);
+			if (error != null)
+			{
+				result.put("status", "rejected");
+				result.put("result", rootMessage(error));
+			}
+			return result;
+		}).whenComplete((receipt, error) -> completeAction(script, requestId, receipt, error));
+	}
+
+	void submitCombatSetAutoRetaliate(
+		GenericClientLuaScript script,
+		long requestId,
+		boolean enabled,
+		boolean breaksEnabled)
+	{
+		int mode = enabled ? 5 : 4;
+		combatModeAction.setMode(mode, breaksEnabled).handle((receipt, error) ->
+		{
+			Map<String, Object> result = receipt == null
+				? new LinkedHashMap<>()
+				: new LinkedHashMap<>(receipt);
+			if (error != null)
+			{
+				result.put("status", "rejected");
+				result.put("result", rootMessage(error));
+			}
+			return result;
+		}).whenComplete((receipt, error) -> completeAction(script, requestId, receipt, error));
+	}
+
 	void submitMouseOffscreen(GenericClientLuaScript script, long requestId)
 	{
 		behavior.moveMouseOffscreen().handle((result, error) ->
@@ -429,6 +603,28 @@ final class GenericClientLuaHost implements AutoCloseable
 			current = current.getCause();
 		}
 		return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
+	}
+
+	private static NpcInteractAction unsupportedNpcInteractAction()
+	{
+		return (name, action, within, breaksEnabled) ->
+		{
+			Map<String, Object> receipt = new LinkedHashMap<>();
+			receipt.put("status", "rejected");
+			receipt.put("result", "npc.interact is unavailable in this host");
+			return CompletableFuture.completedFuture(receipt);
+		};
+	}
+
+	private static CombatModeAction unsupportedCombatModeAction()
+	{
+		return (styleIndex, breaksEnabled) ->
+		{
+			Map<String, Object> receipt = new LinkedHashMap<>();
+			receipt.put("status", "rejected");
+			receipt.put("result", "combat.set_style is unavailable in this host");
+			return CompletableFuture.completedFuture(receipt);
+		};
 	}
 
 	void scriptLog(String scriptName, String level, String event, Object fields)
@@ -654,7 +850,7 @@ final class GenericClientLuaHost implements AutoCloseable
 			run.finish(status, expected.getOverlayRows(), clock.getAsLong());
 		}
 		publishStatus("LUA_" + status + " script=" + activeScript);
-		cancelWalkAction.accept("script_finished");
+		cancelAction.accept("script_finished");
 		expected.close();
 		session = null;
 	}
@@ -683,7 +879,7 @@ final class GenericClientLuaHost implements AutoCloseable
 	{
 		GenericClientLuaScript current = session;
 		session = null;
-		cancelWalkAction.accept("script_stopped");
+		cancelAction.accept("script_stopped");
 		if (current != null)
 		{
 			current.close();
@@ -804,5 +1000,21 @@ final class GenericClientLuaHost implements AutoCloseable
 			int within,
 			int timeoutTicks,
 			boolean breaksEnabled);
+	}
+
+	@FunctionalInterface
+	interface NpcInteractAction
+	{
+		CompletableFuture<Map<String, Object>> interact(
+			String name,
+			String action,
+			int within,
+			boolean breaksEnabled);
+	}
+
+	@FunctionalInterface
+	interface CombatModeAction
+	{
+		CompletableFuture<Map<String, Object>> setMode(int mode, boolean breaksEnabled);
 	}
 }

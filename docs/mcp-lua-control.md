@@ -56,6 +56,9 @@ the same port in the MCP server configuration.
 | Tool | Purpose |
 | --- | --- |
 | `client_status` | Read player position, game state, Lua state, scripts, mouse profile, and recent logs. |
+| `account_snapshot` | Read one pinned frame of skills, items, bank state, quests, GE offers, and known cash. |
+| `account_note_get` | Read the Notes text stored in the bound RuneLite profile. |
+| `account_note_set` | Replace that note with an updated goal and verified progress ledger. |
 | `behavior_profile` | Read the deterministic human-readable profile and numeric traits. |
 | `behavior_status` | Read the current break, countdown, long pressure, and break counts. |
 | `session_logout` | Deliberately log out through visible widgets with synthetic input. |
@@ -71,7 +74,9 @@ the same port in the MCP server configuration.
 | `script_reload_manifest` | Reload the manifest after external file edits. |
 
 Start with `client_status` so coordinates and login state come from the current
-client rather than assumptions.
+client rather than assumptions. Call `account_snapshot` before planning account
+work. If its bank state is `unknown`, open the bank once before treating the cash
+or supply inventory as complete.
 
 ## Lua REPL
 
@@ -88,6 +93,25 @@ return gc.read("npcs", {
   limit = 20,
 })
 ```
+
+The same account frame exposed by `account_snapshot` is available inside Lua:
+
+```lua
+local account = gc.read("account")
+return {
+  attack_xp = account.skills.attack.xp,
+  inventory = account.inventory.items,
+  bank_state = account.bank.state,
+  waterfall = account.quests.waterfall_quest.state,
+  offers = account.grand_exchange.offers,
+  known_cash = account.cash.known_total_value,
+  cash_complete = account.cash.complete,
+}
+```
+
+The bundled Account Auditor uses this frame and stays idle after its first
+snapshot. Run it from Automations, then use its **Refresh** action whenever a
+new receipt is needed. It does not start automatically.
 
 The REPL keeps global variables between calls:
 
@@ -112,6 +136,22 @@ local result = gc.await {
 }
 
 return result
+```
+
+NPC actions are matched by name and menu option. The nearest matching NPC inside
+the radius is used, and the receipt states whether the synthetic cursor used a
+left-click or context menu:
+
+```lua
+return gc.await {
+  action = {
+    type = "npc.interact",
+    name = "Banker",
+    action = "Bank",
+    within = 8,
+  },
+  breaks = false,
+}
 ```
 
 `mouse.offscreen` parks the synthetic cursor at the current account profile's

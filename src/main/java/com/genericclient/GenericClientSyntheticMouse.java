@@ -111,6 +111,9 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		final CompletableFuture<String> completion;
 		final List<GenericClientMouseMatcher.PathPoint> path;
 		final int duration;
+		final boolean entering;
+		final Point previousStart;
+		final Point pathStart;
 		synchronized (this)
 		{
 			ensureOpen();
@@ -125,13 +128,23 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 			}
 			duration = Math.max(25, durationMillis.getAsInt());
 			Rectangle viewport = new Rectangle(0, 0, Math.max(1, canvas.getWidth()), Math.max(1, canvas.getHeight()));
+			Random random = randomSupplier.get();
+			entering = outside && inside(destination);
+			previousStart = new Point(position);
+			pathStart = entering
+				? randomizedReentryStart(previousStart, viewport.width, viewport.height, random)
+				: previousStart;
+			if (entering)
+			{
+				position = new Point(pathStart);
+			}
 			path = GenericClientMouseMatcher.generate(
 				profile,
-				new Point(position),
+				pathStart,
 				new Point(destination),
 				viewport,
 				duration,
-				randomSupplier.get());
+				random);
 			moving = true;
 			completion = new CompletableFuture<>();
 			activeMove = completion;
@@ -140,14 +153,13 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		reporter.accept("SYNTHETIC_MOUSE_PATH_GENERATED profile=" + profileSupplier.get().getProfileId() +
 			" points=" + path.size() + " durationMs=" + duration + " destination=" +
 			destination.x + "," + destination.y);
-		effects.beginPath(path);
-		effects.recordPoint(getPosition());
-		boolean entering = isOutside() && inside(destination);
 		if (entering)
 		{
-			dispatchFocus(FocusEvent.FOCUS_GAINED);
-			dispatchMouse(MouseEvent.MOUSE_ENTERED, clampToCanvas(destination), 0, 0, false);
+			reporter.accept("SYNTHETIC_MOUSE_REENTRY previous=" + previousStart.x + "," + previousStart.y +
+				" randomized=" + pathStart.x + "," + pathStart.y);
 		}
+		effects.beginPath(path);
+		effects.recordPoint(getPosition());
 		for (int index = 1; index < path.size(); index++)
 		{
 			int pathIndex = index;
@@ -252,13 +264,22 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 
 	private void dispatchMove(Point point, int pathIndex)
 	{
+		boolean wasOutside;
+		synchronized (this)
+		{
+			wasOutside = outside;
+		}
+		boolean pointOutside = !inside(point);
+		if (wasOutside && !pointOutside)
+		{
+			dispatchFocus(FocusEvent.FOCUS_GAINED);
+			dispatchMouse(MouseEvent.MOUSE_ENTERED, clampToCanvas(point), 0, MouseEvent.NOBUTTON, false);
+		}
 		dispatchMouse(MouseEvent.MOUSE_MOVED, point, 0, MouseEvent.NOBUTTON, false);
-		boolean pointOutside;
 		synchronized (this)
 		{
 			position = new Point(point);
-			outside = !inside(point);
-			pointOutside = outside;
+			outside = pointOutside;
 		}
 		effects.updateCursor(point, pointOutside);
 		effects.recordPoint(point);
@@ -388,6 +409,49 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		return new Point(
 			Math.max(0, Math.min(Math.max(0, canvas.getWidth() - 1), point.x)),
 			Math.max(0, Math.min(Math.max(0, canvas.getHeight() - 1), point.y)));
+	}
+
+	static Point randomizedReentryStart(Point current, int width, int height, Random random)
+	{
+		int safeWidth = Math.max(1, width);
+		int safeHeight = Math.max(1, height);
+		int distance = 5 + random.nextInt(71);
+		if (current.x < 0)
+		{
+			return new Point(-distance, shiftedCoordinate(current.y, safeHeight, random));
+		}
+		if (current.x >= safeWidth)
+		{
+			return new Point(safeWidth + distance, shiftedCoordinate(current.y, safeHeight, random));
+		}
+		if (current.y < 0)
+		{
+			return new Point(shiftedCoordinate(current.x, safeWidth, random), -distance);
+		}
+		if (current.y >= safeHeight)
+		{
+			return new Point(shiftedCoordinate(current.x, safeWidth, random), safeHeight + distance);
+		}
+		throw new IllegalArgumentException("Re-entry start must be outside the canvas");
+	}
+
+	private static int shiftedCoordinate(int current, int size, Random random)
+	{
+		if (size == 1)
+		{
+			return 0;
+		}
+		int origin = Math.max(0, Math.min(size - 1, current));
+		int minimumShift = Math.min(size - 1, Math.max(8, size / 12));
+		for (int attempt = 0; attempt < 12; attempt++)
+		{
+			int candidate = random.nextInt(size);
+			if (Math.abs(candidate - origin) >= minimumShift)
+			{
+				return candidate;
+			}
+		}
+		return origin < size / 2 ? size - 1 : 0;
 	}
 
 	private static CompletableFuture<String> failed(String message)

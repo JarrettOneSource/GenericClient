@@ -67,6 +67,35 @@ public class GenericClientSessionControllerTest
 	}
 
 	@Test
+	public void closesAModalInterfaceBeforeOpeningTheLogoutTab() throws Exception
+	{
+		FakeView view = new FakeView();
+		view.gameState = GameState.LOGGED_IN;
+		FakeInput input = new FakeInput();
+		input.onEscape = () -> view.widgets.put(
+			WidgetInfo.RESIZABLE_VIEWPORT_LOGOUT_TAB.getId(),
+			new Rectangle(10, 10, 20, 20));
+		input.onClick = () ->
+		{
+			if (input.clicks.get() == 1)
+			{
+				view.widgets.put(InterfaceID.Logout.LOGOUT, new Rectangle(200, 220, 100, 40));
+			}
+			else
+			{
+				view.gameState = GameState.LOGIN_SCREEN;
+			}
+		};
+
+		try (Fixture fixture = fixture(view, input))
+		{
+			assertEquals("SESSION_LOGGED_OUT", fixture.controller.logout().get(2, TimeUnit.SECONDS));
+			assertEquals(1, input.escapes.get());
+			assertEquals(2, input.clicks.get());
+		}
+	}
+
+	@Test
 	public void usesTheJagexPlayButtonThenDismissesClickToPlay() throws Exception
 	{
 		FakeView view = new FakeView();
@@ -85,6 +114,7 @@ public class GenericClientSessionControllerTest
 			else
 			{
 				view.widgets.remove(InterfaceID.WelcomeScreen.PLAY);
+				view.worldReady = true;
 			}
 		};
 
@@ -112,6 +142,7 @@ public class GenericClientSessionControllerTest
 			if (input.clicks.get() == 3)
 			{
 				view.gameState = GameState.LOGGED_IN;
+				view.worldReady = true;
 			}
 		};
 
@@ -130,12 +161,32 @@ public class GenericClientSessionControllerTest
 	{
 		FakeView view = new FakeView();
 		view.gameState = GameState.LOGGED_IN;
+		view.worldReady = true;
 		FakeInput input = new FakeInput();
 
 		try (Fixture fixture = fixture(view, input))
 		{
 			assertEquals("SESSION_LOGGED_IN", fixture.controller.ensureLoggedIn().get(1, TimeUnit.SECONDS));
 			assertEquals(0, input.clicks.get());
+		}
+	}
+
+	@Test
+	public void usesTheCanvasFallbackWhenLoggedInButWelcomeWidgetIdsAreMissing() throws Exception
+	{
+		FakeView view = new FakeView();
+		view.gameState = GameState.LOGGED_IN;
+		view.canvasWidth = 765;
+		view.canvasHeight = 503;
+		FakeInput input = new FakeInput();
+		input.onClick = () -> view.worldReady = true;
+
+		try (Fixture fixture = fixture(view, input))
+		{
+			assertEquals("SESSION_LOGGED_IN_AND_PLAYING",
+				fixture.controller.ensureLoggedIn().get(1, TimeUnit.SECONDS));
+			assertEquals(new Point(382, 337), input.moves.get(0));
+			assertEquals(1, input.clicks.get());
 		}
 	}
 
@@ -148,7 +199,11 @@ public class GenericClientSessionControllerTest
 		view.canvasHeight = 503;
 		view.widgets.put(InterfaceID.WelcomeScreen.UNIVERSE, new Rectangle(0, 0, 765, 503));
 		FakeInput input = new FakeInput();
-		input.onClick = () -> view.widgets.remove(InterfaceID.WelcomeScreen.UNIVERSE);
+		input.onClick = () ->
+		{
+			view.widgets.remove(InterfaceID.WelcomeScreen.UNIVERSE);
+			view.worldReady = true;
+		};
 
 		try (Fixture fixture = fixture(view, input))
 		{
@@ -228,6 +283,7 @@ public class GenericClientSessionControllerTest
 		private String launcherDisplayName;
 		private int canvasWidth = 800;
 		private int canvasHeight = 600;
+		private volatile boolean worldReady;
 		private final Map<Integer, Rectangle> widgets = new HashMap<>();
 
 		@Override
@@ -267,13 +323,21 @@ public class GenericClientSessionControllerTest
 			}
 			return CompletableFuture.completedFuture(null);
 		}
+
+		@Override
+		public CompletableFuture<Boolean> worldReady()
+		{
+			return CompletableFuture.completedFuture(worldReady);
+		}
 	}
 
 	private static final class FakeInput implements GenericClientSessionController.Input
 	{
 		private final java.util.List<Point> moves = new java.util.ArrayList<>();
 		private final AtomicInteger clicks = new AtomicInteger();
+		private final AtomicInteger escapes = new AtomicInteger();
 		private Runnable onClick = () -> { };
+		private Runnable onEscape = () -> { };
 
 		@Override
 		public CompletableFuture<String> move(Point point)
@@ -288,6 +352,14 @@ public class GenericClientSessionControllerTest
 			clicks.incrementAndGet();
 			onClick.run();
 			return CompletableFuture.completedFuture("clicked");
+		}
+
+		@Override
+		public CompletableFuture<String> pressEscape()
+		{
+			escapes.incrementAndGet();
+			onEscape.run();
+			return CompletableFuture.completedFuture("escape");
 		}
 	}
 }

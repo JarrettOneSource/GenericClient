@@ -5,7 +5,7 @@ import * as z from "zod/v4";
 
 import { GenericClientBridge } from "./bridge.mjs";
 
-const VERSION = "0.10.0";
+const VERSION = "0.11.0";
 
 function result(value) {
   return {
@@ -23,7 +23,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     { name: "genericclient", version: VERSION },
     {
       instructions:
-        "GenericClient controls the live RuneLite client through Lua. Call client_status first. " +
+        "GenericClient controls the live RuneLite client through Lua. Call client_status first, then account_snapshot before planning account work. " +
         "Use lua_eval for ad-hoc exploration; its code is the body of a persistent Lua function, so return a value to receive it. " +
         "Available Lua primitives are gc.read, gc.await, gc.log, gc.overlay, and gc.next_action. " +
         "Each composite client interaction uses the seeded behavior profile unless breaks=false; gc.phase(name) performs a heavier phase evaluation. " +
@@ -46,6 +46,58 @@ export function createServer(bridge = new GenericClientBridge()) {
       },
     },
     async () => result(await bridge.call("status")),
+  );
+
+  server.registerTool(
+    "account_snapshot",
+    {
+      title: "Read account snapshot",
+      description:
+        "Read one immutable live frame containing player location, skills and exact XP, inventory, equipment, bank cache state, quests, Grand Exchange offers, and known cash. An unknown bank is not treated as empty; open it once to populate the cache.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => result(await bridge.call("account.snapshot")),
+  );
+
+  server.registerTool(
+    "account_note_get",
+    {
+      title: "Read account note",
+      description: "Read the RuneLite Notes text from the profile currently bound to this account.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => result(await bridge.call("account.note.get")),
+  );
+
+  server.registerTool(
+    "account_note_set",
+    {
+      title: "Update account note",
+      description:
+        "Replace the RuneLite Notes text in the profile currently bound to this account. Preserve the account goal and add only verified milestones or current plans.",
+      inputSchema: z.object({
+        text: z.string().min(1).max(20_000).describe("Complete replacement note text."),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ text }) => result(await bridge.call("account.note.set", { text })),
   );
 
   server.registerTool(

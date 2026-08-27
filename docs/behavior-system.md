@@ -98,6 +98,10 @@ A micro roll occurs after each dispatched composite interaction. If selected:
 3. after the timer ends, script execution may continue, but the cursor stays
    outside the canvas until another action needs it.
 
+The profile's idle side is stable. The next action randomizes a new off-screen
+origin along that same side before applying its recorded movement template, so
+the cursor does not repeatedly leave and re-enter through one identical point.
+
 The natural off-canvas idle between actions is workload-driven and is not part
 of forced-break downtime.
 
@@ -165,8 +169,8 @@ breaks for direct diagnostics and orchestration.
 Every automated mouse movement and click is delivered as client-canvas events.
 The existing recorded template matcher still generates the complete path, but
 GenericClient no longer reads or moves the operating-system pointer. Returning
-from off-canvas idle emits focus/enter events; leaving emits exit/focus-loss
-events. Synthetic events are marked so manual mouse-profile recording ignores
-them. Walking rotates the client camera through RuneLite's injected camera yaw
+from off-canvas idle emits focus/enter events at the actual randomized edge
+crossing; leaving emits exit/focus-loss events. Synthetic events are marked so
+manual mouse-profile recording ignores them. Walking rotates the client camera through RuneLite's injected camera yaw
 target before recomputing the canvas/minimap projection; it never moves the
 operating-system cursor.

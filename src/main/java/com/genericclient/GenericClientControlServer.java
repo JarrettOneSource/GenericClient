@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 final class GenericClientControlServer implements AutoCloseable
@@ -31,6 +32,8 @@ final class GenericClientControlServer implements AutoCloseable
 	private final Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction;
 	private final Supplier<java.util.concurrent.CompletableFuture<String>> loginAction;
 	private final Supplier<Map<String, Object>> statusSupplier;
+	private final Supplier<String> noteSupplier;
+	private final Function<String, java.util.concurrent.CompletableFuture<String>> noteSetter;
 	private final Consumer<String> reporter;
 	private final Gson gson = new Gson();
 	private HttpServer server;
@@ -44,11 +47,39 @@ final class GenericClientControlServer implements AutoCloseable
 		Supplier<Map<String, Object>> statusSupplier,
 		Consumer<String> reporter)
 	{
+		this(
+			port,
+			luaHost,
+			logoutAction,
+			loginAction,
+			statusSupplier,
+			() -> null,
+			note ->
+			{
+				java.util.concurrent.CompletableFuture<String> failed = new java.util.concurrent.CompletableFuture<>();
+				failed.completeExceptionally(new IllegalStateException("Account notes are unavailable"));
+				return failed;
+			},
+			reporter);
+	}
+
+	GenericClientControlServer(
+		int port,
+		GenericClientLuaHost luaHost,
+		Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction,
+		Supplier<java.util.concurrent.CompletableFuture<String>> loginAction,
+		Supplier<Map<String, Object>> statusSupplier,
+		Supplier<String> noteSupplier,
+		Function<String, java.util.concurrent.CompletableFuture<String>> noteSetter,
+		Consumer<String> reporter)
+	{
 		this.requestedPort = port;
 		this.luaHost = luaHost;
 		this.logoutAction = logoutAction;
 		this.loginAction = loginAction;
 		this.statusSupplier = statusSupplier;
+		this.noteSupplier = noteSupplier;
+		this.noteSetter = noteSetter;
 		this.reporter = reporter;
 	}
 
@@ -168,6 +199,12 @@ final class GenericClientControlServer implements AutoCloseable
 			case "behavior.profile":
 				Object behavior = behaviorStatus();
 				return behavior instanceof Map ? ((Map<?, ?>) behavior).get("profile") : null;
+			case "account.snapshot":
+				return luaHost.readCurrentSnapshot("account").get(10, TimeUnit.SECONDS);
+			case "account.note.get":
+				return noteSupplier.get();
+			case "account.note.set":
+				return noteSetter.apply(noteParameter(parameters)).get(10, TimeUnit.SECONDS);
 			case "session.logout":
 				return logoutAction.get().get(30, TimeUnit.SECONDS);
 			case "session.login":
@@ -231,6 +268,20 @@ final class GenericClientControlServer implements AutoCloseable
 		if (!(value instanceof String) || ((String) value).trim().isEmpty())
 		{
 			throw new IllegalArgumentException("RPC parameter " + name + " must be a non-empty string");
+		}
+		return (String) value;
+	}
+
+	private static String noteParameter(Map<String, Object> parameters)
+	{
+		Object value = parameters.get("text");
+		if (!(value instanceof String) || ((String) value).trim().isEmpty())
+		{
+			throw new IllegalArgumentException("RPC parameter text must be a non-empty string");
+		}
+		if (((String) value).length() > 20_000)
+		{
+			throw new IllegalArgumentException("RPC account note cannot exceed 20,000 characters");
 		}
 		return (String) value;
 	}

@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -32,6 +33,7 @@ public class GenericClientControlServerTest
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("control-behavior").toPath()),
 			message -> { });
+		AtomicReference<String> note = new AtomicReference<>("Account Goal");
 		GenericClientControlServer server = new GenericClientControlServer(
 			0,
 			host,
@@ -50,6 +52,12 @@ public class GenericClientControlServerTest
 				status.put("lua", host.controlState());
 				return status;
 			},
+			note::get,
+			text ->
+			{
+				note.set(text);
+				return CompletableFuture.completedFuture("ACCOUNT_NOTE_UPDATED");
+			},
 			message -> { });
 		try
 		{
@@ -67,6 +75,16 @@ public class GenericClientControlServerTest
 			Map<String, Object> statusResponse = post(server, "status", new LinkedHashMap<>());
 			Map<String, Object> statusResult = (Map<String, Object>) statusResponse.get("result");
 			assertTrue(((Map<String, Object>) statusResult.get("lua")).get("active_inputs") instanceof Map);
+			Map<String, Object> accountResponse = post(server, "account.snapshot", new LinkedHashMap<>());
+			Map<String, Object> account = (Map<String, Object>) accountResponse.get("result");
+			assertEquals("Player", ((Map<String, Object>) account.get("player")).get("name"));
+			assertTrue(account.get("skills") instanceof Map);
+			assertEquals("Account Goal", post(server, "account.note.get", new LinkedHashMap<>()).get("result"));
+			Map<String, Object> noteParameters = new LinkedHashMap<>();
+			noteParameters.put("text", "Account Goal\n\nVerified audit");
+			assertEquals("ACCOUNT_NOTE_UPDATED",
+				post(server, "account.note.set", noteParameters).get("result"));
+			assertEquals("Account Goal\n\nVerified audit", note.get());
 
 			Map<String, Object> saveParameters = new LinkedHashMap<>();
 			saveParameters.put("id", "hello-world");

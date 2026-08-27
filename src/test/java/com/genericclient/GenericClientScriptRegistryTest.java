@@ -20,7 +20,11 @@ public class GenericClientScriptRegistryTest
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(
 			temporaryFolder.newFolder("scripts").toPath());
 
-		assertEquals(3, registry.list().size());
+		assertEquals(5, registry.list().size());
+		assertEquals("Account Auditor", registry.get("account-auditor").getName());
+		assertEquals("AIO Melee Trainer", registry.get("aio-melee").getName());
+		assertTrue(registry.readSource("aio-melee").contains("combat.set_style"));
+		assertTrue(registry.readSource("account-auditor").contains("gc.read(\"account\")"));
 		assertEquals("Walker", registry.get("walker").getName());
 		assertTrue(registry.readSource("walker").contains("id = \"destination\""));
 		assertTrue(registry.readSource("walker").contains("varrock_center"));
@@ -73,14 +77,14 @@ public class GenericClientScriptRegistryTest
 
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
 
-		assertEquals(4, registry.list().size());
+		assertEquals(6, registry.list().size());
 		assertEquals("Walker", registry.get("walker").getName());
 		assertEquals("Custom", registry.get("custom").getName());
 		assertEquals("return { run = function(input) return 'custom' end }\n",
 			registry.readSource("custom"));
 		assertTrue(registry.readSource("npc-diagnostics").contains("run = function(input)"));
 		assertTrue(Files.readString(directory.resolve("manifest.json"))
-			.contains("genericclient_scripts.v3"));
+			.contains("genericclient_scripts.v7"));
 	}
 
 	@Test
@@ -108,6 +112,34 @@ public class GenericClientScriptRegistryTest
 		assertEquals("return { run = function(input) return 'custom' end }\n",
 			registry.readSource("custom"));
 		assertTrue(Files.readString(directory.resolve("manifest.json"))
-			.contains("genericclient_scripts.v3"));
+			.contains("genericclient_scripts.v7"));
+	}
+
+	@Test
+	public void refreshesVersionFiveAioMeleeWithAutoRetaliateSafety() throws Exception
+	{
+		Path directory = temporaryFolder.newFolder("version-five-scripts").toPath();
+		Files.writeString(directory.resolve("manifest.json"),
+			"{\n" +
+			"  \"schema\": \"genericclient_scripts.v5\",\n" +
+			"  \"scripts\": [\n" +
+			"    { \"id\": \"aio-melee\", \"name\": \"AIO Melee Trainer\", " +
+				"\"description\": \"Old melee\", \"file\": \"aio-melee.lua\" },\n" +
+			"    { \"id\": \"custom\", \"name\": \"Custom\", " +
+				"\"description\": \"Keep me\", \"file\": \"custom.lua\" }\n" +
+			"  ]\n" +
+			"}\n");
+		Files.writeString(directory.resolve("aio-melee.lua"),
+			"return { run = function(input) return 'stale' end }\n");
+		Files.writeString(directory.resolve("custom.lua"),
+			"return { run = function(input) return 'custom' end }\n");
+
+		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
+
+		assertTrue(registry.readSource("aio-melee").contains("combat.set_auto_retaliate"));
+		assertEquals("return { run = function(input) return 'custom' end }\n",
+			registry.readSource("custom"));
+		assertTrue(Files.readString(directory.resolve("manifest.json"))
+			.contains("genericclient_scripts.v7"));
 	}
 }

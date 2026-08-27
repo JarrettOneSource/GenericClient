@@ -17,6 +17,7 @@ final class GenericClientLuaScript implements AutoCloseable
 	private static final long RESUME_BUDGET_NANOS = 20_000_000L;
 	private static final int HOOK_INSTRUCTION_INTERVAL = 1_000;
 	private static final int DEFAULT_RANDOM_ACTION_TIMEOUT_TICKS = 8;
+	private static final int DEFAULT_NPC_ACTION_TIMEOUT_TICKS = 20;
 	private static final int DEFAULT_WALK_ACTION_TIMEOUT_TICKS = 600;
 
 	private final GenericClientLuaHost host;
@@ -522,7 +523,10 @@ final class GenericClientLuaScript implements AutoCloseable
 			String type = (String) typeValue;
 			int timeout = "walk.to".equals(type)
 				? DEFAULT_WALK_ACTION_TIMEOUT_TICKS
-				: DEFAULT_RANDOM_ACTION_TIMEOUT_TICKS;
+				: "npc.interact".equals(type) || "combat.set_style".equals(type) ||
+					"combat.set_auto_retaliate".equals(type)
+					? DEFAULT_NPC_ACTION_TIMEOUT_TICKS
+					: DEFAULT_RANDOM_ACTION_TIMEOUT_TICKS;
 			if (request.get("timeout") instanceof Map &&
 				((Map<?, ?>) request.get("timeout")).get("game_ticks") instanceof Number)
 			{
@@ -568,6 +572,50 @@ final class GenericClientLuaScript implements AutoCloseable
 					new WorldPoint(x, y, plane),
 					within,
 					breaksEnabled);
+			}
+			if ("npc.interact".equals(type))
+			{
+				String name = requiredText(action, "name", "npc.interact");
+				String option = requiredText(action, "action", "npc.interact");
+				int within = action.get("within") instanceof Number
+					? ((Number) action.get("within")).intValue()
+					: 15;
+				if (within < 1 || within > 32)
+				{
+					throw new IllegalArgumentException("npc.interact within must be between 1 and 32");
+				}
+				return Wait.npcAction(
+					++nextRequestId,
+					timeout,
+					name,
+					option,
+					within,
+					breaksEnabled);
+			}
+			if ("combat.set_style".equals(type))
+			{
+				Object styleValue = action.get("style");
+				if (!(styleValue instanceof Number))
+				{
+					throw new IllegalArgumentException("combat.set_style requires a numeric style");
+				}
+				int style = ((Number) styleValue).intValue();
+				if (style < 0 || style > 3)
+				{
+					throw new IllegalArgumentException("combat.set_style style must be between 0 and 3");
+				}
+				return Wait.combatStyle(++nextRequestId, timeout, style, breaksEnabled);
+			}
+			if ("combat.set_auto_retaliate".equals(type))
+			{
+				Object enabledValue = action.get("enabled");
+				if (!(enabledValue instanceof Boolean))
+				{
+					throw new IllegalArgumentException(
+						"combat.set_auto_retaliate requires enabled=true or enabled=false");
+				}
+				return Wait.combatAutoRetaliate(
+					++nextRequestId, timeout, (Boolean) enabledValue, breaksEnabled);
 			}
 			throw new IllegalArgumentException("Unsupported action: " + type);
 		}
@@ -618,6 +666,25 @@ final class GenericClientLuaScript implements AutoCloseable
 		{
 			host.submitMouseOffscreen(this, wait.requestId);
 		}
+		else if ("npc.interact".equals(wait.actionType))
+		{
+			host.submitNpcInteract(
+				this,
+				wait.requestId,
+				wait.targetName,
+				wait.targetAction,
+				wait.within,
+				wait.breaksEnabled);
+		}
+		else if ("combat.set_style".equals(wait.actionType))
+		{
+			host.submitCombatSetStyle(this, wait.requestId, wait.within, wait.breaksEnabled);
+		}
+		else if ("combat.set_auto_retaliate".equals(wait.actionType))
+		{
+			host.submitCombatSetAutoRetaliate(
+				this, wait.requestId, wait.within == 1, wait.breaksEnabled);
+		}
 		else
 		{
 			host.submitWalkTo(
@@ -638,6 +705,16 @@ final class GenericClientLuaScript implements AutoCloseable
 			throw new IllegalArgumentException("walk.to destination requires numeric " + key);
 		}
 		return ((Number) number).intValue();
+	}
+
+	private static String requiredText(Map<?, ?> value, String key, String actionType)
+	{
+		Object raw = value.get(key);
+		if (!(raw instanceof String) || ((String) raw).trim().isEmpty())
+		{
+			throw new IllegalArgumentException(actionType + " requires a non-empty " + key);
+		}
+		return ((String) raw).trim();
 	}
 
 	private void beginBudget()
@@ -789,6 +866,8 @@ final class GenericClientLuaScript implements AutoCloseable
 		private final String actionType;
 		private final WorldPoint destination;
 		private final int within;
+		private final String targetName;
+		private final String targetAction;
 		private final boolean breaksEnabled;
 		private final String phaseName;
 		private int remainingTicks;
@@ -801,6 +880,8 @@ final class GenericClientLuaScript implements AutoCloseable
 			String actionType,
 			WorldPoint destination,
 			int within,
+			String targetName,
+			String targetAction,
 			boolean breaksEnabled,
 			String phaseName)
 		{
@@ -810,24 +891,27 @@ final class GenericClientLuaScript implements AutoCloseable
 			this.actionType = actionType;
 			this.destination = destination;
 			this.within = within;
+			this.targetName = targetName;
+			this.targetAction = targetAction;
 			this.breaksEnabled = breaksEnabled;
 			this.phaseName = phaseName;
 		}
 
 		private static Wait gameTick()
 		{
-			return new Wait(WaitKind.GAME_TICK, 0, 0, null, null, 0, true, null);
+			return new Wait(WaitKind.GAME_TICK, 0, 0, null, null, 0, null, null, true, null);
 		}
 
 		private static Wait ticks(int ticks)
 		{
-			return new Wait(WaitKind.TICKS, 0, ticks, null, null, 0, true, null);
+			return new Wait(WaitKind.TICKS, 0, ticks, null, null, 0, null, null, true, null);
 		}
 
 		private static Wait randomAction(long requestId, int timeoutTicks, boolean breaksEnabled)
 		{
 			return new Wait(
-				WaitKind.ACTION, requestId, timeoutTicks, "walk.random", null, 0, breaksEnabled, null);
+				WaitKind.ACTION, requestId, timeoutTicks, "walk.random", null, 0,
+				null, null, breaksEnabled, null);
 		}
 
 		private static Wait walkAction(
@@ -838,18 +922,56 @@ final class GenericClientLuaScript implements AutoCloseable
 			boolean breaksEnabled)
 		{
 			return new Wait(
-				WaitKind.ACTION, requestId, timeoutTicks, "walk.to", destination, within, breaksEnabled, null);
+				WaitKind.ACTION, requestId, timeoutTicks, "walk.to", destination, within,
+				null, null, breaksEnabled, null);
+		}
+
+		private static Wait npcAction(
+			long requestId,
+			int timeoutTicks,
+			String name,
+			String action,
+			int within,
+			boolean breaksEnabled)
+		{
+			return new Wait(
+				WaitKind.ACTION, requestId, timeoutTicks, "npc.interact", null, within,
+				name, action, breaksEnabled, null);
+		}
+
+		private static Wait combatStyle(
+			long requestId,
+			int timeoutTicks,
+			int style,
+			boolean breaksEnabled)
+		{
+			return new Wait(
+				WaitKind.ACTION, requestId, timeoutTicks, "combat.set_style", null, style,
+				null, null, breaksEnabled, null);
+		}
+
+		private static Wait combatAutoRetaliate(
+			long requestId,
+			int timeoutTicks,
+			boolean enabled,
+			boolean breaksEnabled)
+		{
+			return new Wait(
+				WaitKind.ACTION, requestId, timeoutTicks, "combat.set_auto_retaliate", null,
+				enabled ? 1 : 0, null, null, breaksEnabled, null);
 		}
 
 		private static Wait mouseOffscreen(long requestId, int timeoutTicks)
 		{
 			return new Wait(
-				WaitKind.ACTION, requestId, timeoutTicks, "mouse.offscreen", null, 0, false, null);
+				WaitKind.ACTION, requestId, timeoutTicks, "mouse.offscreen", null, 0,
+				null, null, false, null);
 		}
 
 		private static Wait phase(long requestId, String name, boolean breaksEnabled)
 		{
-			return new Wait(WaitKind.PHASE, requestId, 0, null, null, 0, breaksEnabled, name);
+			return new Wait(WaitKind.PHASE, requestId, 0, null, null, 0,
+				null, null, breaksEnabled, name);
 		}
 	}
 }
