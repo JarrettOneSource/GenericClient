@@ -47,6 +47,11 @@ final class GenericClientSettingsPanel extends JPanel
 		GenericClientBehaviorProfile.MOUSE_MOVE_DURATION_MIN_MILLIS,
 		GenericClientBehaviorProfile.MOUSE_MOVE_DURATION_MAX_MILLIS,
 		25);
+	private final JSpinner typingWordsPerMinute = spinner(
+		GenericClientBehaviorProfile.DEFAULT_TYPING_WORDS_PER_MINUTE,
+		GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MIN,
+		GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MAX,
+		5);
 	private final JButton save = GenericClientDashboardStyle.primaryButton("Save custom");
 	private final JButton seeded = GenericClientDashboardStyle.ghostButton("Use seeded");
 	private final JLabel saveResult = GenericClientDashboardStyle.small("");
@@ -109,16 +114,17 @@ final class GenericClientSettingsPanel extends JPanel
 					GenericClientDashboardStyle.row("Switch chance", styleSwitchChance, "%"))))
 			.gap(18)
 			.put(GenericClientDashboardStyle.columns(28,
-				GenericClientDashboardStyle.group("Cursor",
+				GenericClientDashboardStyle.group("Input",
 					GenericClientDashboardStyle.row("Idle side", idleEdge, ""),
-					GenericClientDashboardStyle.row("Move duration", mouseDuration, "ms")),
+					GenericClientDashboardStyle.row("Move duration", mouseDuration, "ms"),
+					GenericClientDashboardStyle.row("Typing speed", typingWordsPerMinute, "WPM")),
 				GenericClientDashboardStyle.spacer()))
 			.gap(20)
 			.put(footer);
 		behaviorControls = Arrays.asList(
 			microChance, microLength, microTail, phaseBoost,
 			longInterval, longLength, longStyle, styleSwitchChance,
-			idleEdge, mouseDuration, save, seeded);
+			idleEdge, mouseDuration, typingWordsPerMinute, save, seeded);
 
 		JPanel page = GenericClientDashboardStyle.page();
 		page.add(GenericClientDashboardStyle.stack(16,
@@ -211,6 +217,7 @@ final class GenericClientSettingsPanel extends JPanel
 			idleEdge.setSelectedItem(GenericClientBehaviorProfile.Edge.valueOf(
 				String.valueOf(profile.get("idle_edge")).toUpperCase(Locale.ROOT)));
 			mouseDuration.setValue(number(profile.get("mouse_move_duration_millis")).intValue());
+			typingWordsPerMinute.setValue(number(profile.get("typing_words_per_minute")).intValue());
 			profileKey = nextKey;
 			behaviorDirty = false;
 		}
@@ -257,6 +264,7 @@ final class GenericClientSettingsPanel extends JPanel
 		phaseBoost.addChangeListener(change);
 		styleSwitchChance.addChangeListener(change);
 		mouseDuration.addChangeListener(change);
+		typingWordsPerMinute.addChangeListener(change);
 		longStyle.addActionListener(event -> markBehaviorDirty());
 		idleEdge.addActionListener(event -> markBehaviorDirty());
 	}
@@ -284,7 +292,8 @@ final class GenericClientSettingsPanel extends JPanel
 				(GenericClientBehaviorProfile.LongBreakMode) longStyle.getSelectedItem(),
 				((Number) styleSwitchChance.getValue()).doubleValue() / 100.0,
 				(GenericClientBehaviorProfile.Edge) idleEdge.getSelectedItem(),
-				((Number) mouseDuration.getValue()).intValue());
+				((Number) mouseDuration.getValue()).intValue(),
+				((Number) typingWordsPerMinute.getValue()).intValue());
 			setSaveResult(actions.saveBehaviorOverrides(overrides), GenericClientDashboardStyle.MUTED);
 			behaviorDirty = false;
 			profileKey = null;

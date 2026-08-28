@@ -8,7 +8,7 @@ import java.util.Map;
 
 final class GenericClientOverlayRow
 {
-	private static final int MAX_ROWS = 3;
+	private static final int MAX_ROWS = 4;
 
 	private final String label;
 	private final String value;

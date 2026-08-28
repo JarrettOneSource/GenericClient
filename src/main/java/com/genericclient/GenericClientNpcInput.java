@@ -1,79 +1,52 @@
 package com.genericclient;
 
-import java.awt.Canvas;
-import java.awt.Rectangle;
+import java.awt.Point;
 import java.awt.Shape;
-import java.awt.event.MouseEvent;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
 import net.runelite.api.Player;
 import net.runelite.api.WorldView;
-import net.runelite.api.events.MenuOptionClicked;
+import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 
-final class GenericClientNpcInput implements AutoCloseable
+final class GenericClientNpcInput
 {
-	private static final long HOVER_SETTLE_MILLIS = 250L;
-	private static final long CONTEXT_MENU_SETTLE_MILLIS = 150L;
-	private static final long CLICK_RESULT_TIMEOUT_MILLIS = 2_500L;
-	private static final int CONTEXT_MENU_ENTRY_HEIGHT = 15;
+	private static final int OCCLUDED_NPC_CAMERA_PITCH = 383;
+	private static final int[] CAMERA_YAW_OFFSETS = {0, 512, 1024, 1536};
+	private static final int CAMERA_SETTLED_UNITS = 8;
+	private static final long CAMERA_POLL_MILLIS = 40L;
+	private static final long CAMERA_SETTLE_TIMEOUT_MILLIS = 3_000L;
 
 	private final Client client;
 	private final ClientThread clientThread;
 	private final ScheduledExecutorService executor;
-	private final GenericClientSyntheticMouse syntheticMouse;
-	private final GenericClientBehaviorController behavior;
+	private final GenericClientMenuInput menuInput;
 	private final Consumer<String> reporter;
-	private final AtomicBoolean running = new AtomicBoolean();
-	private final List<ScheduledFuture<?>> pending = new CopyOnWriteArrayList<>();
-
-	private volatile CompletableFuture<Map<String, Object>> activeResult;
-	private volatile NPC targetNpc;
-	private volatile Map<String, Object> targetReceipt = Collections.emptyMap();
-	private volatile java.awt.Point targetPoint;
-	private volatile String targetName;
-	private volatile String targetAction;
-	private volatile int within;
-	private volatile boolean breaksEnabled;
-	private volatile boolean awaitingMenuResult;
-	private volatile int expectedIdentifier;
-	private volatile int expectedWorldViewId;
-	private volatile int clickCount;
-	private volatile String dispatch;
-	private volatile Map<String, Object> behaviorBefore = Collections.emptyMap();
-	private volatile Map<String, Object> behaviorAfter = Collections.emptyMap();
-	private volatile boolean closed;
 
 	GenericClientNpcInput(
 		Client client,
 		ClientThread clientThread,
 		ScheduledExecutorService executor,
-		GenericClientSyntheticMouse syntheticMouse,
-		GenericClientBehaviorController behavior,
+		GenericClientMenuInput menuInput,
 		Consumer<String> reporter)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
 		this.executor = executor;
-		this.syntheticMouse = syntheticMouse;
-		this.behavior = behavior;
+		this.menuInput = menuInput;
 		this.reporter = reporter;
 	}
 
@@ -83,306 +56,306 @@ final class GenericClientNpcInput implements AutoCloseable
 		int within,
 		boolean breaksEnabled)
 	{
-		String cleanName = requireText(name, "NPC name");
+		return interact(null, name, action, within, breaksEnabled);
+	}
+
+	CompletableFuture<Map<String, Object>> interact(
+		Integer id,
+		String name,
+		String action,
+		int within,
+		boolean breaksEnabled)
+	{
+		if (id != null && id < 0)
+		{
+			throw new IllegalArgumentException("NPC id cannot be negative");
+		}
+		String cleanName = name == null ? null : requireText(name, "NPC name");
+		if (id == null && cleanName == null)
+		{
+			throw new IllegalArgumentException("NPC id or name is required");
+		}
 		String cleanAction = requireText(action, "NPC action");
-		if (within < 1 || within > 32)
-		{
-			throw new IllegalArgumentException("NPC interaction radius must be between 1 and 32 tiles");
-		}
+		validateRadius(within);
+		return interactWithCamera(
+			cleanName, id, cleanAction, within, null, breaksEnabled);
+	}
 
-		CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
-		if (closed)
-		{
-			result.complete(immediateRejected(cleanAction, "input_closed"));
-			return result;
-		}
-		if (!running.compareAndSet(false, true))
-		{
-			result.complete(immediateRejected(cleanAction, "interaction_already_running"));
-			return result;
-		}
+	CompletableFuture<Map<String, Object>> useSelectedItemOnNpc(
+		Integer npcId,
+		String npcName,
+		int within,
+		int itemId,
+		String itemName,
+		boolean breaksEnabled)
+	{
+		validateRadius(within);
+		return interactWithCamera(
+			npcName,
+			npcId,
+			"Use",
+			within,
+			SelectedWidget.item(itemId, itemName),
+			breaksEnabled);
+	}
 
-		this.activeResult = result;
-		this.targetNpc = null;
-		this.targetReceipt = Collections.emptyMap();
-		this.targetPoint = null;
-		this.targetName = cleanName;
-		this.targetAction = cleanAction;
-		this.within = within;
-		this.breaksEnabled = breaksEnabled;
-		this.awaitingMenuResult = false;
-		this.clickCount = 0;
-		this.dispatch = null;
-		this.behaviorBefore = Collections.emptyMap();
-		this.behaviorAfter = Collections.emptyMap();
+	CompletableFuture<Map<String, Object>> castSelectedSpellOnNpc(
+		Integer npcId,
+		String npcName,
+		int within,
+		int spellWidgetId,
+		String spellName,
+		boolean breaksEnabled)
+	{
+		validateRadius(within);
+		return interactWithCamera(
+			npcName,
+			npcId,
+			"Cast",
+			within,
+			SelectedWidget.spell(spellWidgetId, spellName),
+			breaksEnabled);
+	}
 
-		reporter.accept("NPC_INTERACTION_SELECTING name=" + cleanName +
-			" action=" + cleanAction + " within=" + within);
-		behavior.beforeAction(breaksEnabled).whenComplete((before, error) ->
+	private CompletableFuture<Map<String, Object>> interactWithCamera(
+		String name,
+		Integer id,
+		String action,
+		int within,
+		SelectedWidget requestedSelection,
+		boolean breaksEnabled)
+	{
+		GenericClientMenuInput.TargetResolver resolver = () -> resolveNpc(
+			name, id, action, within, requestedSelection);
+		return menuInput.interact(resolver, breaksEnabled).thenCompose(receipt ->
+			retryWithCamera(
+				resolver, receipt, name, id, within, breaksEnabled, 0));
+	}
+
+	private CompletableFuture<Map<String, Object>> retryWithCamera(
+		GenericClientMenuInput.TargetResolver resolver,
+		Map<String, Object> receipt,
+		String name,
+		Integer id,
+		int within,
+		boolean breaksEnabled,
+		int cameraAttempt)
+	{
+		if (!isCameraRetryable(receipt.get("result")) ||
+			cameraAttempt >= CAMERA_YAW_OFFSETS.length)
 		{
-			if (error != null)
+			return CompletableFuture.completedFuture(receipt);
+		}
+		return faceNpc(name, id, within, CAMERA_YAW_OFFSETS[cameraAttempt]).thenCompose(faced ->
+		{
+			if (!faced)
 			{
-				finishRejected("behavior_before: " + rootMessage(error));
+				return CompletableFuture.completedFuture(receipt);
+			}
+			return menuInput.interact(resolver, breaksEnabled)
+				.thenCompose(next -> retryWithCamera(
+					resolver, next, name, id, within, breaksEnabled, cameraAttempt + 1));
+		});
+	}
+
+	static boolean isCameraRetryable(Object result)
+	{
+		return "npc_not_visible".equals(result) ||
+			"hover_has_no_matching_action".equals(result);
+	}
+
+	private CompletableFuture<Boolean> faceNpc(
+		String name,
+		Integer id,
+		int within,
+		int yawOffset)
+	{
+		CompletableFuture<Boolean> result = new CompletableFuture<>();
+		clientThread.invoke(() ->
+		{
+			Player player = client.getLocalPlayer();
+			if (player == null || player.getWorldLocation() == null)
+			{
+				result.complete(false);
 				return;
 			}
-			behaviorBefore = before;
-			clientThread.invoke(this::selectTargetOnClientThread);
+			NPC closest = null;
+			int closestDistance = Integer.MAX_VALUE;
+			for (NPC npc : player.getWorldView().npcs())
+			{
+				if (npc == null || npc.getWorldLocation() == null ||
+					(id != null && npc.getId() != id) ||
+					(name != null && !name.equalsIgnoreCase(Objects.toString(npc.getName(), ""))))
+				{
+					continue;
+				}
+				int distance = player.getWorldLocation().distanceTo(npc.getWorldLocation());
+				if (distance <= within && distance < closestDistance)
+				{
+					closest = npc;
+					closestDistance = distance;
+				}
+			}
+			if (closest == null)
+			{
+				result.complete(false);
+				return;
+			}
+			int targetYaw = (GenericClientGameInput.yawToward(
+				player.getWorldLocation(), closest.getWorldLocation()) + yawOffset) & 2047;
+			client.setCameraYawTarget(targetYaw);
+			client.setCameraPitchTarget(OCCLUDED_NPC_CAMERA_PITCH);
+			reporter.accept("NPC_CAMERA_TURN_STARTED id=" + closest.getId() +
+				" yaw=" + client.getCameraYaw() + " targetYaw=" + targetYaw +
+				" pitch=" + client.getCameraPitch() +
+				" targetPitch=" + OCCLUDED_NPC_CAMERA_PITCH);
+			awaitCameraSettled(
+				closest.getId(),
+				targetYaw,
+				System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CAMERA_SETTLE_TIMEOUT_MILLIS),
+				result);
 		});
 		return result;
 	}
 
-	boolean isRunning()
+	private void awaitCameraSettled(
+		int npcId,
+		int targetYaw,
+		long deadlineNanos,
+		CompletableFuture<Boolean> result)
 	{
-		return running.get();
-	}
-
-	void cancel(String reason)
-	{
-		if (running.get())
-		{
-			finishRejected("cancelled: " + reason);
-		}
-	}
-
-	void onMenuOptionClicked(MenuOptionClicked event)
-	{
-		if (!awaitingMenuResult ||
-			event.getId() != expectedIdentifier ||
-			!targetAction.equalsIgnoreCase(event.getMenuOption()) ||
-			event.getMenuEntry().getWorldViewId() != expectedWorldViewId)
+		if (result.isDone())
 		{
 			return;
 		}
-
-		awaitingMenuResult = false;
-		behavior.afterAction(breaksEnabled).whenComplete((after, error) ->
+		int yaw = client.getCameraYaw();
+		int pitch = client.getCameraPitch();
+		int yawRemaining = GenericClientGameInput.angularDistance(yaw, targetYaw);
+		int pitchRemaining = Math.abs(pitch - OCCLUDED_NPC_CAMERA_PITCH);
+		boolean timedOut = System.nanoTime() >= deadlineNanos;
+		if ((yawRemaining <= CAMERA_SETTLED_UNITS && pitchRemaining <= CAMERA_SETTLED_UNITS) || timedOut)
 		{
-			if (error != null)
-			{
-				finishRejected("behavior_after: " + rootMessage(error));
-				return;
-			}
-			behaviorAfter = after;
-			finishSuccess(event);
-		});
-	}
-
-	private void selectTargetOnClientThread()
-	{
-		if (!running.get())
-		{
+			reporter.accept("NPC_CAMERA_TURN_" + (timedOut ? "TIMED_OUT" : "COMPLETED") +
+				" id=" + npcId + " yaw=" + yaw + " targetYaw=" + targetYaw +
+				" pitch=" + pitch + " targetPitch=" + OCCLUDED_NPC_CAMERA_PITCH +
+				" yawRemaining=" + yawRemaining + " pitchRemaining=" + pitchRemaining);
+			result.complete(true);
 			return;
 		}
+		executor.schedule(
+			() -> clientThread.invoke(() ->
+				awaitCameraSettled(npcId, targetYaw, deadlineNanos, result)),
+			CAMERA_POLL_MILLIS,
+			TimeUnit.MILLISECONDS);
+	}
+
+	private GenericClientMenuInput.Resolution resolveNpc(
+		String name,
+		Integer id,
+		String action,
+		int within,
+		SelectedWidget requestedSelection)
+	{
 		if (client.getGameState() != GameState.LOGGED_IN)
 		{
-			finishRejected("client_not_logged_in");
-			return;
+			return GenericClientMenuInput.Resolution.rejected("client_not_logged_in");
+		}
+		if (requestedSelection != null)
+		{
+			Widget selected = client.getSelectedWidget();
+			if (!client.isWidgetSelected() || selected == null || !requestedSelection.matches(selected))
+			{
+				return GenericClientMenuInput.Resolution.rejected(
+					"requested_" + requestedSelection.kind + "_not_selected");
+			}
 		}
 		Player player = client.getLocalPlayer();
 		if (player == null || player.getWorldLocation() == null)
 		{
-			finishRejected("local_player_unavailable");
-			return;
+			return GenericClientMenuInput.Resolution.rejected("local_player_unavailable");
 		}
 
 		WorldView worldView = player.getWorldView();
 		NPC nearest = null;
+		Point nearestPoint = null;
+		Shape nearestShape = null;
 		int nearestDistance = Integer.MAX_VALUE;
+		boolean matchingNpcExists = false;
+		boolean matchingNpcHasLineOfSight = false;
 		for (NPC npc : worldView.npcs())
 		{
 			if (npc == null || npc.getWorldLocation() == null ||
-				!targetName.equalsIgnoreCase(Objects.toString(npc.getName(), "")) ||
-				!hasAction(npc, targetAction) ||
-				("Attack".equalsIgnoreCase(targetAction) &&
+				(id != null && npc.getId() != id) ||
+				(name != null && !name.equalsIgnoreCase(Objects.toString(npc.getName(), ""))) ||
+				(requestedSelection == null && !hasAction(npc, action)) ||
+				(requestedSelection != null && "spell".equals(requestedSelection.kind) &&
+					npc.getInteracting() != null && npc.getInteracting() != player) ||
+				("Attack".equalsIgnoreCase(action) &&
 					npc.getInteracting() != null && npc.getInteracting() != player))
 			{
 				continue;
 			}
 			int distance = player.getWorldLocation().distanceTo(npc.getWorldLocation());
-			if (distance <= within && distance < nearestDistance)
+			if (distance > within)
+			{
+				continue;
+			}
+			matchingNpcExists = true;
+			if (requestedSelection != null && "spell".equals(requestedSelection.kind) &&
+				!hasLineOfSight(player, npc))
+			{
+				continue;
+			}
+			matchingNpcHasLineOfSight = true;
+			Shape candidateShape = npc.getConvexHull();
+			if (candidateShape == null)
+			{
+				candidateShape = npc.getCanvasTilePoly();
+			}
+			Point candidatePoint = GenericClientMenuInput.randomPointInside(
+				candidateShape, client.getCanvasWidth(), client.getCanvasHeight());
+			if (candidatePoint != null && distance < nearestDistance)
 			{
 				nearest = npc;
+				nearestPoint = candidatePoint;
+				nearestShape = candidateShape;
 				nearestDistance = distance;
 			}
 		}
 		if (nearest == null)
 		{
-			finishRejected("matching_npc_not_found");
-			return;
-		}
-
-		Shape shape = nearest.getConvexHull();
-		if (shape == null)
-		{
-			shape = nearest.getCanvasTilePoly();
-		}
-		java.awt.Point point = randomPointInside(shape);
-		if (point == null)
-		{
-			finishRejected("npc_not_visible");
-			return;
-		}
-
-		targetNpc = nearest;
-		targetReceipt = npcMap(nearest);
-		targetPoint = point;
-		reporter.accept("NPC_INTERACTION_TARGET name=" + nearest.getName() +
-			" id=" + nearest.getId() + " index=" + nearest.getIndex() +
-			" distance=" + nearestDistance + " canvas=" + point.x + "," + point.y);
-		Canvas canvas = client.getCanvas();
-		if (canvas == null || !canvas.isShowing())
-		{
-			finishRejected("canvas_not_showing");
-			return;
-		}
-		syntheticMouse.move(point).whenComplete((ignored, error) ->
-		{
-			if (error != null)
+			if (matchingNpcExists && requestedSelection != null &&
+				"spell".equals(requestedSelection.kind) && !matchingNpcHasLineOfSight)
 			{
-				finishRejected("synthetic_mouse_move: " + rootMessage(error));
-				return;
+				return GenericClientMenuInput.Resolution.rejected("npc_no_line_of_sight");
 			}
-			schedule(() -> clientThread.invoke(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
-		});
+			return GenericClientMenuInput.Resolution.rejected(
+				matchingNpcExists ? "npc_not_visible" : "matching_npc_not_found");
+		}
+
+		NPC targetNpc = nearest;
+		Map<String, Object> value = npcMap(targetNpc);
+		if (requestedSelection != null)
+		{
+			value.put("selected_" + requestedSelection.kind, requestedSelection.toMap());
+		}
+		String description = "npc:" + targetNpc.getId() + ":" + targetNpc.getIndex();
+		return GenericClientMenuInput.Resolution.resolved(new GenericClientMenuInput.Target(
+			nearestPoint,
+			action,
+			description,
+			value,
+			entry -> requestedSelection != null
+				? matchesNpc(entry, targetNpc) && entry.getType() == MenuAction.WIDGET_TARGET_ON_NPC
+				: matchesNpc(entry, targetNpc) && action.equalsIgnoreCase(entry.getOption()),
+			nearestShape));
 	}
 
-	private void verifyHoverAndClick()
+	static boolean hasLineOfSight(Player player, NPC npc)
 	{
-		if (!running.get())
-		{
-			return;
-		}
-		if (client.isMenuOpen())
-		{
-			finishRejected("context_menu_already_open");
-			return;
-		}
-		net.runelite.api.Point mouse = client.getMouseCanvasPosition();
-		if (Math.abs(mouse.getX() - targetPoint.x) > 20 || Math.abs(mouse.getY() - targetPoint.y) > 20)
-		{
-			finishRejected("mouse_missed_target");
-			return;
-		}
-
-		MenuEntry[] entries = client.getMenu().getMenuEntries();
-		int desiredIndex = findNpcEntryIndex(entries, targetNpc.getIndex(), targetAction);
-		if (desiredIndex < 0)
-		{
-			finishRejected("hover_has_no_matching_action");
-			return;
-		}
-		if (desiredIndex == entries.length - 1)
-		{
-			dispatchLeftClick(entries[desiredIndex], "left_click");
-			return;
-		}
-		openContextMenu();
-	}
-
-	private void openContextMenu()
-	{
-		dispatch = "context_menu";
-		clickCount++;
-		reporter.accept("NPC_CONTEXT_OPEN name=" + targetNpc.getName() + " action=" + targetAction);
-		syntheticMouse.click(MouseEvent.BUTTON3).whenComplete((ignored, clickError) ->
-		{
-			if (clickError != null)
-			{
-				finishRejected("synthetic_context_open: " + rootMessage(clickError));
-				return;
-			}
-			behavior.afterAction(breaksEnabled).thenCompose(after ->
-			{
-				behaviorAfter = after;
-				return behavior.beforeAction(breaksEnabled);
-			}).whenComplete((before, behaviorError) ->
-			{
-				if (behaviorError != null)
-				{
-					finishRejected("context_behavior: " + rootMessage(behaviorError));
-					return;
-				}
-				behaviorBefore = before;
-				schedule(() -> clientThread.invoke(this::moveToContextEntry), CONTEXT_MENU_SETTLE_MILLIS);
-			});
-		});
-	}
-
-	private void moveToContextEntry()
-	{
-		if (!running.get() || !client.isMenuOpen())
-		{
-			finishRejected("context_menu_did_not_open");
-			return;
-		}
-		MenuEntry[] entries = client.getMenu().getMenuEntries();
-		int index = findNpcEntryIndex(entries, targetNpc.getIndex(), targetAction);
-		if (index < 0)
-		{
-			finishRejected("context_menu_has_no_matching_action");
-			return;
-		}
-		int headerHeight = Math.max(0,
-			client.getMenu().getMenuHeight() - entries.length * CONTEXT_MENU_ENTRY_HEIGHT);
-		int rowFromTop = entries.length - 1 - index;
-		java.awt.Point destination = new java.awt.Point(
-			client.getMenu().getMenuX() + client.getMenu().getMenuWidth() / 2,
-			client.getMenu().getMenuY() + headerHeight +
-				rowFromTop * CONTEXT_MENU_ENTRY_HEIGHT + CONTEXT_MENU_ENTRY_HEIGHT / 2);
-		syntheticMouse.move(destination).whenComplete((ignored, error) ->
-		{
-			if (error != null)
-			{
-				finishRejected("synthetic_context_move: " + rootMessage(error));
-				return;
-			}
-			schedule(() -> clientThread.invoke(this::clickContextEntry), HOVER_SETTLE_MILLIS);
-		});
-	}
-
-	private void clickContextEntry()
-	{
-		if (!running.get() || !client.isMenuOpen())
-		{
-			finishRejected("context_menu_closed");
-			return;
-		}
-		MenuEntry[] entries = client.getMenu().getMenuEntries();
-		int index = findNpcEntryIndex(entries, targetNpc.getIndex(), targetAction);
-		if (index < 0)
-		{
-			finishRejected("context_menu_has_no_matching_action");
-			return;
-		}
-		dispatchLeftClick(entries[index], "context_menu");
-	}
-
-	private void dispatchLeftClick(MenuEntry entry, String dispatch)
-	{
-		this.dispatch = dispatch;
-		this.expectedIdentifier = entry.getIdentifier();
-		this.expectedWorldViewId = entry.getWorldViewId();
-		this.awaitingMenuResult = true;
-		this.clickCount++;
-		reporter.accept("NPC_INTERACTION_DISPATCH name=" + targetNpc.getName() +
-			" action=" + targetAction + " dispatch=" + dispatch +
-			" identifier=" + expectedIdentifier + " worldView=" + expectedWorldViewId);
-		syntheticMouse.click(MouseEvent.BUTTON1).whenComplete((ignored, error) ->
-		{
-			if (error != null)
-			{
-				awaitingMenuResult = false;
-				finishRejected("synthetic_click: " + rootMessage(error));
-			}
-		});
-		schedule(() ->
-		{
-			if (awaitingMenuResult)
-			{
-				awaitingMenuResult = false;
-				finishRejected("menu_event_timeout");
-			}
-		}, CLICK_RESULT_TIMEOUT_MILLIS);
+		return player != null && npc != null &&
+			player.getWorldArea() != null && npc.getWorldArea() != null &&
+			player.getWorldArea().hasLineOfSightTo(player.getWorldView(), npc.getWorldArea());
 	}
 
 	static int findNpcEntryIndex(MenuEntry[] entries, int npcIndex, String action)
@@ -402,24 +375,12 @@ final class GenericClientNpcInput implements AutoCloseable
 		return -1;
 	}
 
-	private java.awt.Point randomPointInside(Shape shape)
+	private static boolean matchesNpc(MenuEntry entry, NPC npc)
 	{
-		if (shape == null)
-		{
-			return null;
-		}
-		Rectangle bounds = shape.getBounds();
-		for (int attempt = 0; attempt < 20; attempt++)
-		{
-			int x = ThreadLocalRandom.current().nextInt(bounds.x, bounds.x + Math.max(1, bounds.width));
-			int y = ThreadLocalRandom.current().nextInt(bounds.y, bounds.y + Math.max(1, bounds.height));
-			if (shape.contains(x, y) && x >= 0 && y >= 0 &&
-				x < client.getCanvasWidth() && y < client.getCanvasHeight())
-			{
-				return new java.awt.Point(x, y);
-			}
-		}
-		return null;
+		NPC resolved = entry.getNpc();
+		return resolved == null
+			? entry.getIdentifier() == npc.getIndex()
+			: resolved.getIndex() == npc.getIndex();
 	}
 
 	private static boolean hasAction(NPC npc, String action)
@@ -443,109 +404,23 @@ final class GenericClientNpcInput implements AutoCloseable
 		return false;
 	}
 
-	private void finishSuccess(MenuOptionClicked event)
-	{
-		Map<String, Object> receipt = baseReceipt("dispatched", "menu_action_executed");
-		receipt.put("menu_action", event.getMenuAction().name().toLowerCase(java.util.Locale.ROOT));
-		receipt.put("menu_target", event.getMenuTarget());
-		finish(receipt);
-	}
-
-	private void finishRejected(String reason)
-	{
-		finish(rejected(reason));
-	}
-
-	private Map<String, Object> rejected(String reason)
-	{
-		return baseReceipt("rejected", reason);
-	}
-
-	private static Map<String, Object> immediateRejected(String action, String reason)
-	{
-		Map<String, Object> receipt = new LinkedHashMap<>();
-		receipt.put("status", "rejected");
-		receipt.put("result", reason);
-		receipt.put("action", action);
-		receipt.put("dispatch", null);
-		receipt.put("click_count", 0L);
-		return receipt;
-	}
-
-	private Map<String, Object> baseReceipt(String status, String result)
-	{
-		Map<String, Object> receipt = new LinkedHashMap<>();
-		receipt.put("status", status);
-		receipt.put("result", result);
-		receipt.put("action", targetAction);
-		receipt.put("dispatch", dispatch);
-		receipt.put("click_count", (long) clickCount);
-		if (!targetReceipt.isEmpty())
-		{
-			receipt.put("npc", targetReceipt);
-		}
-		receipt.put("behavior_before", behaviorBefore);
-		if (!behaviorAfter.isEmpty())
-		{
-			receipt.put("behavior_after", behaviorAfter);
-		}
-		return receipt;
-	}
-
 	private static Map<String, Object> npcMap(NPC npc)
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
+		value.put("kind", "npc");
 		value.put("index", (long) npc.getIndex());
 		value.put("id", (long) npc.getId());
 		value.put("name", npc.getName());
-		if (npc.getWorldLocation() != null)
+		WorldPoint world = npc.getWorldLocation();
+		if (world != null)
 		{
-			Map<String, Object> world = new LinkedHashMap<>();
-			world.put("x", (long) npc.getWorldLocation().getX());
-			world.put("y", (long) npc.getWorldLocation().getY());
-			world.put("plane", (long) npc.getWorldLocation().getPlane());
-			value.put("world", Collections.unmodifiableMap(world));
+			Map<String, Object> point = new LinkedHashMap<>();
+			point.put("x", (long) world.getX());
+			point.put("y", (long) world.getY());
+			point.put("plane", (long) world.getPlane());
+			value.put("world", Collections.unmodifiableMap(point));
 		}
-		return Collections.unmodifiableMap(value);
-	}
-
-	private void finish(Map<String, Object> receipt)
-	{
-		if (!running.getAndSet(false))
-		{
-			return;
-		}
-		awaitingMenuResult = false;
-		cancelPending();
-		reporter.accept("NPC_INTERACTION_COMPLETED status=" + receipt.get("status") +
-			" result=" + receipt.get("result") + " clicks=" + receipt.get("click_count"));
-		CompletableFuture<Map<String, Object>> completion = activeResult;
-		activeResult = null;
-		if (completion != null)
-		{
-			completion.complete(receipt);
-		}
-	}
-
-	private void schedule(Runnable runnable, long delayMillis)
-	{
-		ScheduledFuture<?> future = executor.schedule(() ->
-		{
-			if (running.get())
-			{
-				runnable.run();
-			}
-		}, delayMillis, TimeUnit.MILLISECONDS);
-		pending.add(future);
-	}
-
-	private void cancelPending()
-	{
-		for (ScheduledFuture<?> future : pending)
-		{
-			future.cancel(false);
-		}
-		pending.clear();
+		return value;
 	}
 
 	private static String requireText(String value, String label)
@@ -557,27 +432,48 @@ final class GenericClientNpcInput implements AutoCloseable
 		return value.trim();
 	}
 
-	private static String rootMessage(Throwable error)
+	private static void validateRadius(int within)
 	{
-		Throwable current = error;
-		while (current.getCause() != null)
+		if (within < 1 || within > 32)
 		{
-			current = current.getCause();
+			throw new IllegalArgumentException("NPC interaction radius must be between 1 and 32 tiles");
 		}
-		return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
 	}
 
-	@Override
-	public void close()
+	private static final class SelectedWidget
 	{
-		closed = true;
-		if (running.get())
+		private final String kind;
+		private final int id;
+		private final String name;
+
+		private SelectedWidget(String kind, int id, String name)
 		{
-			finishRejected("input_closed");
+			this.kind = kind;
+			this.id = id;
+			this.name = name;
 		}
-		else
+
+		private static SelectedWidget item(int itemId, String itemName)
 		{
-			cancelPending();
+			return new SelectedWidget("item", itemId, itemName);
+		}
+
+		private static SelectedWidget spell(int widgetId, String spellName)
+		{
+			return new SelectedWidget("spell", widgetId, spellName);
+		}
+
+		private boolean matches(Widget widget)
+		{
+			return "item".equals(kind) ? widget.getItemId() == id : widget.getId() == id;
+		}
+
+		private Map<String, Object> toMap()
+		{
+			Map<String, Object> value = new LinkedHashMap<>();
+			value.put("id", (long) id);
+			value.put("name", name);
+			return value;
 		}
 	}
 }

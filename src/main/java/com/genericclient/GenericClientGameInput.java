@@ -334,8 +334,13 @@ final class GenericClientGameInput implements AutoCloseable
 		{
 			return null;
 		}
-		Target target = targetForLocalPoint(local, worldPoint);
-		return target == null ? targetForMinimap(local, worldPoint) : target;
+		Target minimap = targetForMinimap(local, worldPoint);
+		if (selectionMode == SelectionMode.ROUTE && minimap != null)
+		{
+			return minimap;
+		}
+		Target canvas = targetForLocalPoint(local, worldPoint);
+		return canvas == null ? minimap : canvas;
 	}
 
 	private boolean beginCameraTurn(Player player, WorldPoint target)
@@ -390,7 +395,7 @@ final class GenericClientGameInput implements AutoCloseable
 		return (int) Math.round(radians * 1024.0 / Math.PI) & 2047;
 	}
 
-	private static int angularDistance(int first, int second)
+	static int angularDistance(int first, int second)
 	{
 		int distance = Math.abs((first - second) & 2047);
 		return Math.min(distance, 2048 - distance);
@@ -642,7 +647,6 @@ final class GenericClientGameInput implements AutoCloseable
 		reporter.accept("WALK_CONTEXT_OPEN tile=" + target.worldPoint +
 			" coveredBy=" + coveredEntry.getOption() +
 			" walkParam0=" + walkEntry.getParam0() + " walkParam1=" + walkEntry.getParam1());
-		clickDispatched = true;
 		syntheticMouse.click(MouseEvent.BUTTON3).whenComplete((result, error) ->
 		{
 			if (error != null)
@@ -650,24 +654,8 @@ final class GenericClientGameInput implements AutoCloseable
 				finish("WALK_TILE_CLICK_FAILED reason=synthetic_context_open message=" + error.getMessage());
 				return;
 			}
-			behavior.afterAction(activeBreaksEnabled).thenCompose(after ->
-				behavior.beforeAction(activeBreaksEnabled).thenApply(before ->
-				{
-					reporter.accept("WALK_CONTEXT_INTERACTION_COMPLETED target=" + target.worldPoint +
-						" behaviorAfter=" + after.get("status") +
-						" behaviorBefore=" + before.get("status"));
-					return before;
-				})).whenComplete((ignored, behaviorError) ->
-			{
-				if (behaviorError != null)
-				{
-					finish("WALK_TILE_CLICK_FAILED reason=context_behavior message=" +
-						behaviorError.getMessage());
-					return;
-				}
-				schedule(() -> clientThread.invoke(() -> moveToContextMenuWalk(target)),
-					CONTEXT_MENU_SETTLE_MILLIS);
-			});
+			schedule(() -> clientThread.invoke(() -> moveToContextMenuWalk(target)),
+				CONTEXT_MENU_SETTLE_MILLIS);
 		});
 	}
 

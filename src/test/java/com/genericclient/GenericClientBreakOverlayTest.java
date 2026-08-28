@@ -7,9 +7,14 @@ import static org.junit.Assert.assertTrue;
 
 import java.awt.Dimension;
 import java.awt.Graphics2D;
+import java.awt.Canvas;
+import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 
@@ -54,6 +59,47 @@ public class GenericClientBreakOverlayTest
 		assertEquals(28, size.height);
 		assertTrue(size.width > 90);
 		assertTrue(coloredPixels(image) > 300);
+	}
+
+	@Test
+	public void closeButtonConsumesTheGameClickAndEndsAMicroBreak()
+	{
+		AtomicReference<Map<String, Object>> status =
+			new AtomicReference<>(status("micro_break", 8_000L));
+		AtomicInteger ended = new AtomicInteger();
+		GenericClientBreakOverlay overlay = new GenericClientBreakOverlay(status::get, () ->
+		{
+			ended.incrementAndGet();
+			status.set(status("ready", 0L));
+			return CompletableFuture.completedFuture(Collections.emptyMap());
+		});
+		BufferedImage image = new BufferedImage(240, 40, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D graphics = image.createGraphics();
+		Dimension size;
+		try
+		{
+			size = overlay.render(graphics);
+		}
+		finally
+		{
+			graphics.dispose();
+		}
+		overlay.getBounds().setBounds(40, 10, size.width, size.height);
+		MouseEvent click = new MouseEvent(
+			new Canvas(),
+			MouseEvent.MOUSE_PRESSED,
+			System.currentTimeMillis(),
+			0,
+			40 + size.width - 16,
+			20,
+			1,
+			false,
+			MouseEvent.BUTTON1);
+
+		overlay.getMouseListener().mousePressed(click);
+
+		assertTrue(click.isConsumed());
+		assertEquals(1, ended.get());
 	}
 
 	private static Map<String, Object> status(String state, long remainingMillis)

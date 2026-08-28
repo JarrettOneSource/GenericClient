@@ -29,14 +29,26 @@ public class GenericClientControlServerTest
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("control-scripts").toPath(),
 			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("control-behavior").toPath()),
 			message -> { });
 		AtomicReference<String> note = new AtomicReference<>("Account Goal");
+		Map<String, Object> screenshot = new LinkedHashMap<>();
+		screenshot.put("mime_type", "image/png");
+		screenshot.put("image_base64", "iVBORw0KGgo=");
+		screenshot.put("width", 1L);
+		screenshot.put("height", 1L);
+		Map<String, Object> endedBreak = new LinkedHashMap<>();
+		endedBreak.put("status", "ended");
+		endedBreak.put("type", "long");
+		GenericClientAutomationScheduler automation = new GenericClientAutomationScheduler(
+			temporaryFolder.newFolder("control-automation").toPath(), host, message -> { });
+		automation.activateProfile("0123456789abcdef").get();
 		GenericClientControlServer server = new GenericClientControlServer(
 			0,
 			host,
+			automation,
 			() -> CompletableFuture.completedFuture("SESSION_LOGGED_OUT"),
 			() -> CompletableFuture.completedFuture("SESSION_LOGGED_IN"),
 			() ->
@@ -58,6 +70,8 @@ public class GenericClientControlServerTest
 				note.set(text);
 				return CompletableFuture.completedFuture("ACCOUNT_NOTE_UPDATED");
 			},
+			() -> CompletableFuture.completedFuture(screenshot),
+			() -> CompletableFuture.completedFuture(endedBreak),
 			message -> { });
 		try
 		{
@@ -75,6 +89,34 @@ public class GenericClientControlServerTest
 			Map<String, Object> statusResponse = post(server, "status", new LinkedHashMap<>());
 			Map<String, Object> statusResult = (Map<String, Object>) statusResponse.get("result");
 			assertTrue(((Map<String, Object>) statusResult.get("lua")).get("active_inputs") instanceof Map);
+			Map<String, Object> automationStatus = post(
+				server, "automation.status", new LinkedHashMap<>());
+			assertEquals("0123456789abcdef",
+				((Map<String, Object>) automationStatus.get("result")).get("profile"));
+			Map<String, Object> config = new LinkedHashMap<>();
+			config.put("schema", "genericclient_automation.v1");
+			config.put("zone", "UTC");
+			config.put("enabled", false);
+			config.put("schedules", new LinkedHashMap<>());
+			config.put("rules", new java.util.ArrayList<>());
+			Map<String, Object> configParameters = new LinkedHashMap<>();
+			configParameters.put("config", config);
+			post(server, "automation.config.set", configParameters);
+			Map<String, Object> enableParameters = new LinkedHashMap<>();
+			enableParameters.put("enabled", true);
+			assertEquals(true, ((Map<String, Object>) post(
+				server, "automation.enable", enableParameters).get("result")).get("enabled"));
+			assertEquals(true, ((Map<String, Object>) post(
+				server, "automation.pause", new LinkedHashMap<>()).get("result")).get("paused"));
+			assertEquals(false, ((Map<String, Object>) post(
+				server, "automation.resume", new LinkedHashMap<>()).get("result")).get("paused"));
+			assertEquals("UTC", ((Map<String, Object>) post(
+				server, "automation.config.get", new LinkedHashMap<>()).get("result")).get("zone"));
+			post(server, "automation.reload", new LinkedHashMap<>());
+			Map<String, Object> screenshotResponse = post(
+				server, "screenshot.capture", new LinkedHashMap<>());
+			assertEquals("image/png",
+				((Map<String, Object>) screenshotResponse.get("result")).get("mime_type"));
 			Map<String, Object> accountResponse = post(server, "account.snapshot", new LinkedHashMap<>());
 			Map<String, Object> account = (Map<String, Object>) accountResponse.get("result");
 			assertEquals("Player", ((Map<String, Object>) account.get("player")).get("name"));
@@ -138,6 +180,9 @@ public class GenericClientControlServerTest
 			Map<String, Object> behaviorProfile = post(server, "behavior.profile", new LinkedHashMap<>());
 			assertEquals("Frequent multitasking; regular long breaks",
 				((Map<String, Object>) behaviorProfile.get("result")).get("title"));
+			Map<String, Object> breakEnd = post(
+				server, "behavior.break.end", new LinkedHashMap<>());
+			assertEquals("ended", ((Map<String, Object>) breakEnd.get("result")).get("status"));
 			assertEquals("SESSION_LOGGED_OUT",
 				post(server, "session.logout", new LinkedHashMap<>()).get("result"));
 			assertEquals("SESSION_LOGGED_IN",
@@ -146,6 +191,7 @@ public class GenericClientControlServerTest
 		finally
 		{
 			server.close();
+			automation.close();
 			host.close();
 		}
 	}

@@ -29,11 +29,14 @@ final class GenericClientControlServer implements AutoCloseable
 
 	private final int requestedPort;
 	private final GenericClientLuaHost luaHost;
+	private final GenericClientAutomationScheduler automationScheduler;
 	private final Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction;
 	private final Supplier<java.util.concurrent.CompletableFuture<String>> loginAction;
 	private final Supplier<Map<String, Object>> statusSupplier;
 	private final Supplier<String> noteSupplier;
 	private final Function<String, java.util.concurrent.CompletableFuture<String>> noteSetter;
+	private final Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> screenshotAction;
+	private final Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> endBreakAction;
 	private final Consumer<String> reporter;
 	private final Gson gson = new Gson();
 	private HttpServer server;
@@ -45,41 +48,49 @@ final class GenericClientControlServer implements AutoCloseable
 		Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction,
 		Supplier<java.util.concurrent.CompletableFuture<String>> loginAction,
 		Supplier<Map<String, Object>> statusSupplier,
+		Supplier<String> noteSupplier,
+		Function<String, java.util.concurrent.CompletableFuture<String>> noteSetter,
+		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> screenshotAction,
+		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> endBreakAction,
 		Consumer<String> reporter)
 	{
 		this(
 			port,
 			luaHost,
+			null,
 			logoutAction,
 			loginAction,
 			statusSupplier,
-			() -> null,
-			note ->
-			{
-				java.util.concurrent.CompletableFuture<String> failed = new java.util.concurrent.CompletableFuture<>();
-				failed.completeExceptionally(new IllegalStateException("Account notes are unavailable"));
-				return failed;
-			},
+			noteSupplier,
+			noteSetter,
+			screenshotAction,
+			endBreakAction,
 			reporter);
 	}
 
 	GenericClientControlServer(
 		int port,
 		GenericClientLuaHost luaHost,
+		GenericClientAutomationScheduler automationScheduler,
 		Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction,
 		Supplier<java.util.concurrent.CompletableFuture<String>> loginAction,
 		Supplier<Map<String, Object>> statusSupplier,
 		Supplier<String> noteSupplier,
 		Function<String, java.util.concurrent.CompletableFuture<String>> noteSetter,
+		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> screenshotAction,
+		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> endBreakAction,
 		Consumer<String> reporter)
 	{
 		this.requestedPort = port;
 		this.luaHost = luaHost;
+		this.automationScheduler = automationScheduler;
 		this.logoutAction = logoutAction;
 		this.loginAction = loginAction;
 		this.statusSupplier = statusSupplier;
 		this.noteSupplier = noteSupplier;
 		this.noteSetter = noteSetter;
+		this.screenshotAction = screenshotAction;
+		this.endBreakAction = endBreakAction;
 		this.reporter = reporter;
 	}
 
@@ -194,11 +205,31 @@ final class GenericClientControlServer implements AutoCloseable
 		{
 			case "status":
 				return statusSupplier.get();
+			case "screenshot.capture":
+				return screenshotAction.get().get(15, TimeUnit.SECONDS);
 			case "behavior.status":
 				return behaviorStatus();
 			case "behavior.profile":
 				Object behavior = behaviorStatus();
 				return behavior instanceof Map ? ((Map<?, ?>) behavior).get("profile") : null;
+			case "behavior.break.end":
+				return endBreakAction.get().get(30, TimeUnit.SECONDS);
+			case "automation.status":
+				return automation().status();
+			case "automation.config.get":
+				return automation().getConfig().get(10, TimeUnit.SECONDS);
+			case "automation.config.set":
+				return automation().configure(objectParameter(parameters, "config"))
+					.get(10, TimeUnit.SECONDS);
+			case "automation.enable":
+				return automation().setEnabled(booleanParameter(parameters, "enabled"))
+					.get(10, TimeUnit.SECONDS);
+			case "automation.pause":
+				return automation().setPaused(true, "control").get(10, TimeUnit.SECONDS);
+			case "automation.resume":
+				return automation().setPaused(false, "control").get(10, TimeUnit.SECONDS);
+			case "automation.reload":
+				return automation().reload().get(10, TimeUnit.SECONDS);
 			case "account.snapshot":
 				return luaHost.readCurrentSnapshot("account").get(10, TimeUnit.SECONDS);
 			case "account.note.get":
@@ -262,6 +293,15 @@ final class GenericClientControlServer implements AutoCloseable
 		return statusSupplier.get().get("behavior");
 	}
 
+	private GenericClientAutomationScheduler automation()
+	{
+		if (automationScheduler == null)
+		{
+			throw new IllegalStateException("Automation scheduler is unavailable");
+		}
+		return automationScheduler;
+	}
+
 	private static String stringParameter(Map<String, Object> parameters, String name)
 	{
 		Object value = parameters.get(name);
@@ -284,6 +324,35 @@ final class GenericClientControlServer implements AutoCloseable
 			throw new IllegalArgumentException("RPC account note cannot exceed 20,000 characters");
 		}
 		return (String) value;
+	}
+
+	private static boolean booleanParameter(Map<String, Object> parameters, String name)
+	{
+		Object value = parameters.get(name);
+		if (!(value instanceof Boolean))
+		{
+			throw new IllegalArgumentException("RPC parameter " + name + " must be a boolean");
+		}
+		return (Boolean) value;
+	}
+
+	private static Map<String, Object> objectParameter(Map<String, Object> parameters, String name)
+	{
+		Object value = parameters.get(name);
+		if (!(value instanceof Map))
+		{
+			throw new IllegalArgumentException("RPC parameter " + name + " must be an object");
+		}
+		Map<String, Object> result = new LinkedHashMap<>();
+		for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet())
+		{
+			if (!(entry.getKey() instanceof String))
+			{
+				throw new IllegalArgumentException("RPC object keys must be strings");
+			}
+			result.put((String) entry.getKey(), entry.getValue());
+		}
+		return result;
 	}
 
 	private static Map<String, Object> inputParameters(Map<String, Object> parameters)

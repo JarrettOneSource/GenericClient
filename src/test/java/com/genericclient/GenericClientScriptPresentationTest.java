@@ -18,20 +18,23 @@ public class GenericClientScriptPresentationTest
 			action("reset_count", "Reset count")));
 		List<GenericClientOverlayRow> rows = GenericClientOverlayRow.parse(Arrays.asList(
 			row("State", "Walking"),
-			row("Count", 12.0)));
+			row("Count", 12.0),
+			row("Rate", "1.2k XP/h"),
+			row("ETA", "2m 10s")));
 
 		assertEquals("refresh", actions.get(0).getId());
 		assertEquals("Reset count", actions.get(1).getLabel());
 		assertEquals("State", rows.get(0).getLabel());
 		assertEquals("12", rows.get(1).getValue());
+		assertEquals("2m 10s", rows.get(3).getValue());
 	}
 
 	@Test
 	public void rejectsExcessOverlayRowsAndDuplicateActions()
 	{
 		assertFailure(() -> GenericClientOverlayRow.parse(Arrays.asList(
-			row("One", 1), row("Two", 2), row("Three", 3), row("Four", 4))),
-			"Script overlays may contain at most 3 rows");
+			row("One", 1), row("Two", 2), row("Three", 3), row("Four", 4), row("Five", 5))),
+			"Script overlays may contain at most 4 rows");
 		assertFailure(() -> GenericClientScriptAction.parse(Arrays.asList(
 			action("refresh", "Refresh"), action("refresh", "Again"))),
 			"Duplicate Lua script action id: refresh");

@@ -25,8 +25,6 @@ final class GenericClientConsolePanel extends JPanel
 		"return gc.read(\"player\")", true, false);
 	private final JTextArea output = GenericClientDashboardStyle.textArea(
 		"Results print here as JSON.", false, true);
-	private final JTextArea npcs = GenericClientDashboardStyle.textArea(
-		"Press NPC snapshot to list what is nearby.", false, true);
 
 	GenericClientConsolePanel(GenericClientDashboardActions actions, GenericClientLuaHost host)
 	{
@@ -68,8 +66,6 @@ final class GenericClientConsolePanel extends JPanel
 
 		JButton status = GenericClientDashboardStyle.button("Status");
 		status.addActionListener(event -> actions.printDiagnostics());
-		JButton snapshot = GenericClientDashboardStyle.button("NPC snapshot");
-		snapshot.addActionListener(event -> actions.logNearbyNpcs());
 		JButton walk = GenericClientDashboardStyle.button("Walk test");
 		walk.addActionListener(event -> actions.walkToRandomTile());
 		JPanel result = GenericClientDashboardStyle.panel(new BorderLayout(10, 0));
@@ -77,11 +73,9 @@ final class GenericClientConsolePanel extends JPanel
 		result.add(lastResult, BorderLayout.CENTER);
 
 		GenericClientDashboardStyle.Card diagnostics = GenericClientDashboardStyle.card("Diagnostics");
-		diagnostics.put(GenericClientDashboardStyle.inline(8, status, snapshot, walk))
+		diagnostics.put(GenericClientDashboardStyle.inline(8, status, walk))
 			.gap(10)
-			.put(result)
-			.gap(12)
-			.put(GenericClientDashboardStyle.inset(npcs, 150));
+			.put(result);
 
 		JPanel page = GenericClientDashboardStyle.page();
 		page.add(GenericClientDashboardStyle.stack(16,
@@ -96,11 +90,5 @@ final class GenericClientConsolePanel extends JPanel
 		String text = result == null ? "" : result.trim();
 		lastResult.setText(text.isEmpty() ? "None yet" : text);
 		lastResult.setToolTipText(text.isEmpty() ? null : text);
-	}
-
-	void updateNpcDiagnostics(String diagnostics)
-	{
-		npcs.setText(diagnostics == null ? "" : diagnostics);
-		npcs.setCaretPosition(0);
 	}
 }

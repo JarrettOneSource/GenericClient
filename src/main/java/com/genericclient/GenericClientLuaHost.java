@@ -23,6 +23,7 @@ import net.runelite.api.coords.WorldPoint;
 final class GenericClientLuaHost implements AutoCloseable
 {
 	private static final String REPL_NAME = "Lua REPL";
+	private static final String MANUAL_OWNER = "manual";
 
 	private static final int LOG_HISTORY_SIZE = 80;
 
@@ -31,6 +32,7 @@ final class GenericClientLuaHost implements AutoCloseable
 	private final WalkToAction walkToAction;
 	private final NpcInteractAction npcInteractAction;
 	private final CombatModeAction combatModeAction;
+	private final QuestAction questAction;
 	private final Consumer<String> cancelAction;
 	private final GenericClientBehaviorController behavior;
 	private final Consumer<String> statusSink;
@@ -42,7 +44,9 @@ final class GenericClientLuaHost implements AutoCloseable
 	private volatile String status = "IDLE";
 	private volatile Map<String, Object> activeInputs = Collections.emptyMap();
 	private volatile ActiveRun activeRun;
+	private volatile Runnable manualStopListener = () -> { };
 	private volatile boolean closed;
+	private long nextRunId;
 	private GenericClientSnapshot currentSnapshot;
 	private GenericClientLuaScript session;
 	private GenericClientLuaScript repl;
@@ -63,6 +67,7 @@ final class GenericClientLuaHost implements AutoCloseable
 			walkToAction,
 			unsupportedNpcInteractAction(),
 			unsupportedCombatModeAction(),
+			unsupportedQuestAction(),
 			cancelAction,
 			behavior,
 			statusSink,
@@ -84,6 +89,7 @@ final class GenericClientLuaHost implements AutoCloseable
 			walkToAction,
 			npcInteractAction,
 			unsupportedCombatModeAction(),
+			unsupportedQuestAction(),
 			cancelAction,
 			behavior,
 			statusSink,
@@ -106,6 +112,7 @@ final class GenericClientLuaHost implements AutoCloseable
 			walkToAction,
 			npcInteractAction,
 			combatModeAction,
+			unsupportedQuestAction(),
 			cancelAction,
 			behavior,
 			statusSink,
@@ -127,6 +134,7 @@ final class GenericClientLuaHost implements AutoCloseable
 			walkToAction,
 			unsupportedNpcInteractAction(),
 			unsupportedCombatModeAction(),
+			unsupportedQuestAction(),
 			cancelAction,
 			behavior,
 			statusSink,
@@ -149,6 +157,7 @@ final class GenericClientLuaHost implements AutoCloseable
 			walkToAction,
 			npcInteractAction,
 			unsupportedCombatModeAction(),
+			unsupportedQuestAction(),
 			cancelAction,
 			behavior,
 			statusSink,
@@ -161,6 +170,31 @@ final class GenericClientLuaHost implements AutoCloseable
 		WalkToAction walkToAction,
 		NpcInteractAction npcInteractAction,
 		CombatModeAction combatModeAction,
+		QuestAction questAction,
+		Consumer<String> cancelAction,
+		GenericClientBehaviorController behavior,
+		Consumer<String> statusSink) throws IOException
+	{
+		this(
+			scriptsDirectory,
+			walkRandomAction,
+			walkToAction,
+			npcInteractAction,
+			combatModeAction,
+			questAction,
+			cancelAction,
+			behavior,
+			statusSink,
+			System::nanoTime);
+	}
+
+	GenericClientLuaHost(
+		Path scriptsDirectory,
+		WalkRandomAction walkRandomAction,
+		WalkToAction walkToAction,
+		NpcInteractAction npcInteractAction,
+		CombatModeAction combatModeAction,
+		QuestAction questAction,
 		Consumer<String> cancelAction,
 		GenericClientBehaviorController behavior,
 		Consumer<String> statusSink,
@@ -171,6 +205,7 @@ final class GenericClientLuaHost implements AutoCloseable
 		this.walkToAction = walkToAction;
 		this.npcInteractAction = npcInteractAction;
 		this.combatModeAction = combatModeAction;
+		this.questAction = questAction;
 		this.cancelAction = cancelAction;
 		this.behavior = behavior;
 		this.statusSink = statusSink;
@@ -209,7 +244,7 @@ final class GenericClientLuaHost implements AutoCloseable
 			try (GenericClientLuaScript descriptor = new GenericClientLuaScript(
 				this,
 				scriptId,
-				registry.readSource(scriptId)))
+				registry.readExecutableSource(scriptId)))
 			{
 				completion.complete(reader.apply(descriptor));
 			}
@@ -228,11 +263,33 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	Object readSnapshot(GenericClientSnapshot snapshot, String subject, Map<?, ?> query)
 	{
+		return readSnapshot(null, snapshot, subject, query);
+	}
+
+	Object readSnapshot(
+		GenericClientLuaScript script,
+		GenericClientSnapshot snapshot,
+		String subject,
+		Map<?, ?> query)
+	{
 		if ("behavior".equals(subject))
 		{
 			return behavior.status();
 		}
-		return snapshot == null ? null : snapshot.read(subject, query);
+		Object value = snapshot == null ? null : snapshot.read(subject, query);
+		if (script != null && "runtime".equals(subject) && value instanceof Map)
+		{
+			Map<String, Object> runtime = new LinkedHashMap<>();
+			((Map<?, ?>) value).forEach((key, item) -> runtime.put(String.valueOf(key), item));
+			runtime.put("script_runtime_millis", script.getRuntimeMillis(clock.getAsLong()));
+			return runtime;
+		}
+		return value;
+	}
+
+	long nowNanos()
+	{
+		return clock.getAsLong();
 	}
 
 	CompletableFuture<Object> readCurrentSnapshot(String subject)
@@ -259,17 +316,45 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	CompletableFuture<String> start(String scriptId, Map<String, Object> suppliedInputs)
 	{
+		return start(scriptId, suppliedInputs, MANUAL_OWNER, true);
+	}
+
+	CompletableFuture<String> startScheduled(
+		String ruleId,
+		String scriptId,
+		Map<String, Object> suppliedInputs)
+	{
+		if (ruleId == null || !ruleId.matches("[a-z0-9][a-z0-9_-]{0,63}"))
+		{
+			throw new IllegalArgumentException("Invalid automation rule id: " + ruleId);
+		}
+		return start(scriptId, suppliedInputs, "rule:" + ruleId, false);
+	}
+
+	private CompletableFuture<String> start(
+		String scriptId,
+		Map<String, Object> suppliedInputs,
+		String owner,
+		boolean replaceActive)
+	{
 		CompletableFuture<String> completion = new CompletableFuture<>();
 		scheduler.execute(() ->
 		{
 			GenericClientLuaScript candidate = null;
 			try
 			{
+				if (!replaceActive && session != null)
+				{
+					ActiveRun running = activeRun;
+					String activeOwner = running == null ? "unknown" : running.owner;
+					completion.complete("LUA_START_SKIPPED active_owner=" + activeOwner);
+					return;
+				}
 				GenericClientScriptRegistry.Script definition = registry.get(scriptId);
 				candidate = new GenericClientLuaScript(
 					this,
 					definition.getId(),
-					registry.readSource(definition.getId()));
+					registry.readExecutableSource(definition.getId()));
 				Map<String, Object> resolvedInputs = GenericClientScriptInput.resolve(
 					candidate.getInputs(), suppliedInputs);
 				candidate.pinSnapshot(currentSnapshot);
@@ -286,11 +371,13 @@ final class GenericClientLuaHost implements AutoCloseable
 				activeInputs = resolvedInputs;
 				status = candidate.isFinished() ? candidate.getTerminalStatus() : "WAITING";
 				activeRun = new ActiveRun(
+					++nextRunId,
+					owner,
 					definition,
 					candidate,
 					resolvedInputs,
 					status,
-					clock.getAsLong());
+					candidate.getStartedNanos());
 				if (previous != null)
 				{
 					cancelAction.accept("script_replaced");
@@ -300,11 +387,12 @@ final class GenericClientLuaHost implements AutoCloseable
 				if (candidate.isFinished())
 				{
 					reconcileSession(candidate);
-					result = "LUA_" + candidate.getTerminalStatus() + " script=" + scriptId;
+					result = "LUA_" + candidate.getTerminalStatus() + " script=" + scriptId +
+						" owner=" + owner;
 				}
 				else
 				{
-					result = "LUA_STARTED script=" + scriptId;
+					result = "LUA_STARTED script=" + scriptId + " owner=" + owner;
 					publishStatus(result);
 				}
 				completion.complete(result);
@@ -335,15 +423,41 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	CompletableFuture<String> stop()
 	{
+		manualStopListener.run();
 		CompletableFuture<String> completion = new CompletableFuture<>();
 		scheduler.execute(() ->
 		{
-			stopOnScheduler();
+			stopOnScheduler("manual");
 			String result = "LUA_STOPPED";
 			publishStatus(result);
 			completion.complete(result);
 		});
 		return completion;
+	}
+
+	CompletableFuture<String> stopScheduled(String ruleId, String reason)
+	{
+		String owner = "rule:" + ruleId;
+		CompletableFuture<String> completion = new CompletableFuture<>();
+		scheduler.execute(() ->
+		{
+			ActiveRun run = activeRun;
+			if (session == null || run == null || !owner.equals(run.owner))
+			{
+				completion.complete("LUA_STOP_SKIPPED owner=" + owner);
+				return;
+			}
+			stopOnScheduler("automation_" + reason);
+			String result = "LUA_STOPPED owner=" + owner + " reason=" + reason;
+			publishStatus(result);
+			completion.complete(result);
+		});
+		return completion;
+	}
+
+	void setManualStopListener(Runnable listener)
+	{
+		manualStopListener = listener == null ? () -> { } : listener;
 	}
 
 	CompletableFuture<String> triggerAction(String actionId)
@@ -422,9 +536,10 @@ final class GenericClientLuaHost implements AutoCloseable
 		WorldPoint destination,
 		int within,
 		int timeoutTicks,
-		boolean breaksEnabled)
+		boolean breaksEnabled,
+		boolean useRun)
 	{
-		walkToAction.walkTo(destination, within, timeoutTicks, breaksEnabled).handle((receipt, error) ->
+		walkToAction.walkTo(destination, within, timeoutTicks, breaksEnabled, useRun).handle((receipt, error) ->
 		{
 			Map<String, Object> result = receipt == null
 				? new LinkedHashMap<>()
@@ -441,12 +556,47 @@ final class GenericClientLuaHost implements AutoCloseable
 	void submitNpcInteract(
 		GenericClientLuaScript script,
 		long requestId,
+		Integer id,
 		String name,
 		String action,
 		int within,
 		boolean breaksEnabled)
 	{
-		npcInteractAction.interact(name, action, within, breaksEnabled).handle((receipt, error) ->
+		npcInteractAction.interact(id, name, action, within, breaksEnabled).handle((receipt, error) ->
+		{
+			Map<String, Object> result = receipt == null
+				? new LinkedHashMap<>()
+				: new LinkedHashMap<>(receipt);
+			if (error != null)
+			{
+				result.put("status", "rejected");
+				result.put("result", rootMessage(error));
+			}
+			return result;
+		}).whenComplete((receipt, error) -> completeAction(script, requestId, receipt, error));
+	}
+
+	void submitQuestAction(
+		GenericClientLuaScript script,
+		long requestId,
+		String type,
+		Map<String, Object> action,
+		boolean breaksEnabled)
+	{
+		CompletableFuture<Map<String, Object>> execution;
+		try
+		{
+			execution = questAction.execute(type, action, breaksEnabled);
+		}
+		catch (RuntimeException exception)
+		{
+			Map<String, Object> receipt = new LinkedHashMap<>();
+			receipt.put("status", "rejected");
+			receipt.put("result", exception.getMessage());
+			completeAction(script, requestId, receipt, null);
+			return;
+		}
+		execution.handle((receipt, error) ->
 		{
 			Map<String, Object> result = receipt == null
 				? new LinkedHashMap<>()
@@ -607,7 +757,7 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	private static NpcInteractAction unsupportedNpcInteractAction()
 	{
-		return (name, action, within, breaksEnabled) ->
+		return (id, name, action, within, breaksEnabled) ->
 		{
 			Map<String, Object> receipt = new LinkedHashMap<>();
 			receipt.put("status", "rejected");
@@ -623,6 +773,17 @@ final class GenericClientLuaHost implements AutoCloseable
 			Map<String, Object> receipt = new LinkedHashMap<>();
 			receipt.put("status", "rejected");
 			receipt.put("result", "combat.set_style is unavailable in this host");
+			return CompletableFuture.completedFuture(receipt);
+		};
+	}
+
+	private static QuestAction unsupportedQuestAction()
+	{
+		return (type, action, breaksEnabled) ->
+		{
+			Map<String, Object> receipt = new LinkedHashMap<>();
+			receipt.put("status", "rejected");
+			receipt.put("result", type + " is unavailable in this host");
 			return CompletableFuture.completedFuture(receipt);
 		};
 	}
@@ -767,16 +928,20 @@ final class GenericClientLuaHost implements AutoCloseable
 	{
 		Map<String, Object> result = new LinkedHashMap<>(registry.get(id).toMap());
 		result.put("source", registry.readSource(id));
+		result.put("module_sources", registry.readModuleSources(id));
 		return result;
 	}
 
 	Map<String, Object> controlState()
 	{
+		RunState run = getRunState();
 		Map<String, Object> value = new LinkedHashMap<>();
 		value.put("active", getActiveScriptView().toMap());
 		value.put("active_script", activeScript);
 		value.put("active_inputs", new LinkedHashMap<>(activeInputs));
 		value.put("script_status", status);
+		value.put("run_id", run.getRunId() < 0L ? null : run.getRunId());
+		value.put("run_owner", run.getOwner());
 		value.put("repl_busy", replCompletion != null);
 		value.put("scripts", listScriptValues());
 		value.put("recent_logs", getRecentLogLines(20));
@@ -827,6 +992,17 @@ final class GenericClientLuaHost implements AutoCloseable
 			: run.snapshot(clock.getAsLong());
 	}
 
+	RunState getRunState()
+	{
+		ActiveRun run = activeRun;
+		if (run == null)
+		{
+			return RunState.none();
+		}
+		GenericClientActiveScript view = run.snapshot(clock.getAsLong());
+		return new RunState(run.id, run.owner, view.getId(), view.getStatus(), view.isRunning());
+	}
+
 	private void reconcileScript(GenericClientLuaScript expected)
 	{
 		if (expected == repl)
@@ -847,7 +1023,12 @@ final class GenericClientLuaHost implements AutoCloseable
 		ActiveRun run = activeRun;
 		if (run != null && run.script == expected)
 		{
-			run.finish(status, expected.getOverlayRows(), clock.getAsLong());
+			run.finish(
+				status,
+				expected.getOverlayRows(),
+				expected.getReturnValue(),
+				expected.getFaultMessage(),
+				clock.getAsLong());
 		}
 		publishStatus("LUA_" + status + " script=" + activeScript);
 		cancelAction.accept("script_finished");
@@ -877,9 +1058,14 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	private void stopOnScheduler()
 	{
+		stopOnScheduler("host_closed");
+	}
+
+	private void stopOnScheduler(String reason)
+	{
 		GenericClientLuaScript current = session;
 		session = null;
-		cancelAction.accept("script_stopped");
+		cancelAction.accept("script_stopped_" + reason);
 		if (current != null)
 		{
 			current.close();
@@ -937,6 +1123,8 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	private static final class ActiveRun
 	{
+		private final long id;
+		private final String owner;
 		private final GenericClientScriptRegistry.Script definition;
 		private final GenericClientLuaScript script;
 		private final Map<String, Object> values;
@@ -944,14 +1132,20 @@ final class GenericClientLuaHost implements AutoCloseable
 		private volatile String status;
 		private volatile long finishedNanos = -1L;
 		private volatile List<GenericClientOverlayRow> terminalOverlay = Collections.emptyList();
+		private volatile Object terminalValue;
+		private volatile String terminalError;
 
 		private ActiveRun(
+			long id,
+			String owner,
 			GenericClientScriptRegistry.Script definition,
 			GenericClientLuaScript script,
 			Map<String, Object> values,
 			String status,
 			long startedNanos)
 		{
+			this.id = id;
+			this.owner = owner;
 			this.definition = definition;
 			this.script = script;
 			this.values = values;
@@ -959,10 +1153,17 @@ final class GenericClientLuaHost implements AutoCloseable
 			this.startedNanos = startedNanos;
 		}
 
-		private void finish(String terminalStatus, List<GenericClientOverlayRow> overlay, long nowNanos)
+		private void finish(
+			String terminalStatus,
+			List<GenericClientOverlayRow> overlay,
+			Object value,
+			String error,
+			long nowNanos)
 		{
 			status = terminalStatus;
 			terminalOverlay = overlay;
+			terminalValue = value;
+			terminalError = error;
 			finishedNanos = nowNanos;
 		}
 
@@ -982,7 +1183,68 @@ final class GenericClientLuaHost implements AutoCloseable
 				script.getInputs(),
 				values,
 				script.getActions(),
-				overlay);
+				overlay,
+				terminalValue,
+				terminalError);
+		}
+	}
+
+	static final class RunState
+	{
+		private static final RunState NONE = new RunState(-1L, null, null, "IDLE", false);
+		private final long runId;
+		private final String owner;
+		private final String scriptId;
+		private final String status;
+		private final boolean running;
+
+		RunState(long runId, String owner, String scriptId, String status, boolean running)
+		{
+			this.runId = runId;
+			this.owner = owner;
+			this.scriptId = scriptId;
+			this.status = status;
+			this.running = running;
+		}
+
+		static RunState none()
+		{
+			return NONE;
+		}
+
+		long getRunId()
+		{
+			return runId;
+		}
+
+		String getOwner()
+		{
+			return owner;
+		}
+
+		String getScriptId()
+		{
+			return scriptId;
+		}
+
+		String getStatus()
+		{
+			return status;
+		}
+
+		boolean isRunning()
+		{
+			return running;
+		}
+
+		boolean isManual()
+		{
+			return MANUAL_OWNER.equals(owner);
+		}
+
+		String getRuleId()
+		{
+			return owner != null && owner.startsWith("rule:") ? owner.substring(5) : null;
 		}
 	}
 
@@ -999,13 +1261,15 @@ final class GenericClientLuaHost implements AutoCloseable
 			WorldPoint destination,
 			int within,
 			int timeoutTicks,
-			boolean breaksEnabled);
+			boolean breaksEnabled,
+			boolean useRun);
 	}
 
 	@FunctionalInterface
 	interface NpcInteractAction
 	{
 		CompletableFuture<Map<String, Object>> interact(
+			Integer id,
 			String name,
 			String action,
 			int within,
@@ -1016,5 +1280,14 @@ final class GenericClientLuaHost implements AutoCloseable
 	interface CombatModeAction
 	{
 		CompletableFuture<Map<String, Object>> setMode(int mode, boolean breaksEnabled);
+	}
+
+	@FunctionalInterface
+	interface QuestAction
+	{
+		CompletableFuture<Map<String, Object>> execute(
+			String type,
+			Map<String, Object> action,
+			boolean breaksEnabled);
 	}
 }

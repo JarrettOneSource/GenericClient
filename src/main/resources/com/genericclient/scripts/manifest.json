@@ -1,6 +1,19 @@
 {
-  "schema": "genericclient_scripts.v7",
+  "schema": "genericclient_scripts.v35",
   "scripts": [
+    {
+        "id": "aio-magic",
+        "name": "AIO Magic Trainer",
+        "description": "Train Magic to an exact target with GE restocking, verified loadouts, spell selection, and recovery receipts.",
+        "file": "aio-magic.lua",
+        "modules": {
+          "config": "aio-magic/config.lua",
+          "preparation": "aio-magic/preparation.lua",
+          "progress": "aio-magic/progress.lua",
+          "supplies": "aio-magic/supplies.lua",
+          "training": "aio-magic/training.lua"
+        }
+    },
     {
       "id": "aio-melee",
       "name": "AIO Melee Trainer",
@@ -14,16 +27,31 @@
       "file": "account-auditor.lua"
     },
     {
+        "id": "quest-runner",
+        "name": "Quest Runner",
+        "description": "Run resumable quest phases from observed state with strict safety gates and exact interaction receipts.",
+        "file": "quest-runner.lua",
+        "modules": {
+          "shared_preparation": "quest-runner/shared/preparation.lua",
+          "shared_state": "quest-runner/shared/state.lua",
+          "shared_travel": "quest-runner/shared/travel.lua",
+          "witch_combat": "quest-runner/witchs_house/combat.lua",
+          "witch_completion": "quest-runner/witchs_house/completion.lua",
+          "witch_config": "quest-runner/witchs_house/config.lua",
+          "witch_experiment": "quest-runner/witchs_house/experiment.lua",
+          "witch_garden": "quest-runner/witchs_house/garden.lua",
+          "witch_quest": "quest-runner/witchs_house/quest.lua",
+          "witch_state": "quest-runner/witchs_house/state.lua",
+          "waterfall_config": "quest-runner/waterfall/config.lua",
+          "waterfall_quest": "quest-runner/waterfall/quest.lua",
+          "waterfall_state": "quest-runner/waterfall/state.lua"
+        }
+    },
+    {
       "id": "walker",
       "name": "Walker",
       "description": "Choose a destination and walk there from the current outdoor position.",
       "file": "walker.lua"
-    },
-    {
-      "id": "npc-diagnostics",
-      "name": "Nearby NPC diagnostics",
-      "description": "Log nearby NPC state every five game ticks.",
-      "file": "npc-diagnostics.lua"
     },
     {
       "id": "walk-stress",

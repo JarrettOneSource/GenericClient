@@ -35,7 +35,7 @@ public class GenericClientDashboardTest
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("scripts").toPath(),
 			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("behavior").toPath()),
 			message -> { });
@@ -46,6 +46,7 @@ public class GenericClientDashboardTest
 			assertTrue(findOrNull(content, JTabbedPane.class) == null);
 			assertTrue(buttonOrNull(content, "Active Script") != null);
 			assertTrue(buttonOrNull(content, "Automations") != null);
+			assertTrue(buttonOrNull(content, "Schedules") != null);
 			assertTrue(buttonOrNull(content, "Console") != null);
 			assertTrue(buttonOrNull(content, "Settings") != null);
 
@@ -56,6 +57,9 @@ public class GenericClientDashboardTest
 			assertFalse(labels.contains("Game ticks"));
 			assertFalse(labels.contains("Long pressure"));
 			assertFalse(labels.contains("Nearby NPCs:"));
+			assertTrue(buttonOrNull(content, "Enable") != null);
+			assertTrue(buttonOrNull(content, "Pause") != null);
+			assertTrue(buttonOrNull(content, "Reload rules") != null);
 			dashboard.close();
 		}
 		finally
@@ -91,7 +95,7 @@ public class GenericClientDashboardTest
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("break-banner-scripts").toPath(),
 			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("break-banner-behavior").toPath()),
 			message -> { });
@@ -136,7 +140,7 @@ public class GenericClientDashboardTest
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("walker-ui-scripts").toPath(),
 			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("walker-ui-behavior").toPath()),
 			message -> { });
@@ -164,7 +168,7 @@ public class GenericClientDashboardTest
 		GenericClientLuaHost host = new GenericClientLuaHost(
 			temporaryFolder.newFolder("active-ui-scripts").toPath(),
 			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
 			GenericClientTestSupport.behavior(temporaryFolder.newFolder("active-ui-behavior").toPath()),
 			message -> { });
@@ -471,7 +475,6 @@ public class GenericClientDashboardTest
 		private int endedLongBreaks;
 
 		@Override public void printDiagnostics() { }
-		@Override public void logNearbyNpcs() { }
 		@Override public void walkToRandomTile() { }
 		@Override public void setMouseProfile(String file) { }
 		@Override public void setMouseEffect(GenericClientMouseEffect effect) { }

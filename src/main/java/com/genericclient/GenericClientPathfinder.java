@@ -36,6 +36,25 @@ final class GenericClientPathfinder
 
 	Result find(WorldPoint start, WorldPoint destination, int within)
 	{
+		return find(start, destination, within, (x, y, plane, dx, dy, staticAllowed) -> staticAllowed);
+	}
+
+	Result find(
+		WorldPoint start,
+		WorldPoint destination,
+		int within,
+		EdgePolicy edgePolicy)
+	{
+		return find(start, destination, within, edgePolicy, MAX_EXPANDED_NODES);
+	}
+
+	private Result find(
+		WorldPoint start,
+		WorldPoint destination,
+		int within,
+		EdgePolicy edgePolicy,
+		int maximumExpandedNodes)
+	{
 		if (start.getPlane() != destination.getPlane())
 		{
 			return Result.failed(Status.UNSUPPORTED_PLANE, 0);
@@ -81,7 +100,7 @@ final class GenericClientPathfinder
 			{
 				return Result.found(reconstruct(current.position, startPacked, parents), expanded);
 			}
-			if (++expanded >= MAX_EXPANDED_NODES)
+			if (++expanded >= maximumExpandedNodes)
 			{
 				return Result.failed(Status.SEARCH_LIMIT, expanded);
 			}
@@ -90,8 +109,11 @@ final class GenericClientPathfinder
 			{
 				int nextX = x + direction[0];
 				int nextY = y + direction[1];
+				boolean staticAllowed = collisionMap.canMove(
+					x, y, plane, direction[0], direction[1]);
 				if (!validCoordinate(nextX, nextY) ||
-					!collisionMap.canMove(x, y, plane, direction[0], direction[1]))
+					!edgePolicy.canMove(
+						x, y, plane, direction[0], direction[1], staticAllowed))
 				{
 					continue;
 				}
@@ -117,6 +139,60 @@ final class GenericClientPathfinder
 		}
 
 		return Result.failed(Status.UNREACHABLE, expanded);
+	}
+
+	Result findSegment(
+		WorldPoint start,
+		WorldPoint destination,
+		int within,
+		EdgePolicy edgePolicy,
+		int maximumPathTiles)
+	{
+		if (maximumPathTiles < 2)
+		{
+			throw new IllegalArgumentException("Segment path limit must be at least two tiles");
+		}
+		if (chebyshev(
+			start.getX(), start.getY(), destination.getX(), destination.getY()) < maximumPathTiles)
+		{
+			int localSearchLimit = maximumPathTiles * maximumPathTiles * DIRECTIONS.length;
+			Result local = find(
+				start, destination, within, edgePolicy, localSearchLimit);
+			if (local.status == Status.FOUND)
+			{
+				return local.limitPathTiles(maximumPathTiles);
+			}
+		}
+		Result global = find(start, destination, within, edgePolicy);
+		if (global.status != Status.FOUND)
+		{
+			return global;
+		}
+		if (global.path.size() <= maximumPathTiles)
+		{
+			return find(start, destination, within, edgePolicy)
+				.withAdditionalExpandedNodes(global.expandedNodes)
+				.limitPathTiles(maximumPathTiles);
+		}
+
+		int expanded = global.expandedNodes;
+		for (int guideIndex = maximumPathTiles - 1; guideIndex > 0;
+			guideIndex = Math.max(0, guideIndex - 8))
+		{
+			Result local = find(start, global.path.get(guideIndex), 0, edgePolicy);
+			expanded += local.expandedNodes;
+			if (local.status == Status.FOUND)
+			{
+				return local.withExpandedNodes(expanded).limitPathTiles(maximumPathTiles);
+			}
+		}
+		return Result.failed(Status.UNREACHABLE, expanded);
+	}
+
+	@FunctionalInterface
+	interface EdgePolicy
+	{
+		boolean canMove(int x, int y, int plane, int dx, int dy, boolean staticAllowed);
 	}
 
 	private static List<WorldPoint> reconstruct(int goal, int start, Map<Integer, Integer> parents)
@@ -223,6 +299,28 @@ final class GenericClientPathfinder
 		int getExpandedNodes()
 		{
 			return expandedNodes;
+		}
+
+		private Result withAdditionalExpandedNodes(int additional)
+		{
+			return withExpandedNodes(expandedNodes + additional);
+		}
+
+		private Result withExpandedNodes(int expanded)
+		{
+			return new Result(status, path, expanded);
+		}
+
+		private Result limitPathTiles(int maximum)
+		{
+			if (status != Status.FOUND || path.size() <= maximum)
+			{
+				return this;
+			}
+			return new Result(
+				status,
+				Collections.unmodifiableList(new ArrayList<>(path.subList(0, maximum))),
+				expandedNodes);
 		}
 	}
 

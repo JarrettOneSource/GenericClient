@@ -138,6 +138,29 @@ public class GenericClientSyntheticMouseTest
 	}
 
 	@Test
+	public void reconcilesAnOffscreenPositionAfterTheCanvasGrows() throws Exception
+	{
+		Canvas canvas = canvas();
+		ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+		GenericClientSyntheticMouse mouse = mouse(canvas, executor, new Point(820, 100), 25);
+		try
+		{
+			assertTrue(mouse.isOutside());
+
+			canvas.setSize(900, 600);
+			mouse.move(new Point(100, 100)).get(2, TimeUnit.SECONDS);
+
+			assertFalse(mouse.isOutside());
+			assertEquals(new Point(100, 100), mouse.getPosition());
+		}
+		finally
+		{
+			mouse.close();
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
 	public void emitsMarkerEventsWithCorrectRightButtonFields() throws Exception
 	{
 		Canvas canvas = canvas();

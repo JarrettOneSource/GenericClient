@@ -5,7 +5,7 @@ import * as z from "zod/v4";
 
 import { GenericClientBridge } from "./bridge.mjs";
 
-const VERSION = "0.11.0";
+const VERSION = "0.12.0";
 
 function result(value) {
   return {
@@ -18,16 +18,31 @@ function result(value) {
   };
 }
 
+function screenshotResult(value) {
+  if (value?.mime_type !== "image/png" || typeof value?.image_base64 !== "string") {
+    throw new Error("GenericClient returned an invalid screenshot payload");
+  }
+  const { image_base64: data, mime_type: mimeType, ...metadata } = value;
+  return {
+    content: [
+      { type: "image", data, mimeType },
+      { type: "text", text: JSON.stringify(metadata, null, 2) },
+    ],
+  };
+}
+
 export function createServer(bridge = new GenericClientBridge()) {
   const server = new McpServer(
     { name: "genericclient", version: VERSION },
     {
       instructions:
         "GenericClient controls the live RuneLite client through Lua. Call client_status first, then account_snapshot before planning account work. " +
+        "Use client_screenshot whenever structured state does not fully explain the visible game, widget, dialogue, camera, or menu state. " +
         "Use lua_eval for ad-hoc exploration; its code is the body of a persistent Lua function, so return a value to receive it. " +
         "Available Lua primitives are gc.read, gc.await, gc.log, gc.overlay, and gc.next_action. " +
         "Each composite client interaction uses the seeded behavior profile unless breaks=false; gc.phase(name) performs a heavier phase evaluation. " +
-        "Use script_save for reusable standalone scripts, script_run with declared inputs, and script_action for declared buttons. Only one manifest script and one REPL execution run at a time.",
+        "Use script_save for reusable standalone scripts, script_run with declared inputs, and script_action for declared buttons. " +
+        "Use automation_status before changing scheduled rules; scheduled and manual scripts share the single manifest-script slot.",
     },
   );
 
@@ -36,7 +51,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Read GenericClient status",
       description:
-        "Read the live player position, game state, Lua state, behavior state/profile, registered scripts, mouse profile, and recent logs. Call this before exploring or interacting.",
+        "Read the live player position, game state, Lua state, behavior state/profile, registered scripts, mouse profile, recent logs, and bounded chat/system messages. Call this before exploring or interacting.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: true,
@@ -46,6 +61,23 @@ export function createServer(bridge = new GenericClientBridge()) {
       },
     },
     async () => result(await bridge.call("status")),
+  );
+
+  server.registerTool(
+    "client_screenshot",
+    {
+      title: "Capture RuneLite screenshot",
+      description:
+        "Capture the next fully rendered RuneLite game canvas as a PNG image. Use this when snapshots or receipts do not fully explain visible UI, camera, menu, dialogue, or world state.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async () => screenshotResult(await bridge.call("screenshot.capture")),
   );
 
   server.registerTool(
@@ -132,6 +164,140 @@ export function createServer(bridge = new GenericClientBridge()) {
       },
     },
     async () => result(await bridge.call("behavior.status")),
+  );
+
+  server.registerTool(
+    "behavior_end_break",
+    {
+      title: "End active break",
+      description:
+        "Manually end the active micro or long break. This is the MCP equivalent of the X on the in-client break banner; Lua scripts cannot call it.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => result(await bridge.call("behavior.break.end")),
+  );
+
+  server.registerTool(
+    "automation_status",
+    {
+      title: "Read automation scheduler",
+      description:
+        "Read the active account's schedule windows, next transition, rule truth values and reasons, selected rule, active lease, cooldowns, and pause state.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => result(await bridge.call("automation.status")),
+  );
+
+  server.registerTool(
+    "automation_config_get",
+    {
+      title: "Read automation rules",
+      description: "Read the complete validated automation configuration for the active account profile.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => result(await bridge.call("automation.config.get")),
+  );
+
+  server.registerTool(
+    "automation_config_set",
+    {
+      title: "Replace automation rules",
+      description:
+        "Validate and atomically replace the active account's complete automation configuration. Rules may combine named schedules with supported skill and complete-cash facts.",
+      inputSchema: z.object({
+        config: z.record(z.string(), z.unknown()).describe("Complete genericclient_automation.v1 object."),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ config }) => result(await bridge.call("automation.config.set", { config })),
+  );
+
+  server.registerTool(
+    "automation_enable",
+    {
+      title: "Enable or disable scheduling",
+      description:
+        "Persistently enable or disable scheduled rule execution. Disabling stops a rule-owned script but never a manually owned script.",
+      inputSchema: z.object({ enabled: z.boolean() }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async ({ enabled }) => result(await bridge.call("automation.enable", { enabled })),
+  );
+
+  server.registerTool(
+    "automation_pause",
+    {
+      title: "Pause scheduled scripts",
+      description: "Pause scheduling for the active account and stop only a rule-owned script.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async () => result(await bridge.call("automation.pause")),
+  );
+
+  server.registerTool(
+    "automation_resume",
+    {
+      title: "Resume scheduled scripts",
+      description: "Resume rule evaluation after a persisted pause or manual stop.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async () => result(await bridge.call("automation.resume")),
+  );
+
+  server.registerTool(
+    "automation_reload",
+    {
+      title: "Reload automation rules",
+      description: "Reload and revalidate the active account's rule and runtime-state files from disk.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => result(await bridge.call("automation.reload")),
   );
 
   server.registerTool(
@@ -225,7 +391,7 @@ export function createServer(bridge = new GenericClientBridge()) {
       title: "Read Lua script",
       description: "Read one registered script's manifest metadata and complete Lua source.",
       inputSchema: z.object({
-        id: z.string().min(1).describe("Manifest script id, for example npc-diagnostics."),
+        id: z.string().min(1).describe("Manifest script id, for example account-auditor."),
       }),
       annotations: {
         readOnlyHint: true,

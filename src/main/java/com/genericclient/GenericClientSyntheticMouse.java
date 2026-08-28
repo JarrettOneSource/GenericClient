@@ -121,33 +121,42 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 			{
 				return failed("Synthetic mouse is already moving");
 			}
-			GenericClientMouseProfile profile = profileSupplier.get();
-			if (profile == null)
+			try
 			{
-				return failed("Synthetic mouse profile is unavailable");
+				GenericClientMouseProfile profile = profileSupplier.get();
+				if (profile == null)
+				{
+					return failed("Synthetic mouse profile is unavailable");
+				}
+				duration = Math.max(25, durationMillis.getAsInt());
+				Rectangle viewport = new Rectangle(
+					0, 0, Math.max(1, canvas.getWidth()), Math.max(1, canvas.getHeight()));
+				Random random = randomSupplier.get();
+				outside = !viewport.contains(position);
+				entering = outside && viewport.contains(destination);
+				previousStart = new Point(position);
+				pathStart = entering
+					? randomizedReentryStart(previousStart, viewport.width, viewport.height, random)
+					: previousStart;
+				if (entering)
+				{
+					position = new Point(pathStart);
+				}
+				path = GenericClientMouseMatcher.generate(
+					profile,
+					pathStart,
+					new Point(destination),
+					viewport,
+					duration,
+					random);
+				moving = true;
+				completion = new CompletableFuture<>();
+				activeMove = completion;
 			}
-			duration = Math.max(25, durationMillis.getAsInt());
-			Rectangle viewport = new Rectangle(0, 0, Math.max(1, canvas.getWidth()), Math.max(1, canvas.getHeight()));
-			Random random = randomSupplier.get();
-			entering = outside && inside(destination);
-			previousStart = new Point(position);
-			pathStart = entering
-				? randomizedReentryStart(previousStart, viewport.width, viewport.height, random)
-				: previousStart;
-			if (entering)
+			catch (RuntimeException exception)
 			{
-				position = new Point(pathStart);
+				return failed("Synthetic mouse path generation failed: " + exception.getMessage());
 			}
-			path = GenericClientMouseMatcher.generate(
-				profile,
-				pathStart,
-				new Point(destination),
-				viewport,
-				duration,
-				random);
-			moving = true;
-			completion = new CompletableFuture<>();
-			activeMove = completion;
 		}
 
 		reporter.accept("SYNTHETIC_MOUSE_PATH_GENERATED profile=" + profileSupplier.get().getProfileId() +
@@ -254,6 +263,7 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 
 	synchronized boolean isOutside()
 	{
+		outside = !inside(position);
 		return outside;
 	}
 

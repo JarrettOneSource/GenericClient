@@ -1,6 +1,8 @@
-# Walker design: static ground routes first
+# Walker design: global routes with live local authority
 
-Status: implemented and live-tested from Falador to Varrock on 2026-08-25.
+Status: implemented and live-tested from Falador to Varrock on 2026-08-25;
+live collision and accessible-door traversal were added at Port Sarim jail on
+2026-08-27.
 This work does not start the deferred headless mode.
 
 Source snapshots:
@@ -19,23 +21,29 @@ local receipt = gc.await {
     type = "walk.to",
     destination = { x = 3210, y = 3424, plane = 0 },
     within = 1,
+    run = true,
   },
   timeout = { game_ticks = 600 },
 }
 ```
 
-`GenericClientCollisionMap` loads the pinned, packaged world map.
-`GenericClientPathfinder` runs bounded deterministic A* over its eight-directional
-ground edges. `GenericClientWalker` follows the result five tiles at a time
-through `GenericClientGameInput`. Each cursor leg uses the active recorded mouse
-profile. A visible ground tile uses the canvas; an occluding object is bypassed
+`GenericClientCollisionMap` loads the pinned, packaged world map for unloaded
+regions. Within the current non-instanced scene, an immutable copy of RuneLite's
+live collision flags replaces those static edges. A closed edge remains
+routeable only when an object on that exact oriented wall exposes an approved
+same-plane traversal action. A newly observed solid edge without a traversal
+owner is retained for the life of that walk, including after the 104×104 scene
+base shifts, so recovery cannot oscillate back through a known wall.
+`GenericClientPathfinder` computes a global guide and `GenericClientWalker`
+follows it through `GenericClientGameInput`. Each cursor leg uses the active
+recorded mouse profile. A visible ground tile uses the canvas; an occluding object is bypassed
 by right-clicking and selecting `Walk here`; a tile outside the 3D viewport uses
 RuneLite's minimap projection. Arrival is based on later player snapshots, not
 click dispatch.
 
-A reliable whole-world walker also needs explicit semantic edges for doors,
-stairs, ships, teleports, and other discontinuities. Those are deliberately not
-part of this first ground-route implementation. Microbot's feature named “Web
+A reliable whole-world walker still needs explicit semantic edges for stairs,
+ships, teleports, and other discontinuities. Accessible same-plane doors are now
+handled from the live scene; locked doors fail with a bounded receipt. Microbot's feature named “Web
 Walker” is local rather than a remote service: it loads a packaged collision
 archive and transport/restriction TSVs, runs its own pathfinder, and executes
 the result in the client ([startup](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/ShortestPathPlugin.java#L221-L254), [collision resource loader](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/pathfinder/SplitFlagMap.java#L102-L129), [transport resource loader](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/Transport.java#L590-L627)).
@@ -45,8 +53,8 @@ Therefore:
 - Do not build or depend on an online “web-walker node” now.
 - Do not hand-author ordinary road/path waypoints.
 - Keep the Falador-to-Varrock live receipt as the ground-walker regression route.
-- Overlay the loaded scene's live collision flags when a real failure shows the
-  static data is stale around a dynamic object.
+- Treat the loaded scene's live collision flags as authoritative over the
+  static archive.
 - Add transition definitions and handlers one real route at a time instead of importing every possible transport flow.
 
 ## Collision map source
@@ -57,9 +65,9 @@ Its [`src/main/resources/collision-map.zip`](https://github.com/Skretzo/shortest
 
 The reproducible update path is [`osrs-pathfinding/shortest-path-tooling`](https://github.com/osrs-pathfinding/shortest-path-tooling), pinned here at [`d37d53c129d61dc8e2bb8456eb39801688a000c2`](https://github.com/osrs-pathfinding/shortest-path-tooling/tree/d37d53c129d61dc8e2bb8456eb39801688a000c2). Its collision workflow downloads a selected OSRS cache and XTEA keys from [OpenRS2's archive](https://archive.openrs2.org/caches), runs `CollisionMapDumper` through RuneLite's cache module, and produces the replacement `collision-map.zip` ([workflow](https://github.com/osrs-pathfinding/shortest-path-tooling/blob/d37d53c129d61dc8e2bb8456eb39801688a000c2/collision-map-update/README.md), [dumper](https://github.com/osrs-pathfinding/shortest-path-tooling/blob/d37d53c129d61dc8e2bb8456eb39801688a000c2/collision-map-update/CollisionMapDumper.java)).
 
-The static archive supplies unloaded-world terrain. This implementation uses it
-as-is. A live RuneLite scene overlay remains a future correction for routes
-where current doors or dynamic collision disagree with the static plan.
+The static archive supplies unloaded-world terrain. In the loaded top-level
+scene, GenericClient copies the current collision plane into the pinned Lua
+frame and uses it for planning and edge verification.
 
 ## What stock RuneLite actually provides
 
@@ -137,10 +145,17 @@ Lua gc.await
 - Search uses the packaged global map, all eight directions, and the archive's
   diagonal corner rules. It stops after 250,000 expanded nodes.
 - The requested Chebyshev arrival radius is an integer from 0 through 10.
-- No door/object interaction, plane transition, teleport, ship, dialogue, or widget operation.
+- Run is enabled by default at 10% or more energy and verified before route
+  clicks. `run = false` conserves energy for the requesting walk.
+- Accessible same-plane traversal objects are executed through the normal
+  synthetic object-action pipeline and verified before replanning. Explicit
+  locked-door feedback stops immediately; otherwise an unchanged obstacle stops
+  after three attempts.
+- No plane transition, teleport, ship, transport dialogue, or transport widget operation.
 - One active walk for the whole plugin. A second request returns `busy` rather than silently replacing the first.
-- The Lua request owns the game-tick timeout. The follower allows six replans
-  after its initial plan.
+- The Lua request owns the game-tick timeout. Ordinary segment handoffs do not
+  consume recovery budget. Genuine off-route/stall recovery starts at six plans,
+  adds one per 16 tiles of initial distance, and caps at 32.
 - There is no straight-line or random fallback. A failure is returned in the
   action receipt.
 
@@ -160,6 +175,9 @@ The planner:
 - uses orthogonal cost 10, diagonal cost 14, and an octile heuristic;
 - accepts the first cheapest tile inside the requested arrival radius;
 - uses fixed neighbor ordering and insertion-order tie breaking.
+- breaks long routes into global-guided local segments so a loaded scene is
+  authoritative locally without having to connect directly to an unloaded
+  destination.
 
 Lua receives no collision arrays or route nodes.
 
@@ -169,21 +187,33 @@ At each game tick, the walker observes the immutable player snapshot and active
 route:
 
 1. Complete `arrived` when the player is on the correct plane and within the requested radius.
-2. Match the player to a nearby point on the active route; replan when more than
+2. Enable and verify run when policy permits and at least 10% energy is
+   available. Re-arm only after energy falls below that threshold.
+3. Match the player to a nearby point on the active segment; replan when more than
    three tiles off route.
-3. Offer the entire remaining route from farthest to nearest. The input module
+4. Before offering a route leg, compare its nearby edges with live collision.
+   Approach an accessible traversal object, execute its action, and verify the
+   edge opened or the player crossed it before replanning. Retain every solid
+   unowned edge in the active walk's blocked-edge set and apply it to all later
+   plans, even after that edge leaves the loaded scene.
+5. Offer the remaining unobstructed route from farthest to nearest. The input module
    turns the camera, recomputes projection, and selects the first route tile
    currently reachable through a visible canvas polygon or minimap projection.
-4. If an object owns the canvas left-click, right-click and move to the exposed
+6. If an object owns the canvas left-click, right-click and move to the exposed
    `Walk here` row. Confirm canvas selections through `MenuOptionClicked`;
-   confirm minimap dispatch through subsequent player progress.
-5. Run one behavior evaluation after every dispatched route click, then retain
+   confirm minimap dispatch through subsequent player progress. Treat the
+   right-click and row-selection click as one composite interaction, with one
+   behavior roll only after the final selection.
+7. Run one behavior evaluation after every dispatched route, run-toggle, or obstacle click, then retain
    the accepted waypoint until the player is within two tiles of it or
    has passed its route index. Retain the final waypoint until arrival instead
    of re-clicking the same endpoint. Keep a two-game-tick minimum between
    clicks, replan after eight ticks without player movement, and reduce click
    distance after a rejected canvas target.
-6. Finish after five consecutive click failures, six replans, the requested
+8. At a segment endpoint, derive the next segment from the global guide and
+   reset the stall clock when that asynchronous plan is published.
+9. Finish after five consecutive click failures, explicit locked-door feedback,
+   three unchanged obstacle attempts, the route's bounded recovery budget, the requested
    timeout, logout/plane change, explicit script cancellation, no route, or arrival.
 
 ### Receipt and diagnostics
@@ -198,7 +228,16 @@ route:
   game_ticks = 14,
   active_game_ticks = 10, -- excludes camera/mouse/click/break interaction time
   plans = 2,
+  recovery_plans = 0,
   clicks = 4,
+  obstacle_interactions = 1,
+  obstacles_cleared = 1,
+  live_block_replans = 2,
+  blocked_edges = {
+    { from = { x = 3074, y = 3370, plane = 0 },
+      to = { x = 3074, y = 3371, plane = 0 } },
+  },
+  run_toggles = 1,
   path_tiles = 31,
   expanded_nodes = 287,
   reason = "arrival_radius",
@@ -209,9 +248,31 @@ Console and `client.log` receive `WALK_REQUESTED`, `WALK_PLANNING`,
 `WALK_PLANNED`, `CAMERA_TURN_STARTED`, `CAMERA_TURN_COMPLETED`,
 `WALK_CLICK_REQUEST`, `WALK_CLICK`, `WALK_INTERACTION_COMPLETED`,
 `WALK_CONTEXT_INTERACTION_COMPLETED`, `WALK_PROGRESS`, `WALK_CLICK_REJECTED`,
-and `WALK_COMPLETED` records. The Lua script receives only the terminal receipt.
+`WALK_OBSTACLE_INTERACTION`, `WALK_OBSTACLE_DISPATCHED`, `WALK_OBSTACLE_CLEARED`,
+`WALK_ROUTE_BLOCKED`, and `WALK_COMPLETED` records. The Lua script receives only
+the terminal receipt.
 
 ## Live verification
+
+At Port Sarim jail, a plain `walk.to` from outside first followed the live scene
+around a permanent wall, then detected the public entrance door (`1535`) on its
+oriented blocked edge. The first interaction was deferred until the player was
+adjacent; the next synthetic Open changed the object/edge, triggered a replan,
+and moved the player into the corridor. A subsequent test aimed inside a locked
+cell, reached its cell door (`9563`), received “The door is securely locked,”
+and stopped with an unreachable receipt. The Magic automation now targets
+inmates through the bars instead of routing into those cells.
+
+A later Port-Sarim-to-Grand-Exchange route exposed three hybrid planning faults:
+scene-array cells without a loaded tile were treated as authoritative, movement
+flags were checked on both sides instead of using RuneLite's destination-side
+one-tile masks, and one local A* was asked to connect directly to an unloaded
+destination. The corrected walker uses a loaded-tile mask, treats RuneLite's
+`0xFFFFFF` scene-edge and `0x1000000` uninitialized collision sentinels as
+unknown, uses RuneLite's movement masks, and advances global-guided 49-tile
+local segments as soon as the player is within two tiles of a handoff. The live
+account crossed the first segment endpoint at `(3034,3263)` and continued north
+without consuming a recovery replan.
 
 GenericClient 0.7.0 completed a breaks-enabled Varrock-to-Grand-Exchange run
 with eight route clicks, eight camera turns, and eight interaction behavior
@@ -257,15 +318,13 @@ Four bounded canvas stress runs separately exercised the right-click branch.
 
 ## Expansion sequence driven by real automations
 
-1. **Live scene overlay.** Overlay current RuneLite collision onto the static
-   region data when the first stale/dynamic tile requires it.
-2. **First required transition.** Add one edge containing origin, destination,
+1. **First non-door transition.** Add one edge containing origin, destination,
    semantic action, prerequisites, completion observation, and cost. Implement
    only the handler demanded by the route under test.
-3. **Further transports.** Grow the catalog from observed route failures. Keep
+2. **Further transports.** Grow the catalog from observed route failures. Keep
    doors, ladders, network widgets, and item/spell teleports as separate
    executors because their confirmation contracts differ.
-4. **Optional distribution service.** If maintaining several installations on
+3. **Optional distribution service.** If maintaining several installations on
    one revision becomes burdensome, distribute signed/versioned bundles. Route
    execution and success confirmation remain local.
 

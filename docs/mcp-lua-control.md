@@ -56,11 +56,20 @@ the same port in the MCP server configuration.
 | Tool | Purpose |
 | --- | --- |
 | `client_status` | Read player position, game state, Lua state, scripts, mouse profile, and recent logs. |
+| `client_screenshot` | Return the next fully rendered RuneLite game canvas as a PNG image. |
 | `account_snapshot` | Read one pinned frame of skills, items, bank state, quests, GE offers, and known cash. |
 | `account_note_get` | Read the Notes text stored in the bound RuneLite profile. |
 | `account_note_set` | Replace that note with an updated goal and verified progress ledger. |
 | `behavior_profile` | Read the deterministic human-readable profile and numeric traits. |
 | `behavior_status` | Read the current break, countdown, long pressure, and break counts. |
+| `behavior_end_break` | Manually end the active break, matching the X on the in-client banner. |
+| `automation_status` | Read schedules, rule truth/reasons, cooldowns, selection, and the active lease. |
+| `automation_config_get` | Read the complete active-account rule configuration. |
+| `automation_config_set` | Validate and atomically replace that configuration. |
+| `automation_enable` | Persistently enable or disable scheduled execution. |
+| `automation_pause` | Pause scheduling and stop only a rule-owned script. |
+| `automation_resume` | Resume evaluation after a pause or manual Stop. |
+| `automation_reload` | Reload the active account's rule and state files. |
 | `session_logout` | Deliberately log out through visible widgets with synthetic input. |
 | `session_login` | Restore the active Jagex Launcher session and enter the world. |
 | `lua_eval` | Execute an ad-hoc Lua snippet and receive its returned value. |
@@ -74,9 +83,65 @@ the same port in the MCP server configuration.
 | `script_reload_manifest` | Reload the manifest after external file edits. |
 
 Start with `client_status` so coordinates and login state come from the current
-client rather than assumptions. Call `account_snapshot` before planning account
-work. If its bank state is `unknown`, open the bank once before treating the cash
-or supply inventory as complete.
+client rather than assumptions. It includes the 20 newest structured chat and
+system messages, and a completed script's structured return value remains on
+`lua.active.result` for diagnosis. Call `account_snapshot` before planning account work. Use
+`client_screenshot` whenever those structures do not fully explain visible
+world, camera, widget, dialogue, or menu state. If the bank state is `unknown`,
+open the bank once before treating the cash or supply inventory as complete.
+
+## Scheduled automation
+
+Scheduled rules use named time windows and three-valued account facts. The
+following configuration runs AIO Melee on weekdays during the specified window
+while Strength remains below 30:
+
+```json
+{
+  "schema": "genericclient_automation.v1",
+  "zone": "America/New_York",
+  "enabled": true,
+  "schedules": {
+    "work-hours": {
+      "days": ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"],
+      "windows": [{ "from": "08:00", "until": "17:00" }]
+    }
+  },
+  "rules": [
+    {
+      "id": "train-strength",
+      "priority": 50,
+      "when": {
+        "all": [
+          { "schedule": "work-hours" },
+          { "fact": "skills.strength.level", "lt": 30 }
+        ]
+      },
+      "run": {
+        "script": "aio-melee",
+        "inputs": {
+          "skill": "strength",
+          "target_level": "30",
+          "method": "auto"
+        }
+      },
+      "retry_after": "PT10M"
+    }
+  ]
+}
+```
+
+Pass that object to `automation_config_set`, then inspect
+`automation_status`. An idle rule starts only when its complete condition is
+`true`; `unknown` facts block a new start and include a reason. In particular,
+`cash.known_total_value` remains unknown until bank wealth has been observed.
+Manual scripts own the slot ahead of scheduled work, and manual Stop persists a
+pause until `automation_resume` is called.
+
+The complete cash-rule example, operators, overnight windows, account-specific
+paths, sticky ownership, and the requirement that GenericClient itself remain
+running are documented in
+[`automation-scheduling.md`](automation-scheduling.md).
 
 ## Lua REPL
 
@@ -93,6 +158,54 @@ return gc.read("npcs", {
   limit = 20,
 })
 ```
+
+NPC rows include separate `in_scene`, `clickable`, and `line_of_sight` fields,
+plus canvas geometry and health state. Scripts can require the interaction
+facts they actually need:
+
+```lua
+return gc.read("npcs", {
+  where = {
+    name = "Thief",
+    clickable = true,
+    line_of_sight = true,
+    dead = false,
+  },
+  action = "Attack",
+  within = 15,
+})
+```
+
+Recent messages are tick-stamped and newest-first. The bounded local buffer
+includes game feedback, level-ups, unlocks, NPC/random-event speech, public and
+private chat, friends chat, clan chat, broadcasts, and notifications. Examine
+spam and RuneLite console messages are excluded:
+
+```lua
+local before = gc.read("runtime").game_tick
+-- perform an interaction
+return gc.read("messages", {
+  since_tick = before,
+  contains = "reach",
+  limit = 10,
+})
+```
+
+`scene` compares one adjacent world edge against the pinned live collision
+frame. It reports the raw flags and human-readable blockers for both tiles:
+
+```lua
+return gc.read("scene", {
+  from = { x = 3011, y = 3197, plane = 0 },
+  to = { x = 3011, y = 3196, plane = 0 },
+})
+```
+
+The core walker uses this same frame as the local authority over its bundled
+global map. It may execute an accessible same-plane traversal object on the
+exact oriented edge, then verifies the edge or object changed before resuming.
+Explicit locked-door feedback or an unchanged obstacle returns an `unreachable`
+walk receipt.
 
 The same account frame exposed by `account_snapshot` is available inside Lua:
 
@@ -131,6 +244,7 @@ local result = gc.await {
     type = "walk.to",
     destination = { x = 3210, y = 3424, plane = 0 },
     within = 3,
+    run = true,
   },
   timeout = { game_ticks = 600 },
 }
@@ -138,21 +252,91 @@ local result = gc.await {
 return result
 ```
 
-NPC actions are matched by name and menu option. The nearest matching NPC inside
-the radius is used, and the receipt states whether the synthetic cursor used a
-left-click or context menu:
+`walk.to` enables run by default once at least 10% energy is available. Use
+`run = false` only for a route or phase that explicitly needs to conserve it.
+The core toggles and verifies the visible run orb without repeatedly clicking
+an unchanged state.
+
+NPC actions require a name or numeric ID plus the exact menu option. Supplying
+both makes the ID authoritative and uses the name as an additional check. The
+nearest matching NPC inside the radius is used, and the receipt states whether
+the synthetic cursor used a left-click or context menu. Spell actions reject
+`npc_no_line_of_sight` before moving the cursor:
 
 ```lua
 return gc.await {
   action = {
     type = "npc.interact",
-    name = "Banker",
-    action = "Bank",
-    within = 8,
+    id = 3996,
+    name = "Witch's experiment",
+    action = "Attack",
+    within = 12,
   },
   breaks = false,
 }
 ```
+
+The same request shape covers exact object, inventory, dialogue, banking, GE,
+and spell interactions. Lua supplies semantic facts rather than canvas
+coordinates or RuneLite menu opcodes:
+
+```lua
+local result = gc.await {
+  action = {
+    type = "combat.cast",
+    spell = "wind_strike",
+    npc_name = "Goblin",
+    within = 15,
+  },
+}
+```
+
+`combat.set_autocast` opens Combat Options, selects the requested offensive
+spell, and verifies the client's autocast varbit. A script should use its
+`unsupported` receipt to choose manual casting; other failures remain explicit
+instead of silently changing the training method:
+
+```lua
+local autocast = gc.await {
+  action = { type = "combat.set_autocast", spell = "water_strike" },
+  breaks = false,
+}
+```
+
+Composite workflows return their individual click receipts. `bank.loadout`
+verifies an exact inventory allowlist; `ge.buy` preserves unrelated offers and
+rejects any maximum spend that would cross the configured cash reserve. A
+same-item zero-fill buy with stale quantity or price is canceled, collected,
+and replaced with the requested JIT offer; partial fills and conflicting
+completed offers remain diagnostic stops.
+
+Combat scripts can arm the framework's tick-priority emergency guard while
+keeping item policy in Lua:
+
+```lua
+gc.await {
+  action = {
+    type = "safety.configure",
+    minimum_hitpoints = 3,
+    consumables = {
+      { id = 1993, action = "Drink", heal_amount = 11 },
+    },
+    continue_after_consumable = true,
+    escape = { x = 3225, y = 3218, plane = 0, within = 3 },
+  },
+  breaks = false,
+}
+```
+
+Each approved consumable declares its exact heal amount. By default,
+GenericClient ends any active break and eats as soon as a food's complete heal
+fits, without stopping the script. Below 30% max HP it forces a food even when
+that low-max-HP case must overheal. If no approved food can be used at that
+forced-heal point or the hard HP floor, it stops the script and uses the
+optional escape. Set `continue_after_consumable=false` for an encounter that
+must stop after a threshold heal. `allow_overheal=true` remains available for
+an encounter-specific hard floor above the automatic 30% rule. Use
+`safety.clear` when a script no longer wants the guard armed.
 
 `mouse.offscreen` parks the synthetic cursor at the current account profile's
 stable idle edge without rolling another break:
@@ -181,7 +365,8 @@ return gc.phase("banking.complete")
 ```
 
 `gc.read("behavior")` returns the same structured state exposed by
-`behavior_status`.
+`behavior_status`, including the account-seeded or manually overridden typing
+speed in words per minute.
 
 ## Standalone scripts
 
@@ -196,7 +381,7 @@ Standalone scripts live in:
 
 ```json
 {
-  "schema": "genericclient_scripts.v3",
+  "schema": "genericclient_scripts.v35",
   "scripts": [
     {
       "id": "where-am-i",
@@ -207,6 +392,25 @@ Standalone scripts live in:
   ]
 }
 ```
+
+For a larger script, add a `modules` object to its entry and import those names
+from the entry file:
+
+```json
+"modules": {
+  "config": "aio-example/config.lua",
+  "supplies": "aio-example/supplies.lua"
+}
+```
+
+```lua
+local config = gc.require("config")
+local supplies = gc.require("supplies")
+```
+
+`script_get` returns the entry `source`, module file map, and `module_sources`.
+Modules are cached per run and can require other modules declared by the same
+manifest entry. They cannot access arbitrary files or native Lua packages.
 
 The matching `where-am-i.lua` is:
 
@@ -229,6 +433,7 @@ gc.log(level, event, fields)
 gc.phase(name, options)
 gc.overlay(rows)
 gc.next_action()
+gc.require(name) -- only modules declared by this manifest entry
 ```
 
 A script can declare a dropdown without adding Java UI code:
@@ -272,7 +477,7 @@ available through `script_action`. They enter a bounded queue; the Lua root
 coroutine consumes them cooperatively with `gc.next_action()` at a safe point.
 
 Every running standalone script automatically gets a compact RuneLite overlay
-with its display name and wall-clock runtime. `gc.overlay` may add up to three
+with its display name and wall-clock runtime. `gc.overlay` may add up to four
 label/value rows. Passing `nil` clears those rows, and the whole overlay hides
 when the script stops or completes.
 
@@ -280,7 +485,8 @@ The easiest programmatic path is `script_save`, which writes both the Lua file
 and manifest entry. For manual editing, add the file and manifest row, then
 press **Reload list** in Automations or call `script_reload_manifest`.
 
-Only one standalone script is active at a time. Starting another replaces it.
+Only one standalone script is active at a time. A manual start replaces the
+current run; a scheduled start is idle-only and never replaces a manual run.
 The REPL is separate, so short interactive queries can run while a diagnostic
 standalone script is waiting on ticks.
 

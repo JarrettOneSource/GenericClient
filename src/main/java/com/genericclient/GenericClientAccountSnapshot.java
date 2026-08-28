@@ -302,7 +302,10 @@ final class GenericClientAccountSnapshot
 				composition != null && composition.isGeTradeable(),
 				composition == null ? Collections.emptyList() : actions(composition.getInventoryActions())));
 		}
-		return new ContainerSnapshot(true, source.length, items);
+		int slotCount = inventoryId == InventoryID.INV
+			? 28
+			: inventoryId == InventoryID.WORN ? 14 : source.length;
+		return new ContainerSnapshot(true, slotCount, items);
 	}
 
 	private static String equipmentSlotName(int slot)

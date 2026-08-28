@@ -1,0 +1,690 @@
+package com.genericclient;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+final class GenericClientAutomationScheduler implements AutoCloseable
+{
+	private final GenericClientAutomationStore store;
+	private final Runtime runtime;
+	private final GenericClientRuleEngine ruleEngine;
+	private final Clock clock;
+	private final ScheduledExecutorService executor;
+	private final Consumer<String> reporter;
+
+	private volatile Map<String, Object> publishedStatus = waitingStatus();
+	private volatile boolean closed;
+
+	private String profileId;
+	private GenericClientAutomationConfig config;
+	private GenericClientSchedule schedules;
+	private GenericClientAutomationStore.State state;
+	private GenericClientSnapshot latestSnapshot;
+	private ScheduledFuture<?> boundaryFuture;
+	private Instant scheduledBoundary;
+	private boolean actionPending;
+	private String fault;
+	private volatile boolean manualPauseRequested;
+
+	GenericClientAutomationScheduler(
+		Path directory,
+		GenericClientLuaHost luaHost,
+		Consumer<String> reporter) throws IOException
+	{
+		this(
+			new GenericClientAutomationStore(directory, ZoneId.systemDefault().getId()),
+			new LuaRuntimeAdapter(luaHost),
+			new GenericClientRuleEngine(),
+			Clock.systemUTC(),
+			newExecutor(),
+			reporter);
+	}
+
+	GenericClientAutomationScheduler(
+		GenericClientAutomationStore store,
+		Runtime runtime,
+		GenericClientRuleEngine ruleEngine,
+		Clock clock,
+		ScheduledExecutorService executor,
+		Consumer<String> reporter)
+	{
+		this.store = store;
+		this.runtime = runtime;
+		this.ruleEngine = ruleEngine;
+		this.clock = clock;
+		this.executor = executor;
+		this.reporter = reporter;
+		runtime.setManualStopListener(() -> setPaused(true, "manual_script_stop"));
+	}
+
+	private static ScheduledExecutorService newExecutor()
+	{
+		return Executors.newSingleThreadScheduledExecutor(runnable ->
+		{
+			Thread thread = new Thread(runnable, "GenericClient-Automation");
+			thread.setDaemon(true);
+			return thread;
+		});
+	}
+
+	CompletableFuture<Map<String, Object>> activateProfile(String profileId)
+	{
+		return submit(() ->
+		{
+			if (profileId.equals(this.profileId) && config != null)
+			{
+				evaluate("profile_unchanged");
+				return status();
+			}
+			stopOwnedRun("account_changed");
+			this.profileId = profileId;
+			manualPauseRequested = false;
+			loadProfile();
+			evaluate("profile_activated");
+			return status();
+		});
+	}
+
+	void publishGameTick(GenericClientSnapshot snapshot)
+	{
+		if (closed)
+		{
+			return;
+		}
+		executor.execute(() ->
+		{
+			latestSnapshot = snapshot;
+			evaluate("game_tick");
+		});
+	}
+
+	Map<String, Object> status()
+	{
+		return new LinkedHashMap<>(publishedStatus);
+	}
+
+	CompletableFuture<Map<String, Object>> getConfig()
+	{
+		return submit(() ->
+		{
+			ensureProfile();
+			return config.toMap();
+		});
+	}
+
+	CompletableFuture<Map<String, Object>> configure(Map<String, Object> value)
+	{
+		return submit(() ->
+		{
+			ensureProfile();
+			GenericClientAutomationConfig candidate = GenericClientAutomationConfig.fromMap(value);
+			validateScripts(candidate);
+			store.saveConfig(profileId, candidate);
+			config = candidate;
+			schedules = GenericClientSchedule.compile(candidate);
+			fault = null;
+			state.setLastEvent("config_saved");
+			saveState();
+			evaluate("config_saved");
+			return status();
+		});
+	}
+
+	CompletableFuture<Map<String, Object>> setEnabled(boolean enabled)
+	{
+		return submit(() ->
+		{
+			ensureProfile();
+			GenericClientAutomationConfig candidate = config.withEnabled(enabled);
+			store.saveConfig(profileId, candidate);
+			config = candidate;
+			schedules = GenericClientSchedule.compile(candidate);
+			state.setLastEvent(enabled ? "enabled" : "disabled");
+			saveState();
+			evaluate(enabled ? "enabled" : "disabled");
+			return status();
+		});
+	}
+
+	CompletableFuture<Map<String, Object>> setPaused(boolean paused, String reason)
+	{
+		if (paused)
+		{
+			manualPauseRequested = true;
+		}
+		return submit(() ->
+		{
+			ensureProfile();
+			state.setPaused(paused);
+			manualPauseRequested = false;
+			state.setLastEvent(paused ? "paused:" + reason : "resumed:" + reason);
+			saveState();
+			evaluate(paused ? "paused" : "resumed");
+			return status();
+		});
+	}
+
+	CompletableFuture<Map<String, Object>> reload()
+	{
+		return submit(() ->
+		{
+			ensureProfile();
+			loadProfile();
+			evaluate("reloaded");
+			return status();
+		});
+	}
+
+	private void loadProfile()
+	{
+		try
+		{
+			GenericClientAutomationConfig loadedConfig = store.loadConfig(profileId);
+			validateScripts(loadedConfig);
+			GenericClientAutomationStore.State loadedState = store.loadState(profileId);
+			loadedState.clearExpiredCooldowns(clock.millis());
+			config = loadedConfig;
+			schedules = GenericClientSchedule.compile(loadedConfig);
+			state = loadedState;
+			fault = null;
+			saveState();
+		}
+		catch (IOException | RuntimeException exception)
+		{
+			fault = rootMessage(exception);
+			config = GenericClientAutomationConfig.empty(ZoneId.systemDefault().getId());
+			schedules = GenericClientSchedule.compile(config);
+			state = GenericClientAutomationStore.State.empty();
+			state.setPaused(true);
+			state.setLastEvent("load_failed:" + fault);
+			reporter.accept("AUTOMATION_LOAD_FAILED profile=" + profileId + " message=" + fault);
+		}
+	}
+
+	private void validateScripts(GenericClientAutomationConfig candidate)
+	{
+		Set<String> scripts = new HashSet<>();
+		for (Map<String, Object> script : runtime.listScriptValues())
+		{
+			scripts.add(String.valueOf(script.get("id")));
+		}
+		for (GenericClientAutomationConfig.RuleSpec rule : candidate.getRules())
+		{
+			String scriptId = rule.getRun().getScript();
+			if (!scripts.contains(scriptId))
+			{
+				throw new IllegalArgumentException(
+					"Rule " + rule.getId() + " references unknown script: " + scriptId);
+			}
+			try
+			{
+				GenericClientScriptInput.resolve(
+					runtime.describe(scriptId).get(10, TimeUnit.SECONDS),
+					rule.getRun().getInputs());
+			}
+			catch (InterruptedException exception)
+			{
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException("Interrupted while validating script inputs", exception);
+			}
+			catch (ExecutionException | java.util.concurrent.TimeoutException exception)
+			{
+				throw new IllegalArgumentException(
+					"Unable to validate inputs for script " + scriptId, exception);
+			}
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private void evaluate(String trigger)
+	{
+		if (closed)
+		{
+			return;
+		}
+		if (profileId == null || config == null || state == null)
+		{
+			publishedStatus = waitingStatus();
+			return;
+		}
+		long now = clock.millis();
+		state.clearExpiredCooldowns(now);
+		GenericClientSchedule.Snapshot scheduleSnapshot = schedules.evaluate(clock.instant());
+		Map<String, Object> account = Collections.emptyMap();
+		if (latestSnapshot != null)
+		{
+			Object raw = latestSnapshot.read("account", Collections.emptyMap());
+			if (raw instanceof Map)
+			{
+				account = (Map<String, Object>) raw;
+			}
+		}
+		GenericClientRuleEngine.Evaluation decision = ruleEngine.evaluate(
+			config, scheduleSnapshot, account, state.getCooldowns(), now);
+		GenericClientLuaHost.RunState run = runtime.getRunState();
+
+		if (run.getRunId() >= 0L && !run.isRunning() && run.getRuleId() != null &&
+			run.getRunId() != state.getHandledRunId())
+		{
+			handleTerminalRun(run, now);
+			decision = ruleEngine.evaluate(config, scheduleSnapshot, account, state.getCooldowns(), now);
+		}
+
+		String mode;
+		String detail;
+		if (fault != null)
+		{
+			mode = "faulted";
+			detail = fault;
+		}
+		else if (!config.isEnabled())
+		{
+			mode = "disabled";
+			detail = "automation is disabled";
+			stopIfOwned(run, "disabled");
+		}
+		else if (state.isPaused() || manualPauseRequested)
+		{
+			mode = "paused";
+			detail = state.getLastEvent();
+			stopIfOwned(run, "paused");
+		}
+		else if (actionPending)
+		{
+			mode = "transitioning";
+			detail = state.getLastEvent();
+		}
+		else if (run.isRunning() && run.isManual())
+		{
+			mode = "manual";
+			detail = "manual script owns the runtime";
+			clearActiveRuleIfNeeded();
+		}
+		else if (run.isRunning() && run.getRuleId() != null)
+		{
+			String owner = run.getRuleId();
+			GenericClientRuleEngine.RuleEvaluation ownerDecision = decision.get(owner);
+			state.setActiveRule(owner);
+			if (ownerDecision == null || ownerDecision.getTruth() == GenericClientRuleEngine.Truth.FALSE)
+			{
+				mode = "stopping";
+				detail = ownerDecision == null ? "owning rule was removed" : ownerDecision.getReason();
+				requestStop(owner, "ineligible");
+			}
+			else if (ownerDecision.getTruth() == GenericClientRuleEngine.Truth.UNKNOWN)
+			{
+				mode = "holding";
+				detail = ownerDecision.getReason();
+			}
+			else
+			{
+				mode = "running";
+				detail = "rule " + owner + " retains its script lease";
+			}
+		}
+		else if (decision.getSelected() != null)
+		{
+			GenericClientRuleEngine.RuleEvaluation selected = decision.getSelected();
+			mode = "starting";
+			detail = selected.getReason();
+			requestStart(selected.getRule());
+		}
+		else
+		{
+			mode = "idle";
+			detail = "no rule is eligible";
+			clearActiveRuleIfNeeded();
+		}
+		publishStatus(mode, detail, trigger, scheduleSnapshot, decision, run);
+		rescheduleBoundary(scheduleSnapshot.getNextTransition());
+	}
+
+	private void handleTerminalRun(GenericClientLuaHost.RunState run, long now)
+	{
+		String ruleId = run.getRuleId();
+		GenericClientAutomationConfig.RuleSpec rule = config.getRule(ruleId);
+		state.setHandledRunId(run.getRunId());
+		state.setActiveRule(null);
+		if (rule != null)
+		{
+			state.setCooldown(ruleId, Math.addExact(now, rule.getRetryAfterMillis()));
+		}
+		state.setLastEvent("run_" + run.getStatus().toLowerCase() + ":" + ruleId);
+		saveStateQuietly();
+		reporter.accept("AUTOMATION_RUN_TERMINAL rule=" + ruleId + " status=" + run.getStatus());
+	}
+
+	private void requestStart(GenericClientAutomationConfig.RuleSpec rule)
+	{
+		actionPending = true;
+		state.setActiveRule(rule.getId());
+		state.setLastEvent("starting:" + rule.getId());
+		saveStateQuietly();
+		runtime.startScheduled(rule.getId(), rule.getRun().getScript(), rule.getRun().getInputs())
+			.whenComplete((result, error) -> executor.execute(() ->
+			{
+				actionPending = false;
+				if (error != null)
+				{
+					long retry = Math.addExact(clock.millis(), rule.getRetryAfterMillis());
+					state.setCooldown(rule.getId(), retry);
+					state.setActiveRule(null);
+					state.setLastEvent("start_failed:" + rule.getId() + ":" + rootMessage(error));
+					reporter.accept("AUTOMATION_START_FAILED rule=" + rule.getId() +
+						" message=" + rootMessage(error));
+				}
+				else if (result.contains("LUA_START_SKIPPED"))
+				{
+					state.setActiveRule(null);
+					state.setLastEvent("start_skipped:" + rule.getId());
+				}
+				else
+				{
+					state.setLastEvent("started:" + rule.getId());
+					reporter.accept("AUTOMATION_STARTED rule=" + rule.getId() +
+						" script=" + rule.getRun().getScript());
+				}
+				saveStateQuietly();
+				evaluate("start_result");
+			}));
+	}
+
+	private void requestStop(String ruleId, String reason)
+	{
+		if (actionPending)
+		{
+			return;
+		}
+		actionPending = true;
+		state.setLastEvent("stopping:" + ruleId + ":" + reason);
+		saveStateQuietly();
+		runtime.stopScheduled(ruleId, reason).whenComplete((result, error) -> executor.execute(() ->
+		{
+			actionPending = false;
+			state.setActiveRule(null);
+			state.setLastEvent(error == null
+				? "stopped:" + ruleId + ":" + reason
+				: "stop_failed:" + ruleId + ":" + rootMessage(error));
+			saveStateQuietly();
+			evaluate("stop_result");
+		}));
+	}
+
+	private void stopIfOwned(GenericClientLuaHost.RunState run, String reason)
+	{
+		if (run.isRunning() && run.getRuleId() != null)
+		{
+			requestStop(run.getRuleId(), reason);
+		}
+	}
+
+	private void stopOwnedRun(String reason)
+	{
+		GenericClientLuaHost.RunState run = runtime.getRunState();
+		if (run.isRunning() && run.getRuleId() != null)
+		{
+			try
+			{
+				runtime.stopScheduled(run.getRuleId(), reason).get(5, TimeUnit.SECONDS);
+			}
+			catch (InterruptedException exception)
+			{
+				Thread.currentThread().interrupt();
+			}
+			catch (ExecutionException | java.util.concurrent.TimeoutException exception)
+			{
+				log.warn("Unable to stop old automation-owned script", exception);
+			}
+		}
+	}
+
+	private void clearActiveRuleIfNeeded()
+	{
+		if (state.getActiveRule() != null)
+		{
+			state.setActiveRule(null);
+			saveStateQuietly();
+		}
+	}
+
+	private void publishStatus(
+		String mode,
+		String detail,
+		String trigger,
+		GenericClientSchedule.Snapshot scheduleSnapshot,
+		GenericClientRuleEngine.Evaluation decision,
+		GenericClientLuaHost.RunState run)
+	{
+		Map<String, Object> value = new LinkedHashMap<>();
+		value.put("available", true);
+		value.put("profile", profileId);
+		value.put("config_path", store.configPath(profileId).toString());
+		value.put("enabled", config.isEnabled());
+		value.put("paused", state.isPaused() || manualPauseRequested);
+		value.put("mode", mode);
+		value.put("detail", detail);
+		value.put("trigger", trigger);
+		value.put("active_rule", state.getActiveRule());
+		value.put("last_event", state.getLastEvent());
+		Map<String, Object> runValue = new LinkedHashMap<>();
+		runValue.put("id", run.getRunId() < 0L ? null : run.getRunId());
+		runValue.put("owner", run.getOwner());
+		runValue.put("script", run.getScriptId());
+		runValue.put("status", run.getStatus());
+		runValue.put("running", run.isRunning());
+		value.put("run", runValue);
+		value.putAll(scheduleSnapshot.toMap());
+		value.putAll(decision.toMap());
+		publishedStatus = Collections.unmodifiableMap(value);
+	}
+
+	private void rescheduleBoundary(Instant nextTransition)
+	{
+		if (nextTransition != null && nextTransition.equals(scheduledBoundary) &&
+			boundaryFuture != null && !boundaryFuture.isDone())
+		{
+			return;
+		}
+		if (boundaryFuture != null)
+		{
+			boundaryFuture.cancel(false);
+			boundaryFuture = null;
+		}
+		scheduledBoundary = nextTransition;
+		if (nextTransition == null || closed)
+		{
+			return;
+		}
+		long delay = Math.max(1L, nextTransition.toEpochMilli() - clock.millis() + 5L);
+		boundaryFuture = executor.schedule(() ->
+		{
+			boundaryFuture = null;
+			scheduledBoundary = null;
+			evaluate("schedule_transition");
+		}, delay, TimeUnit.MILLISECONDS);
+	}
+
+	private void saveState()
+	{
+		try
+		{
+			store.saveState(profileId, state, clock.millis());
+		}
+		catch (IOException exception)
+		{
+			throw new IllegalStateException("Unable to save automation state", exception);
+		}
+	}
+
+	private void saveStateQuietly()
+	{
+		try
+		{
+			store.saveState(profileId, state, clock.millis());
+		}
+		catch (IOException exception)
+		{
+			fault = rootMessage(exception);
+			reporter.accept("AUTOMATION_STATE_SAVE_FAILED message=" + fault);
+		}
+	}
+
+	private <T> CompletableFuture<T> submit(ThrowingSupplier<T> supplier)
+	{
+		CompletableFuture<T> completion = new CompletableFuture<>();
+		if (closed)
+		{
+			completion.completeExceptionally(new IllegalStateException("Automation scheduler is closed"));
+			return completion;
+		}
+		executor.execute(() ->
+		{
+			try
+			{
+				completion.complete(supplier.get());
+			}
+			catch (Exception exception)
+			{
+				completion.completeExceptionally(exception);
+			}
+		});
+		return completion;
+	}
+
+	private void ensureProfile()
+	{
+		if (profileId == null || config == null || state == null)
+		{
+			throw new IllegalStateException("Automation is waiting for an account profile");
+		}
+	}
+
+	private static Map<String, Object> waitingStatus()
+	{
+		Map<String, Object> value = new LinkedHashMap<>();
+		value.put("available", false);
+		value.put("mode", "waiting_for_account");
+		return Collections.unmodifiableMap(value);
+	}
+
+	private static String rootMessage(Throwable error)
+	{
+		Throwable current = error;
+		while (current.getCause() != null)
+		{
+			current = current.getCause();
+		}
+		return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
+	}
+
+	@Override
+	public void close()
+	{
+		if (closed)
+		{
+			return;
+		}
+		closed = true;
+		runtime.setManualStopListener(null);
+		if (boundaryFuture != null)
+		{
+			boundaryFuture.cancel(false);
+			boundaryFuture = null;
+		}
+		scheduledBoundary = null;
+		stopOwnedRun("scheduler_closed");
+		executor.shutdownNow();
+	}
+
+	@FunctionalInterface
+	private interface ThrowingSupplier<T>
+	{
+		T get() throws Exception;
+	}
+
+	interface Runtime
+	{
+		List<Map<String, Object>> listScriptValues();
+
+		CompletableFuture<List<GenericClientScriptInput>> describe(String scriptId);
+
+		CompletableFuture<String> startScheduled(
+			String ruleId,
+			String scriptId,
+			Map<String, Object> inputs);
+
+		CompletableFuture<String> stopScheduled(String ruleId, String reason);
+
+		GenericClientLuaHost.RunState getRunState();
+
+		void setManualStopListener(Runnable listener);
+	}
+
+	private static final class LuaRuntimeAdapter implements Runtime
+	{
+		private final GenericClientLuaHost host;
+
+		private LuaRuntimeAdapter(GenericClientLuaHost host)
+		{
+			this.host = host;
+		}
+
+		@Override
+		public List<Map<String, Object>> listScriptValues()
+		{
+			return host.listScriptValues();
+		}
+
+		@Override
+		public CompletableFuture<List<GenericClientScriptInput>> describe(String scriptId)
+		{
+			return host.describe(scriptId);
+		}
+
+		@Override
+		public CompletableFuture<String> startScheduled(
+			String ruleId,
+			String scriptId,
+			Map<String, Object> inputs)
+		{
+			return host.startScheduled(ruleId, scriptId, inputs);
+		}
+
+		@Override
+		public CompletableFuture<String> stopScheduled(String ruleId, String reason)
+		{
+			return host.stopScheduled(ruleId, reason);
+		}
+
+		@Override
+		public GenericClientLuaHost.RunState getRunState()
+		{
+			return host.getRunState();
+		}
+
+		@Override
+		public void setManualStopListener(Runnable listener)
+		{
+			host.setManualStopListener(listener);
+		}
+	}
+}

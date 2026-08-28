@@ -1,9 +1,11 @@
 package com.genericclient;
 
-import java.util.LinkedHashMap;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -13,14 +15,24 @@ import net.runelite.api.coords.WorldPoint;
 
 final class GenericClientWalker implements AutoCloseable
 {
-	private static final int MAX_REPLANS = 6;
+	private static final int MINIMUM_RECOVERY_REPLANS = 6;
+	private static final int MAXIMUM_RECOVERY_REPLANS = 32;
+	private static final int RECOVERY_PLAN_TILES = 16;
 	private static final int MAX_CLICK_FAILURES = 5;
 	private static final int OFF_ROUTE_RADIUS = 3;
 	private static final int STALL_TICKS = 8;
+	private static final int MAX_SAME_PATH_STALL_RETRIES = 2;
 	private static final int CLICK_COOLDOWN_TICKS = 2;
 	private static final int WAYPOINT_ADVANCE_RADIUS = 2;
+	private static final int OBSTACLE_SCAN_TILES = 12;
+	private static final int OBSTACLE_INTERACT_DISTANCE = 3;
+	private static final int OBSTACLE_SETTLE_TICKS = 8;
+	private static final int MAX_OBSTACLE_ATTEMPTS = 3;
+	private static final int MINIMUM_RUN_ENERGY = 1_000;
 
 	private final WalkInput gameInput;
+	private final ObstacleInput obstacleInput;
+	private final RunInput runInput;
 	private final GenericClientPathfinder pathfinder;
 	private final Consumer<String> reporter;
 	private final ExecutorService plannerExecutor;
@@ -31,6 +43,8 @@ final class GenericClientWalker implements AutoCloseable
 
 	GenericClientWalker(
 		GenericClientGameInput gameInput,
+		GenericClientObjectInput objectInput,
+		GenericClientRunInput runInput,
 		GenericClientCollisionMap collisionMap,
 		Consumer<String> reporter)
 	{
@@ -49,15 +63,69 @@ final class GenericClientWalker implements AutoCloseable
 			{
 				gameInput.cancelWalkToTile();
 			}
-		}, collisionMap, reporter);
+		}, new ObstacleInput()
+		{
+			@Override
+			public CompletableFuture<Map<String, Object>> interact(
+				int objectId,
+				String action,
+				WorldPoint world,
+				int within,
+				boolean breaksEnabled)
+			{
+				return objectInput.interact(objectId, action, world, within, breaksEnabled);
+			}
+
+			@Override
+			public void cancel()
+			{
+				objectInput.cancel("walker_cancelled");
+			}
+		}, runInput::setEnabled, runInput::cancel, collisionMap, reporter);
 	}
 
 	GenericClientWalker(
 		WalkInput gameInput,
+		ObstacleInput obstacleInput,
+		GenericClientCollisionMap collisionMap,
+		Consumer<String> reporter)
+	{
+		this(
+			gameInput,
+			obstacleInput,
+			(enabled, breaksEnabled) -> CompletableFuture.completedFuture(runUnchanged()),
+			reason -> { },
+			collisionMap,
+			reporter);
+	}
+
+	GenericClientWalker(
+		WalkInput gameInput,
+		ObstacleInput obstacleInput,
+		java.util.function.BiFunction<Boolean, Boolean,
+			CompletableFuture<Map<String, Object>>> runAction,
+		Consumer<String> cancelRunAction,
 		GenericClientCollisionMap collisionMap,
 		Consumer<String> reporter)
 	{
 		this.gameInput = gameInput;
+		this.obstacleInput = obstacleInput;
+		this.runInput = new RunInput()
+		{
+			@Override
+			public CompletableFuture<Map<String, Object>> setEnabled(
+				boolean enabled,
+				boolean breaksEnabled)
+			{
+				return runAction.apply(enabled, breaksEnabled);
+			}
+
+			@Override
+			public void cancel(String reason)
+			{
+				cancelRunAction.accept(reason);
+			}
+		};
 		this.pathfinder = new GenericClientPathfinder(collisionMap);
 		this.reporter = reporter;
 		this.plannerExecutor = Executors.newSingleThreadExecutor(runnable ->
@@ -73,6 +141,16 @@ final class GenericClientWalker implements AutoCloseable
 		int within,
 		int timeoutTicks,
 		boolean breaksEnabled)
+	{
+		return walkTo(destination, within, timeoutTicks, breaksEnabled, true);
+	}
+
+	synchronized CompletableFuture<Map<String, Object>> walkTo(
+		WorldPoint destination,
+		int within,
+		int timeoutTicks,
+		boolean breaksEnabled,
+		boolean useRun)
 	{
 		if (destination == null)
 		{
@@ -112,7 +190,8 @@ final class GenericClientWalker implements AutoCloseable
 					destination, start, within));
 		}
 
-		ActiveWalk walk = new ActiveWalk(destination, within, timeoutTicks, tick, start, breaksEnabled);
+		ActiveWalk walk = new ActiveWalk(
+			destination, within, timeoutTicks, tick, start, breaksEnabled, useRun);
 		active = walk;
 		reporter.accept("WALK_REQUESTED start=" + start + " destination=" + destination +
 			" within=" + within + " timeoutTicks=" + timeoutTicks);
@@ -125,6 +204,8 @@ final class GenericClientWalker implements AutoCloseable
 		latestSnapshot = snapshot;
 		ActiveWalk clickWalk = null;
 		List<WorldPoint> clickCandidates = null;
+		ActiveWalk obstacleWalk = null;
+		GenericClientSnapshot.RouteBlock obstacleBlock = null;
 
 		synchronized (this)
 		{
@@ -148,14 +229,14 @@ final class GenericClientWalker implements AutoCloseable
 			}
 			if (distance(player, walk.destination) <= walk.within)
 			{
-				if (walk.clickInFlight)
+				if (walk.clickInFlight || walk.obstacleInFlight)
 				{
 					return;
 				}
 				finish(walk, "arrived", "arrival_radius", player, tick);
 				return;
 			}
-			if (!walk.clickInFlight &&
+			if (!walk.clickInFlight && !walk.obstacleInFlight &&
 				tick - walk.startedAtTick - walk.pausedInteractionTicks >= walk.timeoutTicks)
 			{
 				finish(walk, "timed_out", "game_tick_timeout", player, tick);
@@ -166,94 +247,262 @@ final class GenericClientWalker implements AutoCloseable
 			{
 				walk.lastPlayer = player;
 				walk.lastMovedTick = tick;
+				walk.samePathStallRetries = 0;
+			}
+			if (snapshot.getRunEnergy() < MINIMUM_RUN_ENERGY)
+			{
+				walk.runToggleArmed = true;
+			}
+			if (!walk.useRun && snapshot.isRunEnabled() && !walk.runInFlight)
+			{
+				walk.runInFlight = true;
+				walk.runStartedTick = tick;
+				dispatchRunToggle(walk, false);
+				return;
+			}
+			if (walk.useRun && !snapshot.isRunEnabled() &&
+				snapshot.getRunEnergy() >= MINIMUM_RUN_ENERGY &&
+				walk.runToggleArmed && !walk.runInFlight)
+			{
+				walk.runToggleArmed = false;
+				walk.runInFlight = true;
+				walk.runStartedTick = tick;
+				dispatchRunToggle(walk, true);
+				return;
+			}
+			if (walk.runInFlight)
+			{
+				return;
 			}
 			if (walk.planning || walk.path == null)
 			{
 				return;
 			}
-
 			int nearest = nearestRouteIndex(walk, player);
-			if (nearest < 0)
-			{
-				requestPlan(walk, player, "off_route");
-				return;
-			}
-			if (nearest > walk.pathIndex)
+			if (nearest >= 0 && nearest > walk.pathIndex)
 			{
 				walk.pathIndex = nearest;
 				reporter.accept("WALK_PROGRESS plan=" + walk.planRevision + " tile=" + player +
 					" pathIndex=" + nearest + " remaining=" + (walk.path.size() - 1 - nearest));
 			}
 
-			if (walk.clickInFlight)
+			if (walk.obstacleInFlight)
 			{
 				return;
 			}
-			if (walk.clickTarget != null)
+			if (walk.pendingObstacle != null)
 			{
-				int targetDistance = distance(player, walk.clickTarget);
-				boolean finalWaypoint = walk.clickTargetIndex == walk.path.size() - 1;
-				boolean passedTarget = !finalWaypoint && nearest > walk.clickTargetIndex;
-				int advanceRadius = finalWaypoint ? 0 : WAYPOINT_ADVANCE_RADIUS;
-				if (targetDistance > advanceRadius && !passedTarget)
+				int progressIndex = nearest < 0 ? walk.pathIndex : nearest;
+				if (snapshot.routeBlockCleared(walk.pendingObstacle, progressIndex))
 				{
-					if (tick - walk.lastMovedTick >= STALL_TICKS)
-					{
-						int attemptedLeg = Math.max(1, walk.clickTargetIndex - nearest);
-						walk.maximumLegTiles = Math.min(
-							walk.maximumLegTiles,
-							Math.max(3, attemptedLeg - 3));
-						reporter.accept("WALK_LEG_BACKOFF attempted=" + attemptedLeg +
-							" maximum=" + walk.maximumLegTiles + " target=" + walk.clickTarget);
-						walk.lastMovedTick = tick;
-						requestPlan(walk, player, "stalled");
-					}
+					walk.obstaclesCleared++;
+					reporter.accept("WALK_OBSTACLE_CLEARED object=" +
+						walk.pendingObstacle.getObjectId() + " action=" +
+						walk.pendingObstacle.getAction() + " world=" +
+						walk.pendingObstacle.getWorld());
+					walk.pendingObstacle = null;
+					walk.obstacleAttempts = 0;
+					walk.lastMovedTick = tick;
 					return;
 				}
-				reporter.accept("WALK_WAYPOINT_REACHED plan=" + walk.planRevision +
-					" tile=" + player + " target=" + walk.clickTarget +
-					" distance=" + targetDistance + " passed=" + passedTarget);
-				walk.clickTarget = null;
-				walk.clickTargetIndex = -1;
-				walk.lastMovedTick = tick;
-				if (walk.maximumLegTiles != Integer.MAX_VALUE)
+				String lockedMessage = snapshot.lockedObstacleMessageSince(walk.obstacleAttemptTick);
+				if (lockedMessage != null)
 				{
-					walk.maximumLegTiles++;
+					reporter.accept("WALK_OBSTACLE_LOCKED object=" +
+						walk.pendingObstacle.getObjectId() + " message=" + lockedMessage);
+					finish(walk, "unreachable", "obstacle_locked", player, tick);
+					return;
+				}
+				if (tick < walk.obstacleRetryTick ||
+					tick - walk.lastMovedTick < OBSTACLE_SETTLE_TICKS)
+				{
+					return;
+				}
+				if (walk.obstacleAttempts >= MAX_OBSTACLE_ATTEMPTS)
+				{
+					finish(walk, "unreachable", "obstacle_interaction_limit", player, tick);
+					return;
+				}
+				obstacleWalk = walk;
+				obstacleBlock = walk.pendingObstacle;
+				prepareObstacleDispatch(walk, obstacleBlock, tick, player);
+			}
+
+			if (obstacleWalk == null)
+			{
+				if (nearest < 0)
+				{
+					if (walk.clickTarget != null && tick - walk.lastMovedTick < STALL_TICKS)
+					{
+						return;
+					}
+					requestPlan(walk, player, "off_route");
+					return;
+				}
+				if (walk.clickInFlight)
+				{
+					return;
+				}
+				if (walk.clickTarget != null)
+				{
+					int targetDistance = distance(player, walk.clickTarget);
+					boolean finalWaypoint = walk.clickTargetIndex == walk.path.size() - 1;
+					boolean passedTarget = !finalWaypoint && nearest > walk.clickTargetIndex;
+					int advanceRadius = finalWaypoint ? 0 : WAYPOINT_ADVANCE_RADIUS;
+					if (targetDistance > advanceRadius && !passedTarget)
+					{
+						if (tick - walk.lastMovedTick >= STALL_TICKS)
+						{
+							int attemptedLeg = Math.max(1, walk.clickTargetIndex - nearest);
+							walk.maximumLegTiles = Math.min(
+								walk.maximumLegTiles,
+								Math.max(3, attemptedLeg - 3));
+							reporter.accept("WALK_LEG_BACKOFF attempted=" + attemptedLeg +
+								" maximum=" + walk.maximumLegTiles + " target=" + walk.clickTarget);
+							walk.lastMovedTick = tick;
+							if (walk.samePathStallRetries < MAX_SAME_PATH_STALL_RETRIES)
+							{
+								walk.samePathStallRetries++;
+								walk.pathRetries++;
+								walk.clickTarget = null;
+								walk.clickTargetIndex = -1;
+								walk.nextClickTick = tick + CLICK_COOLDOWN_TICKS;
+								reporter.accept("WALK_PATH_RETRY plan=" + walk.planRevision +
+									" attempt=" + walk.samePathStallRetries +
+									" maximum=" + MAX_SAME_PATH_STALL_RETRIES);
+								return;
+							}
+							walk.samePathStallRetries = 0;
+							requestPlan(walk, player, "stalled");
+						}
+						return;
+					}
+					reporter.accept("WALK_WAYPOINT_REACHED plan=" + walk.planRevision +
+						" tile=" + player + " target=" + walk.clickTarget +
+						" distance=" + targetDistance + " passed=" + passedTarget);
+					walk.clickTarget = null;
+					walk.clickTargetIndex = -1;
+					walk.lastMovedTick = tick;
+					if (walk.maximumLegTiles != Integer.MAX_VALUE)
+					{
+						walk.maximumLegTiles++;
+					}
+				}
+				else if (walk.clicks > 0 && tick - walk.lastMovedTick >= STALL_TICKS)
+				{
+					walk.lastMovedTick = tick;
+					requestPlan(walk, player, "stalled_without_target");
+					return;
+				}
+				if (tick < walk.nextClickTick)
+				{
+					return;
+				}
+				if (nearest >= walk.path.size() - 1)
+				{
+					requestPlan(walk, player, "path_exhausted_before_arrival");
+					return;
+				}
+
+				int candidateEnd = walk.maximumLegTiles == Integer.MAX_VALUE
+					? walk.path.size() - 1
+					: Math.min(walk.path.size() - 1, nearest + walk.maximumLegTiles);
+				GenericClientSnapshot.RouteBlock routeBlock = snapshot.findRouteBlock(
+					walk.path,
+					nearest,
+					Math.min(candidateEnd, nearest + OBSTACLE_SCAN_TILES));
+				if (routeBlock != null)
+				{
+					if (!routeBlock.isTraversable())
+					{
+						walk.blockedEdges.add(new BlockedEdge(
+							routeBlock.getFrom(), routeBlock.getTo()));
+						walk.liveBlockReplans++;
+						reporter.accept("WALK_ROUTE_BLOCKED from=" + routeBlock.getFrom() +
+							" to=" + routeBlock.getTo() + " player=" + player +
+							" replan=" + walk.liveBlockReplans);
+						requestPlan(walk, player, "live_route_blocked");
+						return;
+					}
+					if (distance(player, routeBlock.getWorld()) <= OBSTACLE_INTERACT_DISTANCE)
+					{
+						walk.pendingObstacle = routeBlock;
+						walk.obstacleAttempts = 0;
+						obstacleWalk = walk;
+						obstacleBlock = routeBlock;
+						prepareObstacleDispatch(walk, routeBlock, tick, player);
+					}
+					else
+					{
+						candidateEnd = Math.min(candidateEnd, routeBlock.getPathIndex() - 1);
+					}
+				}
+
+				if (obstacleWalk == null)
+				{
+					if (candidateEnd <= nearest)
+					{
+						finish(walk, "unreachable", "traversal_object_not_reachable", player, tick);
+						return;
+					}
+					clickWalk = walk;
+					clickCandidates = new ArrayList<>(candidateEnd - nearest);
+					for (int index = candidateEnd; index > nearest; index--)
+					{
+						clickCandidates.add(walk.path.get(index));
+					}
+					walk.clickInFlight = true;
+					walk.clickStartedTick = tick;
+					reporter.accept("WALK_CLICK_REQUEST plan=" + walk.planRevision + " from=" + player +
+						" candidates=" + clickCandidates.size() + " farthest=" + clickCandidates.get(0));
 				}
 			}
-			else if (walk.clicks > 0 && tick - walk.lastMovedTick >= STALL_TICKS)
-			{
-				walk.lastMovedTick = tick;
-				requestPlan(walk, player, "stalled_without_target");
-				return;
-			}
-			if (tick < walk.nextClickTick)
-			{
-				return;
-			}
-
-			if (nearest >= walk.path.size() - 1)
-			{
-				requestPlan(walk, player, "path_exhausted_before_arrival");
-				return;
-			}
-
-			clickWalk = walk;
-			int candidateEnd = walk.maximumLegTiles == Integer.MAX_VALUE
-				? walk.path.size() - 1
-				: Math.min(walk.path.size() - 1, nearest + walk.maximumLegTiles);
-			clickCandidates = new ArrayList<>(candidateEnd - nearest);
-			for (int index = candidateEnd; index > nearest; index--)
-			{
-				clickCandidates.add(walk.path.get(index));
-			}
-			walk.clickInFlight = true;
-			walk.clickStartedTick = tick;
-			reporter.accept("WALK_CLICK_REQUEST plan=" + walk.planRevision + " from=" + player +
-				" candidates=" + clickCandidates.size() + " farthest=" + clickCandidates.get(0));
 		}
 
-		dispatchClick(clickWalk, clickCandidates);
+		if (obstacleWalk != null)
+		{
+			dispatchObstacle(obstacleWalk, obstacleBlock);
+		}
+		else
+		{
+			dispatchClick(clickWalk, clickCandidates);
+		}
+	}
+
+	private void dispatchRunToggle(ActiveWalk walk, boolean enabled)
+	{
+		runInput.setEnabled(enabled, walk.breaksEnabled).whenComplete((receipt, error) ->
+		{
+			synchronized (GenericClientWalker.this)
+			{
+				if (active != walk)
+				{
+					return;
+				}
+				walk.runInFlight = false;
+				GenericClientSnapshot snapshot = latestSnapshot;
+				long tick = snapshot == null ? walk.startedAtTick : snapshot.getGameTick();
+				walk.pausedInteractionTicks += Math.max(0L, tick - walk.runStartedTick);
+				String status = receipt == null ? null : String.valueOf(receipt.get("status"));
+				String result = error == null
+					? receipt == null ? "null" : String.valueOf(receipt.get("result"))
+					: error.getMessage();
+				if ("complete".equals(status) || "unchanged".equals(status))
+				{
+					Object clicks = receipt.get("click_count");
+					if (clicks instanceof Number && ((Number) clicks).longValue() > 0L)
+					{
+						walk.runToggles++;
+					}
+					reporter.accept("WALK_RUN_READY result=" + result +
+						" energy=" + (snapshot == null ? 0 : snapshot.getRunEnergy()));
+				}
+				else
+				{
+					reporter.accept("WALK_RUN_REJECTED result=" + result);
+				}
+			}
+		});
 	}
 
 	synchronized void cancelActive(String reason)
@@ -267,6 +516,67 @@ final class GenericClientWalker implements AutoCloseable
 		long tick = snapshot == null ? walk.startedAtTick : snapshot.getGameTick();
 		WorldPoint reached = snapshot == null ? null : snapshot.getPlayerWorldPoint();
 		finish(walk, "cancelled", reason, reached, tick);
+	}
+
+	private void prepareObstacleDispatch(
+		ActiveWalk walk,
+		GenericClientSnapshot.RouteBlock obstacle,
+		long tick,
+		WorldPoint player)
+	{
+		walk.obstacleInFlight = true;
+		walk.clickStartedTick = tick;
+		walk.obstacleAttemptTick = tick;
+		walk.obstacleAttempts++;
+		reporter.accept("WALK_OBSTACLE_INTERACTION attempt=" + walk.obstacleAttempts +
+			" object=" + obstacle.getObjectId() + " name=" + obstacle.getObjectName() +
+			" action=" + obstacle.getAction() + " world=" + obstacle.getWorld() +
+			" edge=" + obstacle.getFrom() + "->" + obstacle.getTo() + " player=" + player);
+	}
+
+	private void dispatchObstacle(
+		ActiveWalk walk,
+		GenericClientSnapshot.RouteBlock obstacle)
+	{
+		obstacleInput.interact(
+			obstacle.getObjectId(),
+			obstacle.getAction(),
+			obstacle.getWorld(),
+			OBSTACLE_INTERACT_DISTANCE + 1,
+			walk.breaksEnabled).whenComplete((receipt, error) ->
+		{
+			synchronized (GenericClientWalker.this)
+			{
+				if (active != walk)
+				{
+					return;
+				}
+				walk.obstacleInFlight = false;
+				GenericClientSnapshot snapshot = latestSnapshot;
+				long tick = snapshot == null ? walk.startedAtTick : snapshot.getGameTick();
+				walk.pausedInteractionTicks += Math.max(0L, tick - walk.clickStartedTick);
+				walk.obstacleRetryTick = tick + CLICK_COOLDOWN_TICKS;
+				String status = receipt == null ? null : String.valueOf(receipt.get("status"));
+				String result = error == null
+					? receipt == null ? "null" : String.valueOf(receipt.get("result"))
+					: error.getMessage();
+				if (error == null && "dispatched".equals(status))
+				{
+					walk.obstacleInteractions++;
+					reporter.accept("WALK_OBSTACLE_DISPATCHED object=" + obstacle.getObjectId() +
+						" action=" + obstacle.getAction() + " result=" + result);
+					return;
+				}
+				reporter.accept("WALK_OBSTACLE_REJECTED attempt=" + walk.obstacleAttempts +
+					" object=" + obstacle.getObjectId() + " action=" + obstacle.getAction() +
+					" result=" + result);
+				if (walk.obstacleAttempts >= MAX_OBSTACLE_ATTEMPTS)
+				{
+					WorldPoint reached = snapshot == null ? null : snapshot.getPlayerWorldPoint();
+					finish(walk, "unreachable", "obstacle_interaction_failed: " + result, reached, tick);
+				}
+			}
+		});
 	}
 
 	private void dispatchClick(ActiveWalk walk, List<WorldPoint> candidates)
@@ -323,12 +633,17 @@ final class GenericClientWalker implements AutoCloseable
 		{
 			return;
 		}
-		if (walk.plans >= MAX_REPLANS + 1)
+		boolean recoveryPlan = isRecoveryPlan(reason);
+		if (recoveryPlan && walk.recoveryPlans >= walk.maximumRecoveryPlans)
 		{
 			GenericClientSnapshot snapshot = latestSnapshot;
 			long tick = snapshot == null ? walk.startedAtTick : snapshot.getGameTick();
 			finish(walk, "unreachable", "replan_limit", start, tick);
 			return;
+		}
+		if (recoveryPlan)
+		{
+			walk.recoveryPlans++;
 		}
 
 		walk.planning = true;
@@ -336,8 +651,11 @@ final class GenericClientWalker implements AutoCloseable
 		walk.clickTargetIndex = -1;
 		walk.plans++;
 		int revision = ++walk.planRevision;
+		GenericClientSnapshot planningSnapshot = latestSnapshot;
+		Set<BlockedEdge> blockedEdges = new LinkedHashSet<>(walk.blockedEdges);
 		reporter.accept("WALK_PLANNING plan=" + revision + " reason=" + reason +
-			" start=" + start + " destination=" + walk.destination);
+			" start=" + start + " destination=" + walk.destination +
+			" blockedEdges=" + blockedEdges.size());
 
 		try
 		{
@@ -346,7 +664,22 @@ final class GenericClientWalker implements AutoCloseable
 				GenericClientPathfinder.Result result;
 				try
 				{
-					result = pathfinder.find(start, walk.destination, walk.within);
+					GenericClientPathfinder.EdgePolicy edgePolicy =
+						(x, y, plane, dx, dy, staticAllowed) ->
+						{
+							BlockedEdge edge = new BlockedEdge(
+								new WorldPoint(x, y, plane),
+								new WorldPoint(x + dx, y + dy, plane));
+							if (blockedEdges.contains(edge))
+							{
+								return false;
+							}
+							return planningSnapshot == null
+								? staticAllowed
+								: planningSnapshot.canPlanMove(
+									x, y, plane, dx, dy, staticAllowed);
+						};
+					result = pathfinder.find(start, walk.destination, walk.within, edgePolicy);
 				}
 				catch (RuntimeException exception)
 				{
@@ -386,6 +719,12 @@ final class GenericClientWalker implements AutoCloseable
 					walk.path = result.getPath();
 					walk.pathIndex = 0;
 					walk.pathTiles = walk.path.size();
+					GenericClientSnapshot currentSnapshot = latestSnapshot;
+					long plannedAtTick = currentSnapshot == null
+						? walk.lastMovedTick
+						: currentSnapshot.getGameTick();
+					walk.lastMovedTick = plannedAtTick;
+					walk.nextClickTick = Math.max(walk.nextClickTick, plannedAtTick);
 					reporter.accept("WALK_PLANNED plan=" + revision + " pathTiles=" +
 						walk.pathTiles + " expandedNodes=" + walk.expandedNodes + " start=" + start +
 						" reachedGoal=" + walk.path.get(walk.path.size() - 1));
@@ -420,6 +759,12 @@ final class GenericClientWalker implements AutoCloseable
 		return bestDistance <= OFF_ROUTE_RADIUS ? bestIndex : -1;
 	}
 
+	private static boolean isRecoveryPlan(String reason)
+	{
+		return "off_route".equals(reason) || "stalled".equals(reason) ||
+			"stalled_without_target".equals(reason) || "live_route_blocked".equals(reason);
+	}
+
 	private static int routeIndex(ActiveWalk walk, WorldPoint target)
 	{
 		for (int index = walk.path.size() - 1; index >= 0; index--)
@@ -449,6 +794,16 @@ final class GenericClientWalker implements AutoCloseable
 			walk.clickInFlight = false;
 			gameInput.cancelWalkToTile();
 		}
+		if (walk.obstacleInFlight)
+		{
+			walk.obstacleInFlight = false;
+			obstacleInput.cancel();
+		}
+		if (walk.runInFlight)
+		{
+			walk.runInFlight = false;
+			runInput.cancel("walker_finished");
+		}
 		Map<String, Object> receipt = receipt(walk, status, reason, reached, tick);
 		reporter.accept("WALK_COMPLETED status=" + status + " reason=" + reason +
 			" requested=" + walk.destination + " reached=" + reached + " ticks=" +
@@ -471,7 +826,20 @@ final class GenericClientWalker implements AutoCloseable
 		receipt.put("game_ticks", Math.max(0, tick - walk.startedAtTick));
 		receipt.put("active_game_ticks", Math.max(0, tick - walk.startedAtTick - walk.pausedInteractionTicks));
 		receipt.put("plans", (long) walk.plans);
+		receipt.put("recovery_plans", (long) walk.recoveryPlans);
+		receipt.put("recovery_plan_limit", (long) walk.maximumRecoveryPlans);
+		receipt.put("path_retries", (long) walk.pathRetries);
 		receipt.put("clicks", (long) walk.clicks);
+		receipt.put("obstacle_interactions", (long) walk.obstacleInteractions);
+		receipt.put("obstacles_cleared", (long) walk.obstaclesCleared);
+		receipt.put("live_block_replans", (long) walk.liveBlockReplans);
+		List<Map<String, Object>> blockedEdges = new ArrayList<>();
+		for (BlockedEdge edge : walk.blockedEdges)
+		{
+			blockedEdges.add(edge.toMap());
+		}
+		receipt.put("blocked_edges", blockedEdges);
+		receipt.put("run_toggles", (long) walk.runToggles);
 		receipt.put("path_tiles", (long) walk.pathTiles);
 		receipt.put("expanded_nodes", (long) walk.expandedNodes);
 		receipt.put("reason", reason);
@@ -493,10 +861,27 @@ final class GenericClientWalker implements AutoCloseable
 		receipt.put("game_ticks", 0L);
 		receipt.put("active_game_ticks", 0L);
 		receipt.put("plans", 0L);
+		receipt.put("recovery_plans", 0L);
+		receipt.put("recovery_plan_limit", 0L);
+		receipt.put("path_retries", 0L);
 		receipt.put("clicks", 0L);
+		receipt.put("obstacle_interactions", 0L);
+		receipt.put("obstacles_cleared", 0L);
+		receipt.put("live_block_replans", 0L);
+		receipt.put("blocked_edges", new ArrayList<>());
+		receipt.put("run_toggles", 0L);
 		receipt.put("path_tiles", 0L);
 		receipt.put("expanded_nodes", 0L);
 		receipt.put("reason", reason);
+		return receipt;
+	}
+
+	private static Map<String, Object> runUnchanged()
+	{
+		Map<String, Object> receipt = new LinkedHashMap<>();
+		receipt.put("status", "unchanged");
+		receipt.put("result", "run_input_unavailable");
+		receipt.put("click_count", 0L);
 		return receipt;
 	}
 
@@ -554,12 +939,35 @@ final class GenericClientWalker implements AutoCloseable
 		void cancelWalkToTile();
 	}
 
+	interface ObstacleInput
+	{
+		CompletableFuture<Map<String, Object>> interact(
+			int objectId,
+			String action,
+			WorldPoint world,
+			int within,
+			boolean breaksEnabled);
+
+		void cancel();
+	}
+
+	interface RunInput
+	{
+		CompletableFuture<Map<String, Object>> setEnabled(
+			boolean enabled,
+			boolean breaksEnabled);
+
+		void cancel(String reason);
+	}
+
 	private static final class ActiveWalk
 	{
 		private final WorldPoint destination;
 		private final int within;
 		private final int timeoutTicks;
 		private final boolean breaksEnabled;
+		private final boolean useRun;
+		private final int maximumRecoveryPlans;
 		private final long startedAtTick;
 		private final CompletableFuture<Map<String, Object>> completion = new CompletableFuture<>();
 		private WorldPoint lastPlayer;
@@ -569,9 +977,21 @@ final class GenericClientWalker implements AutoCloseable
 		private long pausedInteractionTicks;
 		private boolean planning;
 		private boolean clickInFlight;
+		private boolean obstacleInFlight;
+		private boolean runInFlight;
+		private boolean runToggleArmed = true;
 		private int planRevision;
 		private int plans;
+		private int recoveryPlans;
+		private int pathRetries;
+		private int samePathStallRetries;
 		private int clicks;
+		private int obstacleAttempts;
+		private int obstacleInteractions;
+		private int obstaclesCleared;
+		private int liveBlockReplans;
+		private final Set<BlockedEdge> blockedEdges = new LinkedHashSet<>();
+		private int runToggles;
 		private int consecutiveClickFailures;
 		private int pathIndex;
 		private int clickTargetIndex = -1;
@@ -580,6 +1000,10 @@ final class GenericClientWalker implements AutoCloseable
 		private int maximumLegTiles = Integer.MAX_VALUE;
 		private List<WorldPoint> path;
 		private WorldPoint clickTarget;
+		private long obstacleRetryTick;
+		private long obstacleAttemptTick;
+		private long runStartedTick;
+		private GenericClientSnapshot.RouteBlock pendingObstacle;
 
 		private ActiveWalk(
 			WorldPoint destination,
@@ -587,15 +1011,90 @@ final class GenericClientWalker implements AutoCloseable
 			int timeoutTicks,
 			long startedAtTick,
 			WorldPoint start,
-			boolean breaksEnabled)
+			boolean breaksEnabled,
+			boolean useRun)
 		{
 			this.destination = destination;
 			this.within = within;
 			this.timeoutTicks = timeoutTicks;
 			this.breaksEnabled = breaksEnabled;
+			this.useRun = useRun;
+			this.maximumRecoveryPlans = recoveryPlanLimit(start, destination);
 			this.startedAtTick = startedAtTick;
 			this.lastPlayer = start;
 			this.lastMovedTick = startedAtTick;
+		}
+	}
+
+	static int recoveryPlanLimit(WorldPoint start, WorldPoint destination)
+	{
+		int routeDistance = start == null || destination == null ? 0 : distance(start, destination);
+		return Math.min(
+			MAXIMUM_RECOVERY_REPLANS,
+			MINIMUM_RECOVERY_REPLANS + routeDistance / RECOVERY_PLAN_TILES);
+	}
+
+	static final class BlockedEdge
+	{
+		private final WorldPoint first;
+		private final WorldPoint second;
+
+		BlockedEdge(WorldPoint first, WorldPoint second)
+		{
+			if (first == null || second == null)
+			{
+				throw new IllegalArgumentException("Blocked edge endpoints are required");
+			}
+			if (compare(first, second) <= 0)
+			{
+				this.first = first;
+				this.second = second;
+			}
+			else
+			{
+				this.first = second;
+				this.second = first;
+			}
+		}
+
+		Map<String, Object> toMap()
+		{
+			Map<String, Object> value = new LinkedHashMap<>();
+			value.put("from", worldMap(first));
+			value.put("to", worldMap(second));
+			return value;
+		}
+
+		@Override
+		public boolean equals(Object value)
+		{
+			if (this == value)
+			{
+				return true;
+			}
+			if (!(value instanceof BlockedEdge))
+			{
+				return false;
+			}
+			BlockedEdge other = (BlockedEdge) value;
+			return first.equals(other.first) && second.equals(other.second);
+		}
+
+		@Override
+		public int hashCode()
+		{
+			return 31 * first.hashCode() + second.hashCode();
+		}
+
+		private static int compare(WorldPoint left, WorldPoint right)
+		{
+			int plane = Integer.compare(left.getPlane(), right.getPlane());
+			if (plane != 0)
+			{
+				return plane;
+			}
+			int x = Integer.compare(left.getX(), right.getX());
+			return x == 0 ? Integer.compare(left.getY(), right.getY()) : x;
 		}
 	}
 }

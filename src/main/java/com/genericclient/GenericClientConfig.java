@@ -20,17 +20,6 @@ public interface GenericClientConfig extends Config
 		return true;
 	}
 
-	@Range(min = 1, max = 50)
-	@ConfigItem(
-		keyName = "npcLogRadius",
-		name = "NPC diagnostic radius",
-		description = "Maximum tile distance used by the nearby NPC diagnostic snapshot"
-	)
-	default int npcLogRadius()
-	{
-		return 15;
-	}
-
 	@ConfigItem(
 		keyName = "mouseProfileFile",
 		name = "Mouse profile file",

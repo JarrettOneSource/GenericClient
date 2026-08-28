@@ -24,6 +24,7 @@ final class GenericClientDashboard implements AutoCloseable
 {
 	private static final String AUTOMATIONS = "Automations";
 	private static final String ACTIVE_SCRIPT = "Active Script";
+	private static final String SCHEDULES = "Schedules";
 	private static final String CONSOLE = "Console";
 	private static final String SETTINGS = "Settings";
 	private static final int SIDEBAR_WIDTH = 204;
@@ -38,6 +39,7 @@ final class GenericClientDashboard implements AutoCloseable
 	private final LongBreakBanner longBreak;
 	private final GenericClientActiveScriptPanel activeScript;
 	private final GenericClientScriptsPanel scripts;
+	private final GenericClientAutomationPanel automations;
 	private final GenericClientConsolePanel console;
 	private final GenericClientSettingsPanel settings;
 	private final List<JButton> navigation;
@@ -45,21 +47,33 @@ final class GenericClientDashboard implements AutoCloseable
 
 	GenericClientDashboard(Window owner, GenericClientDashboardActions actions, GenericClientLuaHost host)
 	{
+		this(owner, actions, host, null);
+	}
+
+	GenericClientDashboard(
+		Window owner,
+		GenericClientDashboardActions actions,
+		GenericClientLuaHost host,
+		GenericClientAutomationScheduler scheduler)
+	{
 		this.owner = owner;
 		longBreak = new LongBreakBanner(actions);
 		activeScript = new GenericClientActiveScriptPanel(host);
 		scripts = new GenericClientScriptsPanel(host);
+		automations = new GenericClientAutomationPanel(scheduler);
 		console = new GenericClientConsolePanel(actions, host);
 		settings = new GenericClientSettingsPanel(actions);
 		cards.setBackground(GenericClientDashboardStyle.BACKGROUND);
 		cards.add(activeScript, ACTIVE_SCRIPT);
 		cards.add(scripts, AUTOMATIONS);
+		cards.add(automations, SCHEDULES);
 		cards.add(console, CONSOLE);
 		cards.add(settings, SETTINGS);
 
 		navigation = Arrays.asList(
 			nav(ACTIVE_SCRIPT, GenericClientDashboardStyle.NavGlyph.ACTIVE),
 			nav(AUTOMATIONS, GenericClientDashboardStyle.NavGlyph.PLAY),
+			nav(SCHEDULES, GenericClientDashboardStyle.NavGlyph.ACTIVE),
 			nav(CONSOLE, GenericClientDashboardStyle.NavGlyph.CONSOLE),
 			nav(SETTINGS, GenericClientDashboardStyle.NavGlyph.SLIDERS));
 		content.setBackground(GenericClientDashboardStyle.BACKGROUND);
@@ -107,11 +121,6 @@ final class GenericClientDashboard implements AutoCloseable
 		});
 	}
 
-	void updateNpcDiagnostics(String diagnostics)
-	{
-		runOnEdt(() -> console.updateNpcDiagnostics(diagnostics));
-	}
-
 	void updateLuaState(String activeScript, String scriptStatus, String logs)
 	{
 		runOnEdt(() ->
@@ -151,6 +160,11 @@ final class GenericClientDashboard implements AutoCloseable
 				longBreak.hideBanner();
 			}
 		});
+	}
+
+	void updateAutomationState(Map<String, Object> automation)
+	{
+		runOnEdt(() -> automations.update(automation));
 	}
 
 	private JPanel createSidebar()

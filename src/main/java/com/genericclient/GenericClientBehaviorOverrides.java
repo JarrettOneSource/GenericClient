@@ -19,6 +19,7 @@ final class GenericClientBehaviorOverrides
 	private double oppositeLongBreakProbability;
 	private GenericClientBehaviorProfile.Edge idleEdge;
 	private int mouseMoveDurationMillis;
+	private int typingWordsPerMinute;
 
 	private GenericClientBehaviorOverrides()
 	{
@@ -34,7 +35,8 @@ final class GenericClientBehaviorOverrides
 		GenericClientBehaviorProfile.LongBreakMode favoredLongBreakMode,
 		double oppositeLongBreakProbability,
 		GenericClientBehaviorProfile.Edge idleEdge,
-		int mouseMoveDurationMillis)
+		int mouseMoveDurationMillis,
+		int typingWordsPerMinute)
 	{
 		this.shortReleaseProbability = shortReleaseProbability;
 		this.shortBodyMedianSeconds = shortBodyMedianSeconds;
@@ -46,6 +48,7 @@ final class GenericClientBehaviorOverrides
 		this.oppositeLongBreakProbability = oppositeLongBreakProbability;
 		this.idleEdge = idleEdge;
 		this.mouseMoveDurationMillis = mouseMoveDurationMillis;
+		this.typingWordsPerMinute = typingWordsPerMinute;
 		validate();
 	}
 
@@ -61,7 +64,8 @@ final class GenericClientBehaviorOverrides
 			profile.getFavoredLongBreakMode(),
 			profile.getOppositeLongBreakProbability(),
 			profile.getIdleEdge(),
-			profile.getMouseMoveDurationMillis());
+			profile.getMouseMoveDurationMillis(),
+			profile.getTypingWordsPerMinute());
 	}
 
 	void validate()
@@ -84,6 +88,14 @@ final class GenericClientBehaviorOverrides
 			throw new IllegalArgumentException("Mouse move duration must be between " +
 				GenericClientBehaviorProfile.MOUSE_MOVE_DURATION_MIN_MILLIS + " and " +
 				GenericClientBehaviorProfile.MOUSE_MOVE_DURATION_MAX_MILLIS);
+		}
+		if (typingWordsPerMinute != 0 &&
+			(typingWordsPerMinute < GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MIN ||
+				typingWordsPerMinute > GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MAX))
+		{
+			throw new IllegalArgumentException("Typing speed must be between " +
+				GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MIN + " and " +
+				GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MAX + " WPM");
 		}
 		if (favoredLongBreakMode == null)
 		{
@@ -145,6 +157,11 @@ final class GenericClientBehaviorOverrides
 		return mouseMoveDurationMillis;
 	}
 
+	int getTypingWordsPerMinute()
+	{
+		return typingWordsPerMinute;
+	}
+
 	Map<String, Object> toMap()
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
@@ -159,6 +176,7 @@ final class GenericClientBehaviorOverrides
 		value.put("opposite_long_break_probability", oppositeLongBreakProbability);
 		value.put("idle_edge", idleEdge.name().toLowerCase(Locale.ROOT));
 		value.put("mouse_move_duration_millis", (long) mouseMoveDurationMillis);
+		value.put("typing_words_per_minute", (long) typingWordsPerMinute);
 		return value;
 	}
 

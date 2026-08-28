@@ -181,6 +181,29 @@ public class GenericClientBehaviorControllerTest
 	}
 
 	@Test
+	public void activeBreakEndDismissesAMicroBreak() throws Exception
+	{
+		long accountHash = findHash(profile -> profile.getShortReleaseProbability() >= 0.85);
+		Fixture fixture = fixture(0.5, 0.0, 0.99);
+		try
+		{
+			fixture.controller.activateAccount(accountHash);
+			fixture.controller.setLoggedIn(true);
+			CompletableFuture<Map<String, Object>> action = fixture.controller.afterAction(true);
+
+			assertEquals("micro_break", fixture.controller.status().get("state"));
+			assertEquals("ended", fixture.controller.endActiveBreak().get().get("status"));
+			assertEquals("completed", action.get().get("status"));
+			assertEquals("ready", fixture.controller.status().get("state"));
+			assertEquals(0, fixture.timer.activeSize());
+		}
+		finally
+		{
+			fixture.controller.close();
+		}
+	}
+
+	@Test
 	public void manualEndWaitsForLogoutBeforeRestoringTheSession() throws Exception
 	{
 		long accountHash = findHash(profile -> profile.getLongCadenceMinutes() < 55.0 &&
@@ -305,7 +328,8 @@ public class GenericClientBehaviorControllerTest
 				GenericClientBehaviorProfile.LongBreakMode.LOGOUT,
 				0.25,
 				GenericClientBehaviorProfile.Edge.TOP,
-				650));
+				650,
+				85));
 
 			Map<String, Object> custom = (Map<String, Object>) fixture.controller.status().get("profile");
 			assertTrue((Boolean) custom.get("customized"));
@@ -342,7 +366,8 @@ public class GenericClientBehaviorControllerTest
 			GenericClientBehaviorProfile.LongBreakMode.AFK,
 			0.18,
 			GenericClientBehaviorProfile.Edge.RIGHT,
-			375);
+			375,
+			75);
 		GenericClientBehaviorController first = controller(directory);
 		first.activateAccount(8080L);
 		first.saveOverrides(overrides);

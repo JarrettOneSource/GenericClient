@@ -18,6 +18,9 @@ final class GenericClientBehaviorProfile
 	static final int DEFAULT_MOUSE_MOVE_DURATION_MILLIS = 432;
 	static final int MOUSE_MOVE_DURATION_MIN_MILLIS = 150;
 	static final int MOUSE_MOVE_DURATION_MAX_MILLIS = 1_200;
+	static final int DEFAULT_TYPING_WORDS_PER_MINUTE = 55;
+	static final int TYPING_WORDS_PER_MINUTE_MIN = 20;
+	static final int TYPING_WORDS_PER_MINUTE_MAX = 180;
 
 	private static final String DOMAIN = "genericclient.behavior.v1";
 	private static final double[] SHORT_QUANTILES = {0.0, 0.10, 0.25, 0.50, 0.75, 0.90, 1.0};
@@ -38,6 +41,7 @@ final class GenericClientBehaviorProfile
 	private final double oppositeLongBreakProbability;
 	private final Edge idleEdge;
 	private final int mouseMoveDurationMillis;
+	private final int typingWordsPerMinute;
 	private final String title;
 	private final String summary;
 	private final double referenceDowntimePercent;
@@ -58,6 +62,7 @@ final class GenericClientBehaviorProfile
 		double oppositeLongBreakProbability,
 		Edge idleEdge,
 		int mouseMoveDurationMillis,
+		int typingWordsPerMinute,
 		boolean customized)
 	{
 		this.id = id;
@@ -74,6 +79,7 @@ final class GenericClientBehaviorProfile
 		this.oppositeLongBreakProbability = oppositeLongBreakProbability;
 		this.idleEdge = idleEdge;
 		this.mouseMoveDurationMillis = mouseMoveDurationMillis;
+		this.typingWordsPerMinute = typingWordsPerMinute;
 		this.customized = customized;
 		this.referenceDowntimePercent = calculateReferenceDowntimePercent();
 		this.title = buildTitle();
@@ -94,6 +100,7 @@ final class GenericClientBehaviorProfile
 		double phaseQuantile = correlatedUnit(accountHash, "phase.sensitivity", styleZ, 0.50);
 		double longDurationQuantile = unit(accountHash, "long.duration");
 		double mouseDurationQuantile = correlatedUnit(accountHash, "mouse.duration", styleZ, 0.35);
+		double typingQuantile = correlatedUnit(accountHash, "typing.wpm", styleZ, 0.20);
 
 		double longCadence = 300.0 * Math.exp(-2.015 * longQuantile);
 		double longRefractory = clamp(0.30 * longCadence, 10.0, 60.0);
@@ -106,7 +113,7 @@ final class GenericClientBehaviorProfile
 			profileId(accountHash),
 			interpolate(shortQuantile, SHORT_QUANTILES, SHORT_PROBABILITIES),
 			2.0 + 4.0 * shortDurationQuantile,
-			0.04 + 0.08 * shortDurationQuantile,
+			0.01 + 0.03 * shortDurationQuantile,
 			longCadence,
 			longRefractory,
 			(longCadence - longRefractory) / 0.886226925452758,
@@ -117,6 +124,7 @@ final class GenericClientBehaviorProfile
 			0.02 + 0.13 * oppositeUnit * oppositeUnit,
 			Edge.values()[(int) Math.floor(unit(accountHash, "idle.edge") * Edge.values().length)],
 			roundToStep(300.0 + 350.0 * mouseDurationQuantile, 25),
+			roundToStep(35.0 + 65.0 * typingQuantile, 5),
 			false);
 	}
 
@@ -143,6 +151,9 @@ final class GenericClientBehaviorProfile
 			overrides.getMouseMoveDurationMillis() == 0
 				? mouseMoveDurationMillis
 				: overrides.getMouseMoveDurationMillis(),
+			overrides.getTypingWordsPerMinute() == 0
+				? typingWordsPerMinute
+				: overrides.getTypingWordsPerMinute(),
 			true);
 	}
 
@@ -216,6 +227,11 @@ final class GenericClientBehaviorProfile
 		return mouseMoveDurationMillis;
 	}
 
+	int getTypingWordsPerMinute()
+	{
+		return typingWordsPerMinute;
+	}
+
 	String getTitle()
 	{
 		return title;
@@ -265,6 +281,7 @@ final class GenericClientBehaviorProfile
 		value.put("opposite_long_break_probability", oppositeLongBreakProbability);
 		value.put("idle_edge", idleEdge.name().toLowerCase(Locale.ROOT));
 		value.put("mouse_move_duration_millis", (long) mouseMoveDurationMillis);
+		value.put("typing_words_per_minute", (long) typingWordsPerMinute);
 		value.put("reference_eligible_interactions_per_hour", REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR);
 		value.put("reference_forced_downtime_percent", referenceDowntimePercent);
 		return value;
@@ -299,7 +316,7 @@ final class GenericClientBehaviorProfile
 				"Typical forced pauses center near %.1f seconds, with a %.0f%% chance of a 12-120 second tail. " +
 				"Long breaks average about %.0f active minutes apart and center near %.1f minutes; usually %s, " +
 				"with the opposite choice about %.0f%% of the time. Major phases apply %.1f ordinary short-break chances. " +
-				"Recorded mouse paths play over %d milliseconds. " +
+				"Recorded mouse paths play over %d milliseconds and text entry averages %d WPM. " +
 				"At %.0f eligible actions per hour, estimated forced downtime is %.0f%%.",
 			shortReleaseProbability * 100.0,
 			shortBodyMedianSeconds,
@@ -310,6 +327,7 @@ final class GenericClientBehaviorProfile
 			oppositeLongBreakProbability * 100.0,
 			phaseShortChances,
 			mouseMoveDurationMillis,
+			typingWordsPerMinute,
 			REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR,
 			referenceDowntimePercent);
 	}

@@ -38,7 +38,9 @@ Click the GenericClient toolbar icon to open the resizable dashboard popout:
 - **Active Script** shows the current script, elapsed runtime, configuration,
   cooperative script buttons, Restart, and Stop.
 - **Automations** runs manifest scripts and shows their output.
-- **Console** contains the Lua REPL plus the three diagnostic actions.
+- **Schedules** shows named time windows, rule decisions, the active rule lease,
+  and Enable/Pause/Reload controls.
+- **Console** contains the Lua REPL plus manual status and walk checks.
 - **Settings** contains mouse movement/trail options and the behavior profile.
 
 Settings can save account-specific behavior overrides or restore the original
@@ -60,9 +62,25 @@ Editable scripts are installed in:
 stable id, display name, description, and Lua filename. Press **Reload
 manifest** after editing it manually.
 
-`npc-diagnostics.lua` is never started automatically; run it on demand when a
-snapshot stream is needed. `walk-stress.lua`
-is a manual three-click stress script that uses the existing ground-tile
+Large scripts may declare named modules in that same manifest entry. Modules
+stay inside the script sandbox and are loaded with `gc.require`:
+
+```json
+"modules": {
+  "config": "my-script/config.lua",
+  "actions": "my-script/actions.lua"
+}
+```
+
+```lua
+local config = gc.require("config")
+```
+
+Each module returns one Lua value, normally a small table of data and functions.
+GenericClient reads only the declared files; Lua still has no unrestricted
+filesystem or `package` access.
+
+`walk-stress.lua` is a manual three-click stress script that uses the existing ground-tile
 interaction. `walker.lua` exposes a destination dropdown and can walk to the
 Grand Exchange, Varrock, Edgeville, Falador, Draynor, or Lumbridge through the
 same public `walk.to` action.
@@ -75,6 +93,17 @@ cooperative stop-after-kill action, disengages at the target, and returns an XP
 receipt. Its currently implemented low-level method is deliberately limited to
 Lumbridge goblins; later methods belong in the same script.
 
+`aio-magic.lua` owns its just-in-time GE restocking, exact bank loadout, staff changes,
+spell selection, emergency HP recovery, and exact target stop. Its first implemented
+method uses the strongest available Strike spell from the Port Sarim jail corridor
+against targetable inmates. It selects offensive staff autocast when the chosen
+spell supports it and retains verified `combat.cast` as the manual fallback. The core walker opens
+the public entrance when required; the locked cell doors are not route targets.
+`quest-runner.lua` reduces live quest state into a
+resumable phase and currently implements the strict Witch's House opening slice;
+it stops explicitly at the unresolved garden-cover checkpoint instead of
+guessing a stealth route.
+
 The current scripting interface intentionally contains only:
 
 ```lua
@@ -84,16 +113,24 @@ gc.log(level, event, fields)
 gc.phase(name, options)
 gc.overlay(rows)
 gc.next_action()
+gc.require(name) -- only for modules declared by this script
 ```
 
-Implemented reads are `runtime`, `player`, `npcs`, `behavior`, `skills`,
-`inventory`, `equipment`, `bank`, `quests`, `grand_exchange`, `cash`, and the
+Implemented reads are `runtime`, `player`, `npcs`, `messages`, `objects`, `ground_items`,
+`dialogue`, `vars`, `behavior`, `skills`, `inventory`, `equipment`, `bank`,
+`quests`, `grand_exchange`, `cash`, and the
 combined `account` frame. `combat` reports the current attack-style index and
 auto-retaliate state. A bank read explicitly reports `unknown`, `open`, or
-`cached`; it never treats an unseen bank as empty. Implemented waits are game
+`cached`; it never treats an unseen bank as empty. NPC rows distinguish scene
+presence, canvas clickability, and line of sight. `messages` exposes only a
+bounded history of system feedback, not player chat. Implemented waits are game
 ticks, tick counts, `walk.random`, `walk.to`, and `mouse.offscreen`. New semantic
-actions are added when an automation actually needs them. `npc.interact`
-selects the nearest matching NPC, resolves the requested menu option, and uses
+actions are added when an automation actually needs them. Object, item,
+item-on-entity, dialogue, bank-loadout, GE-buy, UI-close, and combat-cast
+actions use the same receipt model. Lua can arm or clear the framework's
+tick-priority emergency guard with `safety.configure` and `safety.clear`.
+`npc.interact`
+selects the nearest matching NPC, faces it once when needed, resolves the requested menu option, and uses
 the same template-generated synthetic cursor for either a left-click or
 context-menu interaction.
 
@@ -125,8 +162,10 @@ local result = gc.await {
 }
 ```
 
-`walk.to` plans ordinary ground routes against a pinned global collision map.
-For each leg it turns the client camera, selects the farthest currently
+`walk.to` uses the pinned global collision map outside the loaded scene and the
+current RuneLite collision frame inside it. Closed live edges are routeable
+only when the exact wall orientation contains an approved traversal object.
+For each ordinary leg it turns the client camera, selects the farthest currently
 projectable route tile, and follows it with a template-generated synthetic
 canvas, context-menu, or minimap click without moving the operating-system
 cursor:
@@ -137,10 +176,15 @@ local result = gc.await {
     type = "walk.to",
     destination = { x = 3210, y = 3424, plane = 0 },
     within = 3,
+    run = true,
   },
   timeout = { game_ticks = 600 },
 }
 ```
+
+Walking enables run by default when at least 10% energy is available, verifies
+the orb state, and may enable it again after energy drains and recovers. A
+script phase that must conserve energy sets `run = false` on that `walk.to`.
 
 Every composite mouse-movement-and-click interaction rolls the seeded behavior
 profile by default. A multi-click walk therefore rolls after every route click.
@@ -160,10 +204,12 @@ Major completed states can request a heavier profile-shaped evaluation:
 gc.phase("banking.complete")
 ```
 
-This first slice supports one-tile, same-plane, non-instanced ground movement.
-It does not yet execute doors, stairs, ships, teleports, dialogues, or widgets,
-and it does not yet overlay the loaded scene's dynamic collision. Exact design,
-map provenance, diagnostics, and live receipts are in
+This slice supports one-tile, same-plane, non-instanced ground movement and
+bounded same-plane traversal actions such as opening an accessible door. It
+verifies the live edge or object state before resuming. Explicit locked-door
+feedback returns an immediate unreachable receipt; stairs, ships, teleports, and other plane or interface
+transitions remain explicit future handlers. Exact design, map provenance,
+diagnostics, and live receipts are in
 [`docs/walker-design.md`](docs/walker-design.md).
 
 Each Lua file returns a descriptor. The optional `inputs` and `actions` arrays
@@ -225,10 +271,60 @@ The seeded profile, active-time hazard, persistence, phase weighting,
 off-canvas idle, logout/re-login flow, and numeric envelopes are documented in
 [`docs/behavior-system.md`](docs/behavior-system.md).
 
+## Scheduled rules
+
+GenericClient can run registered scripts from account-specific schedule and
+state rules. This example makes AIO Melee eligible Monday-Friday from 08:00
+through 17:00 Eastern while Strength is below 30:
+
+```json
+{
+  "schema": "genericclient_automation.v1",
+  "zone": "America/New_York",
+  "enabled": true,
+  "schedules": {
+    "work-hours": {
+      "days": ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY"],
+      "windows": [{ "from": "08:00", "until": "17:00" }]
+    }
+  },
+  "rules": [
+    {
+      "id": "train-strength",
+      "priority": 50,
+      "when": {
+        "all": [
+          { "schedule": "work-hours" },
+          { "fact": "skills.strength.level", "lt": 30 }
+        ]
+      },
+      "run": {
+        "script": "aio-melee",
+        "inputs": {
+          "skill": "strength",
+          "target_level": "30",
+          "method": "auto"
+        }
+      },
+      "retry_after": "PT10M"
+    }
+  ]
+}
+```
+
+Rules are stored per derived account profile under
+`~/.runelite/genericclient/automation/`. Manual scripts retain precedence;
+scheduled scripts never replace them. Bank-dependent cash facts remain unknown
+until the bank cache is complete, and incomplete wealth is never compared as
+zero. The full schema, cash example, lifecycle, persistence, and process-lifetime
+limit are documented in
+[`docs/automation-scheduling.md`](docs/automation-scheduling.md).
+
 ## MCP control
 
-The included stdio MCP server lets Codex read live and behavior state, execute
-Lua snippets, save and run scripts, and control the Jagex-backed game session.
+The included stdio MCP server lets Codex read live, behavior, and scheduling state, capture
+the fully rendered game canvas as a PNG, execute Lua snippets, save and run
+scripts, and control the Jagex-backed game session.
 GenericClient exposes its control bridge only on `127.0.0.1`; the default port
 is `17343`.
 
@@ -282,11 +378,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.11.0.jar`
-- `build/libs/GenericClient-0.11.0-all.jar`
+- `build/libs/generic-client-0.12.0.jar`
+- `build/libs/GenericClient-0.12.0-all.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.11.0-all.jar
+java -ea -jar build/libs/GenericClient-0.12.0-all.jar
 ```

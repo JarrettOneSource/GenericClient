@@ -156,6 +156,13 @@ final class GenericClientBehaviorController implements AutoCloseable
 			: profile.getMouseMoveDurationMillis();
 	}
 
+	synchronized int typingWordsPerMinute()
+	{
+		return profile == null
+			? GenericClientBehaviorProfile.DEFAULT_TYPING_WORDS_PER_MINUTE
+			: profile.getTypingWordsPerMinute();
+	}
+
 	CompletableFuture<String> moveMouseOffscreen()
 	{
 		final GenericClientBehaviorProfile.Edge edge;
@@ -338,25 +345,38 @@ final class GenericClientBehaviorController implements AutoCloseable
 
 	CompletableFuture<Map<String, Object>> endLongBreak()
 	{
+		return endBreak("long");
+	}
+
+	CompletableFuture<Map<String, Object>> endActiveBreak()
+	{
+		return endBreak(null);
+	}
+
+	private CompletableFuture<Map<String, Object>> endBreak(String requiredType)
+	{
 		final CompletableFuture<Map<String, Object>> completion;
+		final String type;
 		synchronized (this)
 		{
 			ensureOpen();
-			if (state == null || activeBreak == null || !"long".equals(state.getBreakType()))
+			if (state == null || activeBreak == null ||
+				(requiredType != null && !requiredType.equals(state.getBreakType())))
 			{
-				return completed("not_active", "long");
+				return completed("not_active", requiredType == null ? "break" : requiredType);
 			}
+			type = state.getBreakType();
 			if (breakTimer != null)
 			{
 				breakTimer.cancel();
 				breakTimer = null;
 			}
 			completion = activeBreak;
-			reporter.accept("BEHAVIOR_BREAK_END_REQUESTED type=long reason=manual");
+			reporter.accept("BEHAVIOR_BREAK_END_REQUESTED type=" + type + " reason=manual");
 		}
 
 		finishActiveBreak();
-		return completion.thenApply(ignored -> receipt("ended", "long"));
+		return completion.thenApply(ignored -> receipt("ended", type));
 	}
 
 	synchronized boolean isPaused()

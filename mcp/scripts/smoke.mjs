@@ -49,8 +49,6 @@ try {
   const started = await call("script_run", { id: "mcp-location-check" });
   await new Promise((resolve) => setTimeout(resolve, 1_500));
   const afterScript = await call("client_status");
-  await call("script_run", { id: "npc-diagnostics" });
-
   status.lua.recent_logs = [];
   afterScript.lua.recent_logs = Array.isArray(afterScript.lua.recent_logs)
     ? afterScript.lua.recent_logs.filter((line) => line.includes("mcp-location-check"))

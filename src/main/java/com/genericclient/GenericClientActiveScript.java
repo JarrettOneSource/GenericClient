@@ -21,6 +21,8 @@ final class GenericClientActiveScript
 	private final Map<String, Object> values;
 	private final List<GenericClientScriptAction> actions;
 	private final List<GenericClientOverlayRow> overlayRows;
+	private final Object result;
+	private final String error;
 
 	GenericClientActiveScript(
 		String id,
@@ -33,6 +35,23 @@ final class GenericClientActiveScript
 		List<GenericClientScriptAction> actions,
 		List<GenericClientOverlayRow> overlayRows)
 	{
+		this(id, name, description, status, runtimeMillis, inputs, values, actions,
+			overlayRows, null, null);
+	}
+
+	GenericClientActiveScript(
+		String id,
+		String name,
+		String description,
+		String status,
+		long runtimeMillis,
+		List<GenericClientScriptInput> inputs,
+		Map<String, Object> values,
+		List<GenericClientScriptAction> actions,
+		List<GenericClientOverlayRow> overlayRows,
+		Object result,
+		String error)
+	{
 		this.id = id;
 		this.name = name;
 		this.description = description;
@@ -42,6 +61,8 @@ final class GenericClientActiveScript
 		this.values = Collections.unmodifiableMap(new LinkedHashMap<>(values));
 		this.actions = Collections.unmodifiableList(new ArrayList<>(actions));
 		this.overlayRows = Collections.unmodifiableList(new ArrayList<>(overlayRows));
+		this.result = result;
+		this.error = error;
 	}
 
 	static GenericClientActiveScript none()
@@ -136,6 +157,14 @@ final class GenericClientActiveScript
 			rows.add(row.toMap());
 		}
 		result.put("overlay", rows);
+		if (!isRunning())
+		{
+			result.put("result", this.result);
+			if (error != null)
+			{
+				result.put("error", error);
+			}
+		}
 		return result;
 	}
 }

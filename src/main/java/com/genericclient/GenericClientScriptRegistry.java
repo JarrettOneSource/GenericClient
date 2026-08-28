@@ -25,30 +25,94 @@ import java.util.regex.Pattern;
 
 final class GenericClientScriptRegistry
 {
-	private static final String SCHEMA = "genericclient_scripts.v7";
+	private static final String SCHEMA = "genericclient_scripts.v35";
 	private static final Set<String> PREVIOUS_SCHEMAS = Set.of(
 		"genericclient_scripts.v1",
 		"genericclient_scripts.v2",
 		"genericclient_scripts.v3",
 		"genericclient_scripts.v4",
 		"genericclient_scripts.v5",
-		"genericclient_scripts.v6");
+		"genericclient_scripts.v6",
+		"genericclient_scripts.v7",
+		"genericclient_scripts.v8",
+		"genericclient_scripts.v9",
+		"genericclient_scripts.v10",
+		"genericclient_scripts.v11",
+		"genericclient_scripts.v12",
+		"genericclient_scripts.v13",
+		"genericclient_scripts.v14",
+		"genericclient_scripts.v15",
+		"genericclient_scripts.v16",
+		"genericclient_scripts.v17",
+		"genericclient_scripts.v18",
+		"genericclient_scripts.v19",
+		"genericclient_scripts.v20",
+		"genericclient_scripts.v21",
+		"genericclient_scripts.v22",
+		"genericclient_scripts.v23",
+		"genericclient_scripts.v24",
+		"genericclient_scripts.v25",
+		"genericclient_scripts.v26",
+		"genericclient_scripts.v27",
+		"genericclient_scripts.v28",
+		"genericclient_scripts.v29",
+		"genericclient_scripts.v30",
+		"genericclient_scripts.v31",
+		"genericclient_scripts.v32",
+		"genericclient_scripts.v33",
+		"genericclient_scripts.v34");
 	private static final String MANIFEST_FILE = "manifest.json";
 	private static final String RESOURCE_DIRECTORY = "/com/genericclient/scripts/";
 	private static final Pattern SCRIPT_ID = Pattern.compile("[a-z0-9][a-z0-9_-]*");
+	private static final Pattern MODULE_FILE =
+		Pattern.compile("[a-z0-9][a-z0-9_/-]*\\.lua");
 	private static final String[] BUNDLED_SCRIPT_FILES =
 	{
 		"account-auditor.lua",
 		"aio-melee.lua",
+		"aio-magic.lua",
+		"aio-magic/config.lua",
+		"aio-magic/preparation.lua",
+		"aio-magic/progress.lua",
+		"aio-magic/supplies.lua",
+		"aio-magic/training.lua",
+		"quest-runner.lua",
+		"quest-runner/shared/preparation.lua",
+		"quest-runner/shared/state.lua",
+		"quest-runner/shared/travel.lua",
+		"quest-runner/witchs_house/combat.lua",
+		"quest-runner/witchs_house/completion.lua",
+		"quest-runner/witchs_house/config.lua",
+		"quest-runner/witchs_house/experiment.lua",
+		"quest-runner/witchs_house/garden.lua",
+		"quest-runner/witchs_house/quest.lua",
+		"quest-runner/witchs_house/state.lua",
+		"quest-runner/waterfall/config.lua",
+		"quest-runner/waterfall/quest.lua",
+		"quest-runner/waterfall/state.lua",
 		"walker.lua",
-		"npc-diagnostics.lua",
 		"walk-stress.lua"
+	};
+	private static final String[] REMOVED_BUNDLED_SCRIPT_FILES =
+	{
+		"npc-diagnostics.lua",
+		"quest-runner/combat.lua",
+		"quest-runner/completion.lua",
+		"quest-runner/config.lua",
+		"quest-runner/experiment.lua",
+		"quest-runner/garden.lua",
+		"quest-runner/preparation.lua",
+		"quest-runner/state.lua",
+		"quest-runner/travel.lua",
+		"quest-runner/witch.lua"
 	};
 	private static final Set<String> BUNDLED_IDS = Set.of(
 		"account-auditor",
+		"aio-magic",
 		"aio-melee",
 		"lumbridge-varrock",
 		"npc-diagnostics",
+		"quest-runner",
 		"walk-stress",
 		"walker");
 
@@ -88,6 +152,37 @@ final class GenericClientScriptRegistry
 		return Files.readString(sourcePath(get(id)), StandardCharsets.UTF_8);
 	}
 
+	String readExecutableSource(String id) throws IOException
+	{
+		Script script = get(id);
+		if (script.modules.isEmpty())
+		{
+			return readSource(id);
+		}
+		StringBuilder source = new StringBuilder(modulePrelude());
+		for (Map.Entry<String, String> module : script.modules.entrySet())
+		{
+			source.append("__gc_module_loaders[\"")
+				.append(module.getKey())
+				.append("\"] = function()\n")
+				.append(Files.readString(directory.resolve(module.getValue()), StandardCharsets.UTF_8))
+				.append("\nend\n");
+		}
+		source.append(readSource(id));
+		return source.toString();
+	}
+
+	Map<String, String> readModuleSources(String id) throws IOException
+	{
+		Map<String, String> result = new LinkedHashMap<>();
+		for (Map.Entry<String, String> module : get(id).modules.entrySet())
+		{
+			result.put(module.getKey(),
+				Files.readString(directory.resolve(module.getValue()), StandardCharsets.UTF_8));
+		}
+		return Collections.unmodifiableMap(result);
+	}
+
 	synchronized Script save(String id, String name, String description, String source) throws IOException
 	{
 		validateId(id);
@@ -99,7 +194,7 @@ final class GenericClientScriptRegistry
 		}
 
 		String file = id + ".lua";
-		Script saved = new Script(id, cleanName, cleanDescription, file);
+		Script saved = new Script(id, cleanName, cleanDescription, file, Collections.emptyMap());
 		writeAtomically(directory.resolve(file), source);
 
 		List<Script> scripts = new ArrayList<>(state.scripts);
@@ -148,12 +243,20 @@ final class GenericClientScriptRegistry
 			{
 				throw new IOException("Duplicate script file: " + file);
 			}
-			Script script = new Script(entry.id, name, description, file);
+			Map<String, String> modules = validateModules(entry.modules);
+			Script script = new Script(entry.id, name, description, file, modules);
 			if (!Files.isRegularFile(sourcePath(script)))
 			{
 				throw new IOException("Script file does not exist: " + file);
 			}
 			scripts.add(script);
+			for (String moduleFile : modules.values())
+			{
+				if (!Files.isRegularFile(directory.resolve(moduleFile)))
+				{
+					throw new IOException("Script module does not exist: " + moduleFile);
+				}
+			}
 		}
 
 		scripts.sort(Comparator.comparing(Script::getName, String.CASE_INSENSITIVE_ORDER));
@@ -164,6 +267,10 @@ final class GenericClientScriptRegistry
 	private void installBundledFiles() throws IOException
 	{
 		Files.createDirectories(directory);
+		for (String file : REMOVED_BUNDLED_SCRIPT_FILES)
+		{
+			Files.deleteIfExists(directory.resolve(file));
+		}
 		Path manifestPath = directory.resolve(MANIFEST_FILE);
 		if (!Files.exists(manifestPath))
 		{
@@ -233,7 +340,8 @@ final class GenericClientScriptRegistry
 			entry.id,
 			requireText(entry.name, "Script name"),
 			requireText(entry.description, "Script description"),
-			validateFileName(entry.file));
+			validateFileName(entry.file),
+			validateModules(entry.modules));
 	}
 
 	private static ManifestFile readManifest(Path path) throws IOException
@@ -286,13 +394,15 @@ final class GenericClientScriptRegistry
 			{
 				throw new IOException("Missing bundled script resource: " + file);
 			}
+			Path target = directory.resolve(file);
+			Files.createDirectories(target.getParent());
 			if (replace)
 			{
-				Files.copy(input, directory.resolve(file), StandardCopyOption.REPLACE_EXISTING);
+				Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING);
 			}
 			else
 			{
-				Files.copy(input, directory.resolve(file));
+				Files.copy(input, target);
 			}
 		}
 	}
@@ -309,6 +419,9 @@ final class GenericClientScriptRegistry
 			entry.name = script.name;
 			entry.description = script.description;
 			entry.file = script.file;
+			entry.modules = script.modules.isEmpty()
+				? null
+				: new LinkedHashMap<>(script.modules);
 			manifest.scripts.add(entry);
 		}
 		String json = new GsonBuilder().setPrettyPrinting().create().toJson(manifest) + System.lineSeparator();
@@ -366,6 +479,47 @@ final class GenericClientScriptRegistry
 		return clean;
 	}
 
+	private static Map<String, String> validateModules(Map<String, String> raw)
+	{
+		if (raw == null || raw.isEmpty())
+		{
+			return Collections.emptyMap();
+		}
+		Map<String, String> modules = new LinkedHashMap<>();
+		for (Map.Entry<String, String> entry : raw.entrySet())
+		{
+			validateId(entry.getKey());
+			String file = requireText(entry.getValue(), "Module file");
+			if (!MODULE_FILE.matcher(file).matches() || file.contains("//") || file.contains(".."))
+			{
+				throw new IllegalArgumentException(
+					"Module file must be a relative .lua path inside the scripts directory");
+			}
+			modules.put(entry.getKey(), file);
+		}
+		return Collections.unmodifiableMap(modules);
+	}
+
+	private static String modulePrelude()
+	{
+		return "local __gc_module_loaders = {}\n" +
+			"local __gc_module_cache = {}\n" +
+			"local __gc_module_loading = {}\n" +
+			"gc.require = function(name)\n" +
+			"  local cached = __gc_module_cache[name]\n" +
+			"  if cached ~= nil then return cached end\n" +
+			"  local loader = __gc_module_loaders[name]\n" +
+			"  if not loader then error('Unknown script module: ' .. tostring(name), 2) end\n" +
+			"  if __gc_module_loading[name] then error('Circular script module: ' .. name, 2) end\n" +
+			"  __gc_module_loading[name] = true\n" +
+			"  local value = loader()\n" +
+			"  __gc_module_loading[name] = nil\n" +
+			"  if value == nil then error('Script module returned nil: ' .. name, 2) end\n" +
+			"  __gc_module_cache[name] = value\n" +
+			"  return value\n" +
+			"end\n";
+	}
+
 	private static String requireText(String value, String label)
 	{
 		if (value == null || value.trim().isEmpty())
@@ -381,13 +535,20 @@ final class GenericClientScriptRegistry
 		private final String name;
 		private final String description;
 		private final String file;
+		private final Map<String, String> modules;
 
-		private Script(String id, String name, String description, String file)
+		private Script(
+			String id,
+			String name,
+			String description,
+			String file,
+			Map<String, String> modules)
 		{
 			this.id = id;
 			this.name = name;
 			this.description = description;
 			this.file = file;
+			this.modules = Collections.unmodifiableMap(new LinkedHashMap<>(modules));
 		}
 
 		String getId()
@@ -412,6 +573,10 @@ final class GenericClientScriptRegistry
 			value.put("name", name);
 			value.put("description", description);
 			value.put("file", file);
+			if (!modules.isEmpty())
+			{
+				value.put("modules", new LinkedHashMap<>(modules));
+			}
 			return value;
 		}
 
@@ -446,5 +611,6 @@ final class GenericClientScriptRegistry
 		private String name;
 		private String description;
 		private String file;
+		private Map<String, String> modules;
 	}
 }

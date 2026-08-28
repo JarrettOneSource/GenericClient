@@ -43,7 +43,7 @@ public class GenericClientBehaviorProfileTest
 			GenericClientBehaviorProfile profile = GenericClientBehaviorProfile.fromAccountHash(accountHash);
 			assertBetween(profile.getShortReleaseProbability(), 0.02, 1.0);
 			assertBetween(profile.getShortBodyMedianSeconds(), 2.0, 6.0);
-			assertBetween(profile.getShortTailProbability(), 0.04, 0.12);
+			assertBetween(profile.getShortTailProbability(), 0.01, 0.04);
 			assertBetween(profile.getLongCadenceMinutes(), 39.9, 300.1);
 			assertBetween(profile.getLongRefractoryMinutes(), 10.0, 60.0);
 			assertBetween(profile.getLongMedianMinutes(), 7.0, 22.0);
@@ -51,6 +51,7 @@ public class GenericClientBehaviorProfileTest
 			assertBetween(profile.getPhaseLongBonusMaximum(), 0.0, 1.5);
 			assertBetween(profile.getOppositeLongBreakProbability(), 0.02, 0.15);
 			assertBetween(profile.getMouseMoveDurationMillis(), 300, 650);
+			assertBetween(profile.getTypingWordsPerMinute(), 35, 100);
 			assertBetween(profile.getReferenceDowntimePercent(), 0.0, 50.0);
 			edges.add(profile.getIdleEdge());
 		}
@@ -111,6 +112,8 @@ public class GenericClientBehaviorProfileTest
 			(Double) value.get("long_cadence_minutes"), 0.0);
 		assertEquals((long) profile.getMouseMoveDurationMillis(),
 			value.get("mouse_move_duration_millis"));
+		assertEquals((long) profile.getTypingWordsPerMinute(),
+			value.get("typing_words_per_minute"));
 	}
 
 	@Test
@@ -127,7 +130,8 @@ public class GenericClientBehaviorProfileTest
 			GenericClientBehaviorProfile.LongBreakMode.LOGOUT,
 			0.20,
 			GenericClientBehaviorProfile.Edge.BOTTOM,
-			775));
+			775,
+			90));
 
 		assertTrue(custom.isCustomized());
 		assertEquals(generated.getId(), custom.getId());
@@ -143,6 +147,7 @@ public class GenericClientBehaviorProfileTest
 			custom.getFavoredLongBreakMode());
 		assertEquals(GenericClientBehaviorProfile.Edge.BOTTOM, custom.getIdleEdge());
 		assertEquals(775, custom.getMouseMoveDurationMillis());
+		assertEquals(90, custom.getTypingWordsPerMinute());
 		assertTrue((Boolean) custom.toMap().get("customized"));
 		assertTrue(custom.getSummary().contains("90%"));
 		assertTrue(custom.getSummary().contains("200 active minutes"));

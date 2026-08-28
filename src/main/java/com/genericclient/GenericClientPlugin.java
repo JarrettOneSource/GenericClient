@@ -24,6 +24,7 @@ import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Player;
 import net.runelite.api.events.AccountHashChanged;
+import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuOptionClicked;
@@ -32,9 +33,11 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.input.MouseManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.ui.DrawManager;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 
@@ -48,7 +51,6 @@ import net.runelite.client.ui.overlay.OverlayManager;
 public final class GenericClientPlugin extends Plugin
 {
 	private static final String LOG_PREFIX = "[GenericClient]";
-	private static final int NPC_LOG_LIMIT = 25;
 
 	@Inject
 	private Client client;
@@ -69,38 +71,59 @@ public final class GenericClientPlugin extends Plugin
 	private ClientToolbar clientToolbar;
 
 	@Inject
+	private DrawManager drawManager;
+
+	@Inject
 	private ScheduledExecutorService executor;
 
 	@Inject
 	private ConfigManager configManager;
 
+	@Inject
+	private MouseManager mouseManager;
+
 	private volatile String lifecycle = "CREATED";
 	private volatile String gameStateName = "UNKNOWN";
 	private volatile String lastStatus = "Plugin instance created";
 	private volatile long tickCount;
-	private volatile int nearbyNpcCount;
 	private volatile Instant startedAt;
-	private boolean initialNpcSnapshotLogged;
 
 	private GenericClientDashboard panel;
 	private GenericClientBreakOverlay breakOverlay;
 	private GenericClientScriptOverlay scriptOverlay;
 	private GenericClientControlServer controlServer;
 	private GenericClientGameInput gameInput;
+	private GenericClientMenuInput menuInput;
 	private GenericClientNpcInput npcInput;
+	private GenericClientRunInput runInput;
+	private GenericClientObjectInput objectInput;
+	private GenericClientInventoryInput inventoryInput;
+	private GenericClientGroundItemInput groundItemInput;
+	private GenericClientDialogueInput dialogueInput;
+	private GenericClientQuestActions questActions;
 	private GenericClientCombatInput combatInput;
 	private GenericClientSyntheticMouse syntheticMouse;
+	private GenericClientSyntheticKeyboard syntheticKeyboard;
+	private GenericClientBankInput bankInput;
+	private GenericClientGrandExchangeInput grandExchangeInput;
+	private GenericClientSpellInput spellInput;
+	private GenericClientAutocastInput autocastInput;
+	private GenericClientUiInput uiInput;
+	private GenericClientEmergencyController emergencyController;
 	private GenericClientSessionController sessionController;
 	private GenericClientBehaviorController behaviorController;
 	private GenericClientMouseRecorder mouseRecorder;
 	private GenericClientWalker walker;
 	private GenericClientLuaHost luaHost;
+	private GenericClientAutomationScheduler automationScheduler;
+	private GenericClientScreenshot screenshot;
 	private NavigationButton navigationButton;
 	private Path mouseProfilesDirectory;
 	private volatile GenericClientMouseProfile mouseProfile;
 	private volatile GenericClientSnapshot latestSnapshot;
 	private final GenericClientBankCache bankCache = new GenericClientBankCache();
 	private final GenericClientQuestCache questCache = new GenericClientQuestCache();
+	private final GenericClientGameMessageBuffer gameMessages = new GenericClientGameMessageBuffer();
 	private ScheduledFuture<?> panelRefreshFuture;
 
 	@Override
@@ -110,7 +133,6 @@ public final class GenericClientPlugin extends Plugin
 		lifecycle = "RUNNING";
 		gameStateName = client.getGameState().name();
 		lastStatus = "PLUGIN_STARTED stock RuneLite loaded GenericClient";
-		initialNpcSnapshotLogged = false;
 		mouseProfilesDirectory = net.runelite.client.RuneLite.RUNELITE_DIR.toPath()
 			.resolve("genericclient")
 			.resolve("mouse-profiles");
@@ -126,6 +148,8 @@ public final class GenericClientPlugin extends Plugin
 			new java.awt.Point(mousePosition.getX(), mousePosition.getY()),
 			mouseEffectOverlay,
 			this::publishResult);
+		syntheticKeyboard = new GenericClientSyntheticKeyboard(
+			client.getCanvas(), executor, this::publishResult, this::typingWordsPerMinute);
 		sessionController = new GenericClientSessionController(
 			GenericClientSessionController.runeliteView(client, clientThread),
 			GenericClientSessionController.syntheticInput(syntheticMouse, client.getCanvas()),
@@ -160,11 +184,13 @@ public final class GenericClientPlugin extends Plugin
 			GenericClientBehaviorController.systemClock(),
 			GenericClientBehaviorController.secureRandom(),
 			this::publishResult);
-		breakOverlay = new GenericClientBreakOverlay(() ->
-		{
-			GenericClientBehaviorController behaviors = behaviorController;
-			return behaviors == null ? null : behaviors.status();
-		});
+		breakOverlay = new GenericClientBreakOverlay(
+			() ->
+			{
+				GenericClientBehaviorController behaviors = behaviorController;
+				return behaviors == null ? null : behaviors.status();
+			},
+			behaviorController::endActiveBreak);
 		gameInput = new GenericClientGameInput(
 			client,
 			clientThread,
@@ -172,13 +198,60 @@ public final class GenericClientPlugin extends Plugin
 			syntheticMouse,
 			behaviorController,
 			this::publishResult);
-		npcInput = new GenericClientNpcInput(
+		menuInput = new GenericClientMenuInput(
 			client,
 			clientThread,
 			executor,
 			syntheticMouse,
 			behaviorController,
 			this::publishResult);
+		runInput = new GenericClientRunInput(client, clientThread, executor, menuInput);
+		npcInput = new GenericClientNpcInput(
+			client, clientThread, executor, menuInput, this::publishResult);
+		spellInput = new GenericClientSpellInput(client, clientThread, executor, menuInput, npcInput);
+		autocastInput = new GenericClientAutocastInput(
+			client, clientThread, executor, menuInput, this::publishResult);
+		uiInput = new GenericClientUiInput(syntheticKeyboard, behaviorController);
+		objectInput = new GenericClientObjectInput(client, clientThread, executor, menuInput);
+		inventoryInput = new GenericClientInventoryInput(client, clientThread, executor, menuInput);
+		groundItemInput = new GenericClientGroundItemInput(
+			client, clientThread, executor, menuInput);
+		dialogueInput = new GenericClientDialogueInput(client, menuInput);
+		emergencyController = new GenericClientEmergencyController(
+			(itemId, action) -> inventoryInput.interact(itemId, null, action, false),
+			this::startEmergencyEscape,
+			behaviorController::endActiveBreak,
+			this::stopForEmergency,
+			this::publishResult);
+		bankInput = new GenericClientBankInput(
+			client,
+			clientThread,
+			executor,
+			menuInput,
+			syntheticKeyboard,
+			behaviorController,
+			this::publishResult);
+		grandExchangeInput = new GenericClientGrandExchangeInput(
+			client,
+			clientThread,
+			executor,
+			menuInput,
+			syntheticKeyboard,
+			behaviorController,
+			() -> latestSnapshot,
+			this::publishResult);
+		questActions = new GenericClientQuestActions(
+			objectInput,
+			inventoryInput,
+			npcInput,
+			groundItemInput,
+			dialogueInput,
+			bankInput,
+			grandExchangeInput,
+			spellInput,
+			autocastInput,
+			uiInput,
+			emergencyController);
 		combatInput = new GenericClientCombatInput(
 			client,
 			clientThread,
@@ -188,33 +261,46 @@ public final class GenericClientPlugin extends Plugin
 			this::publishResult);
 		mouseRecorder = new GenericClientMouseRecorder(
 			client.getCanvas(),
-			() -> gameInput.isRunning() || npcInput.isRunning() || combatInput.isRunning() ||
+			() -> gameInput.isRunning() || menuInput.isRunning() || combatInput.isRunning() ||
+				syntheticKeyboard.isTyping() ||
 				syntheticMouse.isMoving());
-		walker = new GenericClientWalker(gameInput, collisionMap, this::publishResult);
+		walker = new GenericClientWalker(
+			gameInput, objectInput, runInput, collisionMap, this::publishResult);
 		luaHost = new GenericClientLuaHost(
 			net.runelite.client.RuneLite.RUNELITE_DIR.toPath().resolve("genericclient").resolve("scripts"),
 			gameInput::walkToRandomTile,
 			walker::walkTo,
 			npcInput::interact,
 			combatInput::setMode,
+			questActions::execute,
 			this::cancelActiveActions,
 			behaviorController,
 			this::publishResult);
+		automationScheduler = new GenericClientAutomationScheduler(
+			net.runelite.client.RuneLite.RUNELITE_DIR.toPath()
+				.resolve("genericclient").resolve("automation"),
+			luaHost,
+			this::publishResult);
+		screenshot = new GenericClientScreenshot(drawManager, executor);
 		scriptOverlay = new GenericClientScriptOverlay(luaHost::getActiveScriptView);
 		controlServer = new GenericClientControlServer(
 			config.controlPort(),
 			luaHost,
+			automationScheduler,
 			sessionController::logout,
 			sessionController::ensureLoggedIn,
 			this::controlStatus,
 			this::accountNote,
 			this::setAccountNote,
+			screenshot::capture,
+			behaviorController::endActiveBreak,
 			this::publishResult);
 		controlServer.start();
 		panel = new GenericClientDashboard(
 			javax.swing.SwingUtilities.getWindowAncestor(client.getCanvas()),
 			dashboardActions(),
-			luaHost);
+			luaHost,
+			automationScheduler);
 		navigationButton = NavigationButton.builder()
 			.tooltip("GenericClient")
 			.icon(createIcon())
@@ -224,6 +310,7 @@ public final class GenericClientPlugin extends Plugin
 
 		overlayManager.add(mouseEffectOverlay);
 		overlayManager.add(breakOverlay);
+		mouseManager.registerMouseListener(breakOverlay.getMouseListener());
 		overlayManager.add(scriptOverlay);
 		clientToolbar.addNavigation(navigationButton);
 		refreshPanel();
@@ -271,6 +358,16 @@ public final class GenericClientPlugin extends Plugin
 			controlServer.close();
 			controlServer = null;
 		}
+		if (screenshot != null)
+		{
+			screenshot.close();
+			screenshot = null;
+		}
+		if (automationScheduler != null)
+		{
+			automationScheduler.close();
+			automationScheduler = null;
+		}
 		if (luaHost != null)
 		{
 			luaHost.close();
@@ -298,8 +395,32 @@ public final class GenericClientPlugin extends Plugin
 		}
 		if (npcInput != null)
 		{
-			npcInput.close();
 			npcInput = null;
+		}
+		if (bankInput != null)
+		{
+			bankInput.close();
+			bankInput = null;
+		}
+		if (grandExchangeInput != null)
+		{
+			grandExchangeInput.close();
+			grandExchangeInput = null;
+		}
+		questActions = null;
+		spellInput = null;
+		autocastInput = null;
+		uiInput = null;
+		emergencyController = null;
+		dialogueInput = null;
+		groundItemInput = null;
+		inventoryInput = null;
+		objectInput = null;
+		runInput = null;
+		if (menuInput != null)
+		{
+			menuInput.close();
+			menuInput = null;
 		}
 		if (combatInput != null)
 		{
@@ -316,9 +437,15 @@ public final class GenericClientPlugin extends Plugin
 			syntheticMouse.close();
 			syntheticMouse = null;
 		}
+		if (syntheticKeyboard != null)
+		{
+			syntheticKeyboard.close();
+			syntheticKeyboard = null;
+		}
 		overlayManager.remove(mouseEffectOverlay);
 		if (breakOverlay != null)
 		{
+			mouseManager.unregisterMouseListener(breakOverlay.getMouseListener());
 			overlayManager.remove(breakOverlay);
 			breakOverlay = null;
 		}
@@ -340,6 +467,10 @@ public final class GenericClientPlugin extends Plugin
 	public void onGameStateChanged(GameStateChanged event)
 	{
 		gameStateName = event.getGameState().name();
+		if (event.getGameState() != GameState.LOGGED_IN)
+		{
+			latestSnapshot = null;
+		}
 		GenericClientBehaviorController behaviors = behaviorController;
 		if (behaviors != null)
 		{
@@ -350,7 +481,6 @@ public final class GenericClientPlugin extends Plugin
 		{
 			activateBehaviorProfile();
 			postChat("GenericClient loaded");
-			logNearbyNpcsOnClientThread();
 		}
 	}
 
@@ -359,6 +489,7 @@ public final class GenericClientPlugin extends Plugin
 	{
 		bankCache.clear();
 		questCache.clear();
+		gameMessages.clear();
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
 			activateBehaviorProfile();
@@ -366,12 +497,23 @@ public final class GenericClientPlugin extends Plugin
 	}
 
 	@Subscribe
+	public void onChatMessage(ChatMessage event)
+	{
+		gameMessages.add(tickCount, event);
+	}
+
+	@Subscribe
 	public void onGameTick(GameTick event)
 	{
 		tickCount++;
-		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(client, tickCount, bankCache, questCache);
+		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(
+			client, tickCount, bankCache, questCache, gameMessages.snapshot());
 		latestSnapshot = snapshot;
-		nearbyNpcCount = snapshot.countNearbyNpcs(config.npcLogRadius());
+		GenericClientEmergencyController emergency = emergencyController;
+		if (emergency != null)
+		{
+			emergency.publishGameTick(snapshot);
+		}
 		GenericClientBehaviorController behaviors = behaviorController;
 		if (behaviors != null)
 		{
@@ -387,14 +529,14 @@ public final class GenericClientPlugin extends Plugin
 		{
 			scripts.publishGameTick(snapshot);
 		}
-		if (!initialNpcSnapshotLogged && client.getLocalPlayer() != null)
+		GenericClientAutomationScheduler automations = automationScheduler;
+		if (automations != null)
 		{
-			logNearbyNpcsOnClientThread();
+			automations.publishGameTick(snapshot);
 		}
 		if (tickCount == 1)
 		{
-			log.info("{} FIRST_GAME_TICK state={} nearbyNpcCount={}",
-				LOG_PREFIX, client.getGameState(), nearbyNpcCount);
+			log.info("{} FIRST_GAME_TICK state={}", LOG_PREFIX, client.getGameState());
 		}
 		if (tickCount % 5 == 0)
 		{
@@ -410,10 +552,10 @@ public final class GenericClientPlugin extends Plugin
 		{
 			input.onMenuOptionClicked(event);
 		}
-		GenericClientNpcInput npc = npcInput;
-		if (npc != null)
+		GenericClientMenuInput menu = menuInput;
+		if (menu != null)
 		{
-			npc.onMenuOptionClicked(event);
+			menu.onMenuOptionClicked(event);
 		}
 	}
 
@@ -444,14 +586,13 @@ public final class GenericClientPlugin extends Plugin
 				? "unknown"
 				: String.valueOf(getClass().getProtectionDomain().getCodeSource().getLocation());
 			log.info(
-				"{} DIAGNOSTICS lifecycle={} gameState={} ticks={} nearbyNpcs={} playerLocation={} " +
+				"{} DIAGNOSTICS lifecycle={} gameState={} ticks={} playerLocation={} " +
 					"runeliteVersion={} gameRevision={} mouseProfile={} mouseTemplates={} mouseDurationMs={} " +
 					"classLoader={} codeSource={} clientThread={} uptime={}",
 				LOG_PREFIX,
 				lifecycle,
 				client.getGameState(),
 				tickCount,
-				nearbyNpcCount,
 				playerLocation,
 				RuneLiteProperties.getVersion(),
 				client.getRevision(),
@@ -467,34 +608,6 @@ public final class GenericClientPlugin extends Plugin
 		});
 	}
 
-	void logNearbyNpcs()
-	{
-		clientThread.invoke(this::logNearbyNpcsOnClientThread);
-	}
-
-	private void logNearbyNpcsOnClientThread()
-	{
-		if (client.getGameState() != GameState.LOGGED_IN || client.getLocalPlayer() == null)
-		{
-			publishResult("NPC_SNAPSHOT_ABORTED player_not_logged_in");
-			return;
-		}
-
-		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(client, tickCount, bankCache, questCache);
-		initialNpcSnapshotLogged = true;
-		nearbyNpcCount = snapshot.countNearbyNpcs(config.npcLogRadius());
-		int logged = Math.min(nearbyNpcCount, NPC_LOG_LIMIT);
-		String panelOutput = snapshot.formatNpcDiagnostics(config.npcLogRadius(), NPC_LOG_LIMIT);
-		log.info("{} NPC_SNAPSHOT\n{}", LOG_PREFIX, panelOutput);
-		GenericClientDashboard currentPanel = panel;
-		if (currentPanel != null)
-		{
-			currentPanel.updateNpcDiagnostics(panelOutput);
-		}
-		publishResult("NPC_SNAPSHOT_WRITTEN logged=" + logged + " total=" + nearbyNpcCount);
-		postChat("GenericClient logged " + logged + " nearby NPCs");
-	}
-
 	private void publishResult(String result)
 	{
 		lastStatus = result;
@@ -503,7 +616,6 @@ public final class GenericClientPlugin extends Plugin
 		if (result.startsWith("WALK_CLICK_EXECUTED"))
 		{
 			postChat("GenericClient clicked a ground tile");
-			logNearbyNpcs();
 		}
 	}
 
@@ -609,6 +721,12 @@ public final class GenericClientPlugin extends Plugin
 		try
 		{
 			behaviors.activateAccount(accountHash);
+			GenericClientAutomationScheduler automations = automationScheduler;
+			if (automations != null)
+			{
+				automations.activateProfile(
+					GenericClientBehaviorProfile.fromAccountHash(accountHash).getId());
+			}
 		}
 		catch (IOException | RuntimeException exception)
 		{
@@ -624,12 +742,6 @@ public final class GenericClientPlugin extends Plugin
 			public void printDiagnostics()
 			{
 				GenericClientPlugin.this.printDiagnostics();
-			}
-
-			@Override
-			public void logNearbyNpcs()
-			{
-				GenericClientPlugin.this.logNearbyNpcs();
 			}
 
 			@Override
@@ -745,7 +857,10 @@ public final class GenericClientPlugin extends Plugin
 		GenericClientSnapshot snapshot = latestSnapshot;
 		value.put("runtime", snapshot == null ? null : snapshot.read("runtime", null));
 		value.put("player", snapshot == null ? null : snapshot.read("player", null));
-		value.put("nearby_npc_count", (long) nearbyNpcCount);
+		value.put("recent_messages",
+			snapshot == null
+				? new ArrayList<>()
+				: snapshot.read("messages", Collections.singletonMap("limit", 20L)));
 		GenericClientMouseProfile profile = mouseProfile;
 		if (profile != null)
 		{
@@ -759,6 +874,10 @@ public final class GenericClientPlugin extends Plugin
 		value.put("lua", host == null ? null : host.controlState());
 		GenericClientBehaviorController behaviors = behaviorController;
 		value.put("behavior", behaviors == null ? null : behaviors.status());
+		GenericClientAutomationScheduler automations = automationScheduler;
+		value.put("automation", automations == null ? null : automations.status());
+		GenericClientEmergencyController emergency = emergencyController;
+		value.put("safety", emergency == null ? null : emergency.status());
 		GenericClientControlServer bridge = controlServer;
 		value.put("control_url", bridge == null ? null : bridge.getUrl());
 		return value;
@@ -771,16 +890,55 @@ public final class GenericClientPlugin extends Plugin
 		{
 			activeWalker.cancelActive(reason);
 		}
-		GenericClientNpcInput activeNpcInput = npcInput;
-		if (activeNpcInput != null)
+		GenericClientMenuInput activeMenuInput = menuInput;
+		if (activeMenuInput != null)
 		{
-			activeNpcInput.cancel(reason);
+			activeMenuInput.cancel(reason);
 		}
 		GenericClientCombatInput activeCombatInput = combatInput;
 		if (activeCombatInput != null)
 		{
 			activeCombatInput.cancel(reason);
 		}
+		GenericClientBankInput activeBankInput = bankInput;
+		if (activeBankInput != null)
+		{
+			activeBankInput.cancel(reason);
+		}
+		GenericClientGrandExchangeInput activeGrandExchangeInput = grandExchangeInput;
+		if (activeGrandExchangeInput != null)
+		{
+			activeGrandExchangeInput.cancel(reason);
+		}
+	}
+
+	private java.util.concurrent.CompletableFuture<?> stopForEmergency(String reason)
+	{
+		cancelActiveActions(reason);
+		GenericClientLuaHost host = luaHost;
+		return host == null
+			? java.util.concurrent.CompletableFuture.completedFuture(null)
+			: host.stop();
+	}
+
+	private java.util.concurrent.CompletableFuture<Map<String, Object>> startEmergencyEscape(
+		GenericClientEmergencyController.Escape escape)
+	{
+		GenericClientWalker activeWalker = walker;
+		if (activeWalker == null)
+		{
+			Map<String, Object> receipt = new LinkedHashMap<>();
+			receipt.put("status", "rejected");
+			receipt.put("result", "walker_unavailable");
+			receipt.put("click_count", 0L);
+			return java.util.concurrent.CompletableFuture.completedFuture(receipt);
+		}
+		java.util.concurrent.CompletableFuture<Map<String, Object>> walk = activeWalker.walkTo(
+			escape.getDestination(), escape.getWithin(), 300, false);
+		walk.whenComplete((receipt, error) -> publishResult(error == null
+			? "EMERGENCY_ESCAPE_COMPLETED status=" + receipt.get("status")
+			: "EMERGENCY_ESCAPE_FAILED message=" + error.getMessage()));
+		return walk;
 	}
 
 	private String accountNote()
@@ -809,6 +967,8 @@ public final class GenericClientPlugin extends Plugin
 		}
 		GenericClientBehaviorController behaviors = behaviorController;
 		currentPanel.updateBehaviorState(behaviors == null ? null : behaviors.status());
+		GenericClientAutomationScheduler automations = automationScheduler;
+		currentPanel.updateAutomationState(automations == null ? null : automations.status());
 		GenericClientLuaHost scripts = luaHost;
 		if (scripts != null)
 		{
@@ -834,6 +994,14 @@ public final class GenericClientPlugin extends Plugin
 		return behaviors == null
 			? GenericClientBehaviorProfile.DEFAULT_MOUSE_MOVE_DURATION_MILLIS
 			: behaviors.mouseMoveDurationMillis();
+	}
+
+	private int typingWordsPerMinute()
+	{
+		GenericClientBehaviorController behaviors = behaviorController;
+		return behaviors == null
+			? GenericClientBehaviorProfile.DEFAULT_TYPING_WORDS_PER_MINUTE
+			: behaviors.typingWordsPerMinute();
 	}
 
 	private static BufferedImage createIcon()

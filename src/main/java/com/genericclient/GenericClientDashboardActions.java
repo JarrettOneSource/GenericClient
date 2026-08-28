@@ -6,8 +6,6 @@ interface GenericClientDashboardActions
 {
 	void printDiagnostics();
 
-	void logNearbyNpcs();
-
 	void walkToRandomTile();
 
 	void setMouseProfile(String file);

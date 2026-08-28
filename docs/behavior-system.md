@@ -19,7 +19,7 @@ rare short and long breaks.
 | --- | --- |
 | Post-action micro probability | 2-100%, population midpoint 35% |
 | Micro body median | 2-6 seconds |
-| Micro tail | 4-12% chance of a log-uniform 12-120 second duration |
+| Micro tail | 1-4% chance of a log-uniform 12-120 second duration |
 | Micro hard bounds | At least 1 second and strictly below 120 seconds |
 | Long cadence | 40-300 active minutes, population midpoint about 110 |
 | Long median | 7-22 minutes |
@@ -28,12 +28,14 @@ rare short and long breaks.
 | Long-mode reversal | 2-15% chance of the non-favored AFK/logout choice |
 | Idle edge | One stable choice from left, right, top, or bottom |
 | Mouse move duration | 300-650 milliseconds in 25 ms steps |
+| Typing speed | 35-100 WPM in 5 WPM steps |
 
 The dashboard and MCP status expose a title and plain-language summary generated
 only from these numeric values. That text never feeds back into behavior.
 
-While a break is active, a small top-center overlay shows only its kind and
-remaining time. It disappears completely when the profile is ready.
+While a break is active, a small top-center overlay shows its kind, remaining
+time, and a compact × that ends either break type without sending the click to
+the game. It disappears completely when the profile is ready.
 Long breaks also show a transient **Break** banner above the dashboard's
 connection status. Its × button manually ends only the active long break;
 micro breaks keep their original timer.
@@ -43,7 +45,7 @@ micro breaks keep their original timer.
 The Settings page can override the understandable profile controls per account:
 micro chance and duration, long-micro chance, long-break interval and duration,
 phase boost, preferred AFK/logout style, style-switch chance, idle edge, and
-mouse move duration.
+mouse move duration, and typing speed from 20-180 WPM.
 Derived refractory, hazard scale, summary, and downtime are recomputed from the
 custom values. **Use seeded** deletes the override and restores the exact
 account-derived profile.
@@ -56,8 +58,8 @@ profile ID is a one-way derived identifier; the raw account hash is not stored.
 A composite client interaction evaluates breaks. For walking, one interaction
 contains any needed camera turn, one recorded-template cursor movement, and the
 click that advances the interaction. Context-menu walking treats its right-click
-and menu-selection click as separate interactions and reopens the menu if a
-break closes it.
+and menu-selection click as one interaction; no break may run between opening
+the menu and selecting its row.
 Every dispatched route interaction runs its own before/after evaluation. A
 `walk.to` task containing eight route clicks therefore performs eight micro
 rolls, not one roll around the whole task. Low-level mouse path samples do not
@@ -132,6 +134,11 @@ remaining timer, restores the Jagex-backed session when needed, resets long
 pressure, suppresses the first micro roll, and only then resumes the waiting
 script action.
 
+Manually ending a micro break cancels its remaining timer and resumes the same
+waiting action immediately. The in-game overlay exposes the same control for
+both break types; the dashboard's larger transient banner remains specific to
+long breaks.
+
 ## Phase transitions
 
 `gc.phase` marks a major completed state and evaluates a heavier profile-shaped
@@ -166,11 +173,13 @@ breaks for direct diagnostics and orchestration.
 
 ## Synthetic input
 
-Every automated mouse movement and click is delivered as client-canvas events.
+Every automated mouse movement, click, and keystroke is delivered as AWT
+client-canvas events.
 The existing recorded template matcher still generates the complete path, but
 GenericClient no longer reads or moves the operating-system pointer. Returning
 from off-canvas idle emits focus/enter events at the actual randomized edge
 crossing; leaving emits exit/focus-loss events. Synthetic events are marked so
 manual mouse-profile recording ignores them. Walking rotates the client camera through RuneLite's injected camera yaw
 target before recomputing the canvas/minimap projection; it never moves the
-operating-system cursor.
+operating-system cursor. Synthetic text timing uses the account profile's WPM
+with per-key variance and waits for the Jagex input mode before typing.

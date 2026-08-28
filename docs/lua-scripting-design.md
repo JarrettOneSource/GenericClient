@@ -16,12 +16,20 @@ Expose five script-facing primitives:
 gc.read(subject, query) -- inspect one pinned immutable frame
 gc.await(request)       -- yield for a tick, event, or semantic action receipt
 gc.log(level, event, fields)
-gc.overlay(rows)        -- publish up to three compact label/value rows
+gc.overlay(rows)        -- publish up to four compact label/value rows
 gc.next_action()        -- consume one dashboard action id, or nil
 ```
 
 `gc.phase(name, options)` is a Lua convenience wrapper over `gc.await`; it does
 not add another host callback.
+
+Manifest entries may also declare named module files. For those scripts the
+registry composes a private, cached `gc.require(name)` loader before the entry
+file runs. It can load only that entry's declared UTF-8 Lua files, rejects
+unknown/circular/nil-returning modules, and never exposes `package`, `io`, or a
+filesystem path to Lua. Small scripts remain one file; the bundled AIO Magic and
+Quest Runner scripts use modules to keep configuration, progress/state, and
+supply policy separate from orchestration.
 
 Reactive streams and a declarative reconciliation DSL were explored as radically different interfaces. Both can later be implemented as Lua libraries over these primitives. Neither belongs in the host interface.
 
@@ -33,7 +41,9 @@ The current checkout implements:
 - one active standalone script plus one persistent REPL state on one scheduler thread;
 - `gc.read` subjects `runtime`, `player`, `behavior`, `skills`, `inventory`,
   `equipment`, `bank`, `quests`, `grand_exchange`, `cash`, `combat`, the combined
-  `account` frame, and bounded `npcs` queries;
+  `account` frame, bounded `npcs` queries with clickability and line-of-sight
+  facts, bounded system `messages` without player chat, and adjacent-edge
+  `scene` collision inspection;
 - `gc.await` for `game.tick`, tick counts, the synthetic `walk.random` action,
   the same-plane `walk.to` ground-route action, `npc.interact`,
   `combat.set_style`, `combat.set_auto_retaliate`, and profile-owned
@@ -65,11 +75,13 @@ not read or moved. The complete behavior contract is in
 The MCP and manifest interface is documented in
 [`mcp-lua-control.md`](mcp-lua-control.md).
 
-The walker adds only the collision reader, A* planner, and route lifecycle needed
-by this automation. Its implementation status and limits are documented in
-[`walker-design.md`](walker-design.md). Object/item/widget actions, normalized
-dialog, and durable target references remain intentionally absent until a
-concrete automation requires each one.
+The walker combines the global collision reader with a pinned live-scene
+overlay, bounded A* planning, verified same-plane obstacle actions, and the
+route lifecycle needed by this automation. Its implementation status and limits are documented in
+[`walker-design.md`](walker-design.md). The later Magic and quest slices added
+the object, item, dialogue, bank, GE, spell, and emergency actions they actually
+exercise; their current contract is in
+[`quest-runner-design.md`](quest-runner-design.md).
 
 ### Live verification receipt
 
@@ -407,7 +419,7 @@ The active interface has five functions.
 
 ### `gc.read(subject, query)`
 
-Reads from the frame pinned when the coroutine was last resumed. Supported subjects begin with `runtime`, `player`, `npcs`, `objects`, `ground_items`, `inventory`, `widgets`, and `dialog`. Queries have a shared bounded shape:
+Reads from the frame pinned when the coroutine was last resumed. Supported subjects begin with `runtime`, `player`, `npcs`, `messages`, `objects`, `ground_items`, `inventory`, `widgets`, and `dialog`. Queries have a shared bounded shape:
 
 ```lua
 local bankers = gc.read("npcs", {
@@ -482,11 +494,15 @@ Produces a structured record. The host automatically attaches script ID, generat
 
 ### `gc.overlay(rows)`
 
-Publishes zero to three compact label/value rows. RuneLite supplies the script
+Publishes zero to four compact label/value rows. RuneLite supplies the script
 name and elapsed wall-clock runtime automatically. Passing `nil` or an empty
 array clears the script rows. The overlay is visible only while the standalone
 script is running; scripts do not control coordinates, colors, fonts, or draw
 arbitrary shapes.
+
+Within a running script, `gc.read("runtime").script_runtime_millis` reports the
+same monotonic wall-clock runtime shown in the overlay header. Scripts can use
+it for rates and ETAs without access to the operating-system clock.
 
 ```lua
 gc.overlay {

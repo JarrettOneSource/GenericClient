@@ -1,8 +1,7 @@
 # Account builder
 
-Status: active persistent goal. Baseline captured 2026-08-27 from the official
-Old School RuneScape Hiscores endpoint; live client reconciliation is pending
-the expanded Account Auditor snapshot.
+Status: active persistent goal. Historical baseline captured 2026-08-27; latest
+live reconciliation recorded 2026-08-28 after Witch's House.
 
 ## Account goal
 
@@ -27,7 +26,7 @@ Attack, Defence, and Prayer are exact caps. No script or planner may request XP
 past 80 Attack, 75 Defence, or 77 Prayer. A method whose quest reward or delayed
 XP could cross a cap is ineligible.
 
-## Current baseline
+## Historical baseline
 
 Official Hiscores returned total level 36 and total XP 1,685:
 
@@ -52,6 +51,19 @@ The account always has membership. Member quests, transportation, equipment,
 training areas, minigames, and supply methods are the default. Free-to-play
 support belongs inside each AIO script later, but does not constrain the first
 member-optimized implementation.
+
+## Current live progress
+
+The 2026-08-28 GenericClient account snapshot verified:
+
+- Attack 2 / 92 XP, Strength 4 / 300 XP, Defence 1 / 0 XP;
+- Hitpoints 25 / 8,184 XP, Ranged 1 / 12 XP, Prayer 1 / 0 XP, Magic 16 / 3,080 XP;
+- Witch's House, Ernest the Chicken, X Marks the Spot, and Learning the Ropes
+  complete; Waterfall Quest not started;
+- full 25 Hitpoints at `(2929,3455,0)`, with run enabled and 100% energy;
+- the pre-existing Old school bond sell offer still active and untouched;
+- the bank cache currently unknown, so no exact cash or supply quantity may be
+  inferred until the bank is opened again.
 
 ## Live Account Auditor receipt
 
@@ -136,15 +148,14 @@ quest list. Account Auditor must first prove current quest state and supplies.
 Each quest runner must also account for mandatory and selectable XP before it
 starts.
 
-## First bounded milestone
+## Opening milestones
 
-Waterfall Quest is the selected first substantive milestone. The current
-pay-to-play melee guide identifies it as the fastest level 1-30 opening; it has
-no skill requirement, awards 13,750 Attack and Strength XP, and is a direct
-Desert Treasure I prerequisite. The live account has not started it. Its first
-JIT supply delta is small: the bank already contains all six water runes, more
-than six air runes, food, and four of the six earth runes; rope and two earth
-runes remain to be acquired when the Quest Runner is ready.
+Witch's House was completed first to validate the framework and raise the
+account from 12 to 25 Hitpoints. The next substantive milestone is Waterfall
+Quest. It has no skill requirement, awards 13,750 Attack and Strength XP, and
+is a direct Desert Treasure I prerequisite. It remains not started. Its exact
+JIT supply deficit must be recomputed after opening the bank; the old bank audit
+is not current enough to authorize a purchase.
 
 Before running a quest that crosses dialogues, item restrictions, object
 interactions, and hostile rooms, the first live validation is a zero-cost AIO
@@ -175,6 +186,36 @@ Two live failures were fixed and regression-tested during the run:
   gone; it requires the local player tile to project into the rendered world;
 - `npc.interact` resolves a menu entry through its NPC object when the menu's
   local identifier differs from the WorldView-aware NPC index.
+
+## AIO Magic live validation
+
+The first Magic run exposed that Lumbridge goblins were an unsafe training
+method for a 10-HP account. The run reached Magic 2 at 83 XP, but its first
+emergency preemption could not reopen Inventory while Wind Strike was selected.
+The script stopped at 4 HP, the account died, and the first-death tutorial moved
+it to Death's Office. GenericClient then completed the tutorial, used the exit
+portal, returned to the grave, and reconciled every item: 395 mind runes (400
+loaded minus five casts), all six wines, and the equipped air staff. Nothing was
+lost.
+
+That recovery supplied concrete framework regressions for direct dialogue
+widgets, object/NPC camera facing, instanced object menu identity, the selected-
+spell Inventory double-click, and emergency escape latching. Controlled tests
+at full HP subsequently proved both the wine action and a no-food escape.
+
+The active Magic method now enters the Port Sarim jail's public corridor and
+casts through the locked cell bars. The core walker opens the public entrance;
+it does not treat the locked cell doors as destinations. A live Wind Strike on
+the caged Pirate consumed one mind rune and raised Magic XP from 83 to 90 while
+the player remained at 10/10 Hitpoints. AIO Magic resumes from the nearest
+route waypoint, skips the Grand Exchange when its carried loadout is already
+complete, rotates among the Pirate, Thief, Mugger, and Black knight, and keeps
+an 8-HP Port Sarim escape armed.
+
+The later Witch's House preparation and quest run advanced Magic to 16 at 3,080
+XP and Hitpoints to 25 at 8,184 XP. Fire Strike autocast, exact-ID reacquisition
+after level-up dialogue, the global 30%-HP forced-food rule, and continued
+combat after a successful wine were all exercised live.
 
 Sources:
 
@@ -214,8 +255,9 @@ Reference surfaces used for this envelope:
 
 ## Next evidence gate
 
-Install the validated build containing AIO Melee, verify the live combat-style
-index, and run only the 2 Attack target. Acceptance requires a terminal script
-receipt, Attack XP at or above 83 with level exactly 2, no continuing combat,
-positive Hitpoints, and a post-run Account Auditor snapshot. Do not extend the
-target during the same run.
+Finish and install the schema-v35 per-quest Quest Runner package. On the already
+completed Witch's House account, it must recognize terminal state, clear stale
+safety, park the synthetic mouse, and perform no quest mutation. Then implement
+Waterfall entirely inside `quest-runner/waterfall/`, prove its reducers and
+semantic actions, refresh the bank cache, acquire only the observed next-phase
+deficit while preserving 5,000,000 coins, and begin bounded live phases.

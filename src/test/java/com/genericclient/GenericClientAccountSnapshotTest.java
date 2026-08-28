@@ -7,6 +7,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 import net.runelite.api.Client;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
 import org.junit.Test;
 
 public class GenericClientAccountSnapshotTest
@@ -31,6 +33,30 @@ public class GenericClientAccountSnapshotTest
 		assertEquals(0L, inventory.toMap().get("occupied_slots"));
 		assertEquals(true, equipment.toMap().get("available"));
 		assertEquals(14L, equipment.toMap().get("slot_count"));
+	}
+
+	@Test
+	public void keepsCanonicalInventoryCapacityWhenClientArrayIsTrimmed()
+	{
+		ItemContainer container = (ItemContainer) Proxy.newProxyInstance(
+			ItemContainer.class.getClassLoader(),
+			new Class<?>[]{ItemContainer.class},
+			(proxy, method, arguments) -> "getItems".equals(method.getName())
+				? new Item[]{new Item(556, 1)}
+				: method.getReturnType().isPrimitive() ? 0 : null);
+		Client client = (Client) Proxy.newProxyInstance(
+			Client.class.getClassLoader(),
+			new Class<?>[]{Client.class},
+			(proxy, method, arguments) -> "getItemContainer".equals(method.getName())
+				? container
+				: method.getReturnType().isPrimitive() ? 0 : null);
+
+		GenericClientAccountSnapshot.ContainerSnapshot inventory =
+			GenericClientAccountSnapshot.captureContainer(
+				client, net.runelite.api.gameval.InventoryID.INV, false);
+
+		assertEquals(28L, inventory.toMap().get("slot_count"));
+		assertEquals(1L, inventory.toMap().get("occupied_slots"));
 	}
 
 	@Test

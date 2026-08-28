@@ -18,6 +18,8 @@ final class GenericClientLuaScript implements AutoCloseable
 	private static final int HOOK_INSTRUCTION_INTERVAL = 1_000;
 	private static final int DEFAULT_RANDOM_ACTION_TIMEOUT_TICKS = 8;
 	private static final int DEFAULT_NPC_ACTION_TIMEOUT_TICKS = 20;
+	private static final int DEFAULT_BANK_ACTION_TIMEOUT_TICKS = 200;
+	private static final int DEFAULT_GE_ACTION_TIMEOUT_TICKS = 300;
 	private static final int DEFAULT_WALK_ACTION_TIMEOUT_TICKS = 600;
 
 	private final GenericClientLuaHost host;
@@ -29,6 +31,7 @@ final class GenericClientLuaScript implements AutoCloseable
 	private long deadlineNanos = Long.MAX_VALUE;
 	private boolean budgetExceeded;
 	private boolean activated;
+	private long startedNanos;
 	private boolean finished = true;
 	private String terminalStatus = "COMPLETED";
 	private String faultMessage;
@@ -68,8 +71,24 @@ final class GenericClientLuaScript implements AutoCloseable
 			throw new IllegalStateException("Lua script is already activated");
 		}
 		activated = true;
+		startedNanos = host.nowNanos();
 		resolvedInputs = GenericClientScriptInput.resolve(inputs, suppliedInputs);
 		resume(resolvedInputs);
+	}
+
+	long getStartedNanos()
+	{
+		return startedNanos;
+	}
+
+	long getRuntimeMillis(long nowNanos)
+	{
+		if (!activated)
+		{
+			return 0L;
+		}
+		return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+			Math.max(0L, nowNanos - startedNanos));
 	}
 
 	List<GenericClientScriptInput> getInputs()
@@ -226,6 +245,7 @@ final class GenericClientLuaScript implements AutoCloseable
 		nextRequestId = 0;
 		currentPhase = null;
 		activated = false;
+		startedNanos = 0L;
 		inputs = Collections.emptyList();
 		actions = Collections.emptyList();
 		resolvedInputs = Collections.emptyMap();
@@ -354,7 +374,7 @@ final class GenericClientLuaScript implements AutoCloseable
 				throw new IllegalArgumentException("gc.read requires a subject string");
 			}
 			Map<?, ?> query = state.getTop() >= 2 && state.isTable(2) ? state.toMap(2) : null;
-			Object value = host.readSnapshot(pinnedSnapshot, subject, query);
+			Object value = host.readSnapshot(this, pinnedSnapshot, subject, query);
 			pushValue(state, value);
 			return 1;
 		}
@@ -523,8 +543,12 @@ final class GenericClientLuaScript implements AutoCloseable
 			String type = (String) typeValue;
 			int timeout = "walk.to".equals(type)
 				? DEFAULT_WALK_ACTION_TIMEOUT_TICKS
+				: "bank.loadout".equals(type)
+					? DEFAULT_BANK_ACTION_TIMEOUT_TICKS
+				: "ge.buy".equals(type)
+					? DEFAULT_GE_ACTION_TIMEOUT_TICKS
 				: "npc.interact".equals(type) || "combat.set_style".equals(type) ||
-					"combat.set_auto_retaliate".equals(type)
+					"combat.set_auto_retaliate".equals(type) || isQuestAction(type)
 					? DEFAULT_NPC_ACTION_TIMEOUT_TICKS
 					: DEFAULT_RANDOM_ACTION_TIMEOUT_TICKS;
 			if (request.get("timeout") instanceof Map &&
@@ -566,16 +590,27 @@ final class GenericClientLuaScript implements AutoCloseable
 				{
 					throw new IllegalArgumentException("walk.to within must be between 0 and 10");
 				}
+				if (action.get("run") != null && !(action.get("run") instanceof Boolean))
+				{
+					throw new IllegalArgumentException("walk.to run must be true or false");
+				}
+				boolean useRun = !Boolean.FALSE.equals(action.get("run"));
 				return Wait.walkAction(
 					++nextRequestId,
 					timeout,
 					new WorldPoint(x, y, plane),
 					within,
-					breaksEnabled);
+					breaksEnabled,
+					useRun);
 			}
 			if ("npc.interact".equals(type))
 			{
-				String name = requiredText(action, "name", "npc.interact");
+				Integer id = optionalNonNegativeInt(action, "id", "npc.interact");
+				String name = optionalText(action.get("name"));
+				if (id == null && name == null)
+				{
+					throw new IllegalArgumentException("npc.interact requires id or name");
+				}
 				String option = requiredText(action, "action", "npc.interact");
 				int within = action.get("within") instanceof Number
 					? ((Number) action.get("within")).intValue()
@@ -587,9 +622,19 @@ final class GenericClientLuaScript implements AutoCloseable
 				return Wait.npcAction(
 					++nextRequestId,
 					timeout,
+					id,
 					name,
 					option,
 					within,
+					breaksEnabled);
+			}
+			if (isQuestAction(type))
+			{
+				return Wait.questAction(
+					++nextRequestId,
+					timeout,
+					type,
+					copyAction(action),
 					breaksEnabled);
 			}
 			if ("combat.set_style".equals(type))
@@ -671,9 +716,19 @@ final class GenericClientLuaScript implements AutoCloseable
 			host.submitNpcInteract(
 				this,
 				wait.requestId,
+				wait.targetId,
 				wait.targetName,
 				wait.targetAction,
 				wait.within,
+				wait.breaksEnabled);
+		}
+		else if (wait.questAction != null)
+		{
+			host.submitQuestAction(
+				this,
+				wait.requestId,
+				wait.actionType,
+				wait.questAction,
 				wait.breaksEnabled);
 		}
 		else if ("combat.set_style".equals(wait.actionType))
@@ -687,13 +742,14 @@ final class GenericClientLuaScript implements AutoCloseable
 		}
 		else
 		{
-			host.submitWalkTo(
+				host.submitWalkTo(
 				this,
 				wait.requestId,
 				wait.destination,
-				wait.within,
-				wait.remainingTicks,
-				wait.breaksEnabled);
+					wait.within,
+					wait.remainingTicks,
+					wait.breaksEnabled,
+					wait.useRun);
 		}
 	}
 
@@ -707,12 +763,76 @@ final class GenericClientLuaScript implements AutoCloseable
 		return ((Number) number).intValue();
 	}
 
+	private static boolean isQuestAction(String type)
+	{
+		return "object.interact".equals(type) ||
+			"item.interact".equals(type) ||
+			"item.use_on_object".equals(type) ||
+			"item.use_on_npc".equals(type) ||
+			"ground_item.take".equals(type) ||
+			"dialogue.continue".equals(type) ||
+			"dialogue.choose".equals(type) ||
+			"bank.loadout".equals(type) ||
+			"ge.buy".equals(type) ||
+			"combat.cast".equals(type) ||
+			"combat.set_autocast".equals(type) ||
+			"ui.close".equals(type) ||
+			"safety.configure".equals(type) ||
+			"safety.clear".equals(type);
+	}
+
+	private static Map<String, Object> copyAction(Map<?, ?> value)
+	{
+		Map<String, Object> result = new LinkedHashMap<>();
+		for (Map.Entry<?, ?> entry : value.entrySet())
+		{
+			if (!(entry.getKey() instanceof String))
+			{
+				throw new IllegalArgumentException("Action keys must be strings");
+			}
+			result.put((String) entry.getKey(), normalizeLuaValue(entry.getValue()));
+		}
+		return Collections.unmodifiableMap(result);
+	}
+
 	private static String requiredText(Map<?, ?> value, String key, String actionType)
 	{
 		Object raw = value.get(key);
 		if (!(raw instanceof String) || ((String) raw).trim().isEmpty())
 		{
 			throw new IllegalArgumentException(actionType + " requires a non-empty " + key);
+		}
+		return ((String) raw).trim();
+	}
+
+	private static Integer optionalNonNegativeInt(Map<?, ?> value, String key, String actionType)
+	{
+		Object raw = value.get(key);
+		if (raw == null)
+		{
+			return null;
+		}
+		if (!(raw instanceof Number))
+		{
+			throw new IllegalArgumentException(actionType + " " + key + " must be numeric");
+		}
+		int result = ((Number) raw).intValue();
+		if (result < 0)
+		{
+			throw new IllegalArgumentException(actionType + " " + key + " cannot be negative");
+		}
+		return result;
+	}
+
+	private static String optionalText(Object raw)
+	{
+		if (raw == null)
+		{
+			return null;
+		}
+		if (!(raw instanceof String) || ((String) raw).trim().isEmpty())
+		{
+			throw new IllegalArgumentException("Optional text values must be non-empty strings");
 		}
 		return ((String) raw).trim();
 	}
@@ -866,10 +986,13 @@ final class GenericClientLuaScript implements AutoCloseable
 		private final String actionType;
 		private final WorldPoint destination;
 		private final int within;
+		private final Integer targetId;
 		private final String targetName;
 		private final String targetAction;
 		private final boolean breaksEnabled;
+		private final boolean useRun;
 		private final String phaseName;
+		private final Map<String, Object> questAction;
 		private int remainingTicks;
 		private boolean dispatched;
 
@@ -880,10 +1003,13 @@ final class GenericClientLuaScript implements AutoCloseable
 			String actionType,
 			WorldPoint destination,
 			int within,
+			Integer targetId,
 			String targetName,
 			String targetAction,
 			boolean breaksEnabled,
-			String phaseName)
+			boolean useRun,
+			String phaseName,
+			Map<String, Object> questAction)
 		{
 			this.kind = kind;
 			this.requestId = requestId;
@@ -891,27 +1017,30 @@ final class GenericClientLuaScript implements AutoCloseable
 			this.actionType = actionType;
 			this.destination = destination;
 			this.within = within;
+			this.targetId = targetId;
 			this.targetName = targetName;
 			this.targetAction = targetAction;
 			this.breaksEnabled = breaksEnabled;
+			this.useRun = useRun;
 			this.phaseName = phaseName;
+			this.questAction = questAction;
 		}
 
 		private static Wait gameTick()
 		{
-			return new Wait(WaitKind.GAME_TICK, 0, 0, null, null, 0, null, null, true, null);
+			return new Wait(WaitKind.GAME_TICK, 0, 0, null, null, 0, null, null, null, true, true, null, null);
 		}
 
 		private static Wait ticks(int ticks)
 		{
-			return new Wait(WaitKind.TICKS, 0, ticks, null, null, 0, null, null, true, null);
+			return new Wait(WaitKind.TICKS, 0, ticks, null, null, 0, null, null, null, true, true, null, null);
 		}
 
 		private static Wait randomAction(long requestId, int timeoutTicks, boolean breaksEnabled)
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "walk.random", null, 0,
-				null, null, breaksEnabled, null);
+				null, null, null, breaksEnabled, true, null, null);
 		}
 
 		private static Wait walkAction(
@@ -919,16 +1048,18 @@ final class GenericClientLuaScript implements AutoCloseable
 			int timeoutTicks,
 			WorldPoint destination,
 			int within,
-			boolean breaksEnabled)
+			boolean breaksEnabled,
+			boolean useRun)
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "walk.to", destination, within,
-				null, null, breaksEnabled, null);
+				null, null, null, breaksEnabled, useRun, null, null);
 		}
 
 		private static Wait npcAction(
 			long requestId,
 			int timeoutTicks,
+			Integer id,
 			String name,
 			String action,
 			int within,
@@ -936,7 +1067,19 @@ final class GenericClientLuaScript implements AutoCloseable
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "npc.interact", null, within,
-				name, action, breaksEnabled, null);
+				id, name, action, breaksEnabled, true, null, null);
+		}
+
+		private static Wait questAction(
+			long requestId,
+			int timeoutTicks,
+			String type,
+			Map<String, Object> action,
+			boolean breaksEnabled)
+		{
+			return new Wait(
+				WaitKind.ACTION, requestId, timeoutTicks, type, null, 0,
+				null, null, null, breaksEnabled, true, null, action);
 		}
 
 		private static Wait combatStyle(
@@ -947,7 +1090,7 @@ final class GenericClientLuaScript implements AutoCloseable
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "combat.set_style", null, style,
-				null, null, breaksEnabled, null);
+				null, null, null, breaksEnabled, true, null, null);
 		}
 
 		private static Wait combatAutoRetaliate(
@@ -958,20 +1101,20 @@ final class GenericClientLuaScript implements AutoCloseable
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "combat.set_auto_retaliate", null,
-				enabled ? 1 : 0, null, null, breaksEnabled, null);
+					enabled ? 1 : 0, null, null, null, breaksEnabled, true, null, null);
 		}
 
 		private static Wait mouseOffscreen(long requestId, int timeoutTicks)
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "mouse.offscreen", null, 0,
-				null, null, false, null);
+					null, null, null, false, true, null, null);
 		}
 
 		private static Wait phase(long requestId, String name, boolean breaksEnabled)
 		{
 			return new Wait(WaitKind.PHASE, requestId, 0, null, null, 0,
-				null, null, breaksEnabled, name);
+				null, null, null, breaksEnabled, true, name, null);
 		}
 	}
 }
