@@ -470,6 +470,11 @@ public final class GenericClientPlugin extends Plugin
 		if (event.getGameState() != GameState.LOGGED_IN)
 		{
 			latestSnapshot = null;
+			GenericClientAutomationScheduler automations = automationScheduler;
+			if (automations != null)
+			{
+				automations.clearSnapshot();
+			}
 		}
 		GenericClientBehaviorController behaviors = behaviorController;
 		if (behaviors != null)

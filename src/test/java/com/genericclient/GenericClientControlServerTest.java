@@ -113,6 +113,9 @@ public class GenericClientControlServerTest
 			assertEquals("UTC", ((Map<String, Object>) post(
 				server, "automation.config.get", new LinkedHashMap<>()).get("result")).get("zone"));
 			post(server, "automation.reload", new LinkedHashMap<>());
+			Map<String, Object> invalidEnable = new LinkedHashMap<>();
+			invalidEnable.put("enabled", "yes");
+			assertEquals(400, send(server, "automation.enable", invalidEnable).statusCode());
 			Map<String, Object> screenshotResponse = post(
 				server, "screenshot.capture", new LinkedHashMap<>());
 			assertEquals("image/png",
@@ -202,6 +205,16 @@ public class GenericClientControlServerTest
 		String method,
 		Map<String, Object> parameters) throws Exception
 	{
+		HttpResponse<String> response = send(server, method, parameters);
+		assertEquals(200, response.statusCode());
+		return new Gson().fromJson(response.body(), Map.class);
+	}
+
+	private static HttpResponse<String> send(
+		GenericClientControlServer server,
+		String method,
+		Map<String, Object> parameters) throws Exception
+	{
 		Map<String, Object> requestValue = new LinkedHashMap<>();
 		requestValue.put("method", method);
 		requestValue.put("params", parameters);
@@ -213,8 +226,7 @@ public class GenericClientControlServerTest
 		HttpResponse<String> response = HttpClient.newHttpClient().send(
 			request,
 			HttpResponse.BodyHandlers.ofString());
-		assertEquals(200, response.statusCode());
-		return new Gson().fromJson(response.body(), Map.class);
+		return response;
 	}
 
 	private static GenericClientSnapshot snapshot(long tick)

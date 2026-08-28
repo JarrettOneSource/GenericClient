@@ -56,7 +56,6 @@ and active run owner. A missing rules file is a valid disabled configuration.
       "when": {
         "all": [
           { "schedule": "work-hours" },
-          { "fact": "cash.complete", "eq": true },
           { "fact": "cash.known_total_value", "lt": 5000000 }
         ]
       },
@@ -137,7 +136,6 @@ Conditions support `all`, `any`, and `not`. A fact condition has exactly one of
 Supported skill facts are:
 
 ```text
-skills.available
 skills.total_level
 skills.<skill>.level
 skills.<skill>.boosted_level
@@ -147,7 +145,6 @@ skills.<skill>.xp
 Supported cash facts are:
 
 ```text
-cash.available
 cash.bank_known
 cash.inventory_coins
 cash.inventory_platinum_tokens

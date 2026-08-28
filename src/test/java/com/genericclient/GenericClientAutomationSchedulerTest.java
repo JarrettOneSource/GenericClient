@@ -118,6 +118,10 @@ public class GenericClientAutomationSchedulerTest
 			clock.advance(Duration.ofMinutes(11));
 			second.publishGameTick(snapshot(4, 20, 1_000L, true));
 			waitFor(() -> secondRuntime.starts.get() == 1);
+			secondRuntime.complete("COMPLETED");
+			second.publishGameTick(snapshot(5, 20, 1_000L, true));
+			waitFor(() -> String.valueOf(second.status().get("last_event")).contains("run_completed"));
+			assertEquals(1, secondRuntime.starts.get());
 		}
 		finally
 		{
@@ -192,6 +196,30 @@ public class GenericClientAutomationSchedulerTest
 			assertEquals("unknown", rules.get(0).get("truth"));
 			assertTrue(String.valueOf(rules.get(0)),
 				String.valueOf(rules.get(0).get("reason")).contains("bank wealth is unknown"));
+		}
+		finally
+		{
+			scheduler.close();
+		}
+	}
+
+	@Test
+	public void holdsAnExistingLeaseButDoesNotUseStaleFactsAfterLogout() throws Exception
+	{
+		ManualClock clock = new ManualClock(Instant.parse("2026-08-31T12:00:00Z"));
+		FakeRuntime runtime = new FakeRuntime("low-script");
+		GenericClientAutomationScheduler scheduler = scheduler("logout", runtime, clock);
+		try
+		{
+			scheduler.activateProfile(PROFILE).get(2, TimeUnit.SECONDS);
+			scheduler.configure(config(oneRuleJson("PT10M"))).get(2, TimeUnit.SECONDS);
+			scheduler.publishGameTick(snapshot(1, 20, 1_000L, true));
+			waitFor(() -> runtime.starts.get() == 1);
+
+			scheduler.clearSnapshot();
+			waitFor(() -> "holding".equals(scheduler.status().get("mode")));
+			assertEquals(0, runtime.stops.get());
+			assertTrue(String.valueOf(scheduler.status().get("detail")).contains("unavailable"));
 		}
 		finally
 		{

@@ -25,9 +25,9 @@ final class GenericClientAutomationConfig
 	private static final Pattern ID = Pattern.compile("[a-z0-9][a-z0-9_-]{0,63}");
 	private static final Pattern CLOCK_TIME = Pattern.compile("[0-9]{2}:[0-9]{2}");
 	private static final Pattern FACT = Pattern.compile(
-		"(?:skills\\.(?:available|total_level)|" +
+		"(?:skills\\.total_level|" +
 		"skills\\.[a-z][a-z0-9_]*\\.(?:level|boosted_level|xp)|" +
-		"cash\\.(?:available|bank_known|inventory_coins|inventory_platinum_tokens|" +
+		"cash\\.(?:bank_known|inventory_coins|inventory_platinum_tokens|" +
 		"inventory_value|bank_coins|bank_platinum_tokens|bank_value|known_total_value|complete))");
 	private static final Gson GSON = new Gson();
 
@@ -475,8 +475,7 @@ final class GenericClientAutomationConfig
 					"Fact condition " + fact + " requires exactly one comparison operator");
 			}
 			JsonElement expected = expected();
-			boolean booleanFact = "skills.available".equals(fact) ||
-				"cash.available".equals(fact) || "cash.bank_known".equals(fact) ||
+			boolean booleanFact = "cash.bank_known".equals(fact) ||
 				"cash.complete".equals(fact);
 			if (booleanFact && (eq == null && ne == null))
 			{

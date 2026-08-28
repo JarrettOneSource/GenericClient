@@ -97,6 +97,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 			}
 			stopOwnedRun("account_changed");
 			this.profileId = profileId;
+			latestSnapshot = null;
 			manualPauseRequested = false;
 			loadProfile();
 			evaluate("profile_activated");
@@ -114,6 +115,19 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		{
 			latestSnapshot = snapshot;
 			evaluate("game_tick");
+		});
+	}
+
+	void clearSnapshot()
+	{
+		if (closed)
+		{
+			return;
+		}
+		executor.execute(() ->
+		{
+			latestSnapshot = null;
+			evaluate("game_state_unavailable");
 		});
 	}
 
@@ -154,6 +168,11 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		return submit(() ->
 		{
 			ensureProfile();
+			if (fault != null)
+			{
+				throw new IllegalStateException(
+					"Replace or repair the invalid automation configuration before enabling it");
+			}
 			GenericClientAutomationConfig candidate = config.withEnabled(enabled);
 			store.saveConfig(profileId, candidate);
 			config = candidate;
@@ -201,6 +220,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 			GenericClientAutomationConfig loadedConfig = store.loadConfig(profileId);
 			validateScripts(loadedConfig);
 			GenericClientAutomationStore.State loadedState = store.loadState(profileId);
+			loadedState.setHandledRunId(-1L);
 			loadedState.clearExpiredCooldowns(clock.millis());
 			config = loadedConfig;
 			schedules = GenericClientSchedule.compile(loadedConfig);
