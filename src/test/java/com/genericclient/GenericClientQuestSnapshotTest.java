@@ -15,6 +15,7 @@ import net.runelite.api.Tile;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.VarbitID;
 import org.junit.Test;
 
 public class GenericClientQuestSnapshotTest
@@ -48,6 +49,7 @@ public class GenericClientQuestSnapshotTest
 	{
 		Map<Integer, Integer> captured = new LinkedHashMap<>();
 		captured.put(9110, 1);
+		captured.put(VarbitID.MACRO_PINBALL_SCORE, 7);
 		captured.put(9585, 3);
 		GenericClientQuestSnapshot snapshot = new GenericClientQuestSnapshot(
 			true,
@@ -56,12 +58,16 @@ public class GenericClientQuestSnapshotTest
 			Collections.emptyList(),
 			GenericClientQuestSnapshot.DialogueSnapshot.closed());
 		Map<String, Object> query = new LinkedHashMap<>();
-		query.put("varbits", Arrays.asList(9110L, 9585L));
+		query.put("varbits", Arrays.asList(
+			9110L,
+			(long) VarbitID.MACRO_PINBALL_SCORE,
+			9585L));
 
 		Map<String, Object> value = (Map<String, Object>) snapshot.read("vars", query);
 		Map<Long, Object> selected = (Map<Long, Object>) value.get("varbits");
 
 		assertEquals(1L, selected.get(9110L));
+		assertEquals(7L, selected.get((long) VarbitID.MACRO_PINBALL_SCORE));
 		assertEquals(3L, selected.get(9585L));
 	}
 

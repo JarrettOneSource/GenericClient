@@ -130,3 +130,19 @@ exact affirmative dialogue `Yes, I'll help you unlock your chest.`, reads the
 three copied dial varbits (`9585`, `9593`, `9594`) and immutable widget labels,
 rotates each four-state dial with `ui.click`, and requires the reward chat
 receipt before returning `COMPLETED`.
+
+## Pinball evidence
+
+On 2026-08-29 GenericClient live-detected Flippa NPC `6744`, interrupted AIO
+Magic, and entered the Pinball arena through the exact affirmative dialogue
+`Yes, pinball is fun.`. The client cache defines current post, next post, score,
+and completion as varbits `2119` through `2122` on varp `727`. Live play proved
+the current-post mapping: tree `0`, iron `1`, coal `2`, fishing `3`, and essence
+`4`. GenericClient tagged ten correct posts, observed score `10` and completion
+`1`, exited through object `9293`, received `2 x Diamond`, and resumed AIO Magic.
+
+The bundled `pinball` solver is registered for NPC `6744`. It uses those copied
+varbits and observed scene objects, so it is independent of camera angle,
+screen coordinates, and instance placement. Event dialogue, post tags, and the
+exit all bypass breaks as one time-sensitive interruption; the solver returns
+only after the reward message is present.

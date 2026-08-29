@@ -34,6 +34,13 @@
       "random_events": [5426]
     },
     {
+      "id": "pinball",
+      "name": "Pinball",
+      "description": "Play Flippa's pinball game from the live target and score state.",
+      "file": "pinball.lua",
+      "random_events": [6744]
+    },
+    {
         "id": "quest-runner",
         "name": "Quest Runner",
         "description": "Run resumable quest phases from observed state with strict safety gates and exact interaction receipts.",

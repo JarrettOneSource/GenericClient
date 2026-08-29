@@ -23,7 +23,7 @@ public class GenericClientScriptRegistryTest
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(
 			temporaryFolder.newFolder("scripts").toPath());
 
-		assertEquals(7, registry.list().size());
+		assertEquals(8, registry.list().size());
 		assertEquals("Account Auditor", registry.get("account-auditor").getName());
 		assertEquals("AIO Melee Trainer", registry.get("aio-melee").getName());
 		assertEquals("AIO Magic Trainer", registry.get("aio-magic").getName());
@@ -46,6 +46,8 @@ public class GenericClientScriptRegistryTest
 		assertTrue(registry.readSource("account-auditor").contains("gc.read(\"account\")"));
 		assertEquals("capt-arnav", registry.findRandomEventSolver(5426).getId());
 		assertTrue(registry.readSource("capt-arnav").contains("gc.read(\"widgets\","));
+		assertEquals("pinball", registry.findRandomEventSolver(NpcID.PINBALL_INVITATION).getId());
+		assertTrue(registry.readSource("pinball").contains("VARBITS.score"));
 		assertEquals("Walker", registry.get("walker").getName());
 		assertTrue(registry.readSource("walker").contains("id = \"destination\""));
 		assertTrue(registry.readSource("walker").contains("varrock_center"));
@@ -96,11 +98,12 @@ public class GenericClientScriptRegistryTest
 
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
 
-		assertEquals(8, registry.list().size());
+		assertEquals(9, registry.list().size());
 		assertEquals("Custom", registry.get("custom").getName());
 		assertTrue(registry.readExecutableSource("quest-runner")
 			.contains("local approach = walk(pillar.world, 3, 120)"));
 		assertEquals("capt-arnav", registry.findRandomEventSolver(5426).getId());
+		assertEquals("pinball", registry.findRandomEventSolver(NpcID.PINBALL_INVITATION).getId());
 		assertEquals("return { run = function(input) return 'custom' end }\n",
 			registry.readSource("custom"));
 		assertFalse(Files.exists(directory.resolve("npc-diagnostics.lua")));

@@ -43,6 +43,7 @@ final class GenericClientScriptRegistry
 		"aio-magic/supplies.lua",
 		"aio-magic/training.lua",
 		"capt-arnav.lua",
+		"pinball.lua",
 		"quest-runner.lua",
 		"quest-runner/shared/preparation.lua",
 		"quest-runner/shared/state.lua",
@@ -84,6 +85,7 @@ final class GenericClientScriptRegistry
 		"capt-arnav",
 		"lumbridge-varrock",
 		"npc-diagnostics",
+		"pinball",
 		"quest-runner",
 		"walk-stress",
 		"walker");
