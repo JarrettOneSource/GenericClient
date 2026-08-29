@@ -1,6 +1,7 @@
 package com.genericclient;
 
 import java.awt.Point;
+import java.awt.Rectangle;
 import java.awt.Shape;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -21,17 +22,23 @@ import net.runelite.api.MenuEntry;
 import net.runelite.api.ObjectComposition;
 import net.runelite.api.Player;
 import net.runelite.api.Scene;
+import net.runelite.api.ScriptID;
 import net.runelite.api.Tile;
 import net.runelite.api.TileObject;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 
 final class GenericClientObjectInput
 {
-	private static final int OCCLUDED_OBJECT_CAMERA_PITCH = 383;
+	private static final int CAMERA_ATTEMPTS = 4;
+	private static final int CAMERA_POLL_ATTEMPTS = 30;
+	private static final long CAMERA_POLL_MILLIS = 100L;
+	private static final int CAMERA_SETTLED_UNITS = 384;
+	private static final int OUTER_CAMERA_ZOOM = -400;
 
 	private final Client client;
 	private final ClientThread clientThread;
@@ -107,16 +114,83 @@ final class GenericClientObjectInput
 			{
 				return CompletableFuture.completedFuture(receipt);
 			}
-			return faceObject(objectId, world, within, action, selectedItem).thenCompose(faced ->
+			return prepareZoom().thenCompose(zoom -> retryWithCamera(
+					resolver,
+					objectId,
+					world,
+					within,
+					action,
+					selectedItem,
+					breaksEnabled,
+					0,
+					receipt)
+				.whenComplete((ignored, error) -> restoreZoom(zoom)));
+		});
+	}
+
+	private CompletableFuture<CameraZoom> prepareZoom()
+	{
+		CompletableFuture<CameraZoom> result = new CompletableFuture<>();
+		clientThread.invoke(() ->
+		{
+			CameraZoom previous = new CameraZoom(
+				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL),
+				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_BIG),
+				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL_MIN),
+				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_BIG_MIN));
+			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL_MIN, OUTER_CAMERA_ZOOM);
+			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_BIG_MIN, OUTER_CAMERA_ZOOM);
+			client.runScript(ScriptID.CAMERA_DO_ZOOM, OUTER_CAMERA_ZOOM, OUTER_CAMERA_ZOOM);
+			result.complete(previous);
+		});
+		return result;
+	}
+
+	private void restoreZoom(CameraZoom previous)
+	{
+		clientThread.invoke(() ->
+		{
+			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL_MIN, previous.smallMinimum);
+			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_BIG_MIN, previous.bigMinimum);
+			client.runScript(ScriptID.CAMERA_DO_ZOOM, previous.small, previous.big);
+		});
+	}
+
+	private CompletableFuture<Map<String, Object>> retryWithCamera(
+		GenericClientMenuInput.TargetResolver resolver,
+		int objectId,
+		WorldPoint world,
+		int within,
+		String action,
+		boolean selectedItem,
+		boolean breaksEnabled,
+		int attempt,
+		Map<String, Object> previousReceipt)
+	{
+		if (attempt >= CAMERA_ATTEMPTS)
+		{
+			return CompletableFuture.completedFuture(previousReceipt);
+		}
+		return faceObject(objectId, world, within, action, selectedItem, attempt).thenCompose(target ->
+		{
+			if (target == null)
 			{
-				if (!faced)
-				{
-					return CompletableFuture.completedFuture(receipt);
-				}
-				CompletableFuture<Void> settled = new CompletableFuture<>();
-				executor.schedule(() -> settled.complete(null), 700L, TimeUnit.MILLISECONDS);
-				return settled.thenCompose(ignored -> menuInput.interact(resolver, breaksEnabled));
-			});
+				return CompletableFuture.completedFuture(previousReceipt);
+			}
+			return waitForCamera(target, 0).thenCompose(ignored ->
+				menuInput.interact(resolver, breaksEnabled).thenCompose(receipt ->
+					shouldFaceAndRetry(receipt)
+						? retryWithCamera(
+							resolver,
+							objectId,
+							world,
+							within,
+							action,
+							selectedItem,
+							breaksEnabled,
+							attempt + 1,
+							receipt)
+						: CompletableFuture.completedFuture(receipt)));
 		});
 	}
 
@@ -127,35 +201,102 @@ final class GenericClientObjectInput
 			"hover_has_no_matching_action".equals(result);
 	}
 
-	private CompletableFuture<Boolean> faceObject(
+	private CompletableFuture<CameraTarget> faceObject(
 		int objectId,
 		WorldPoint world,
 		int within,
 		String action,
-		boolean selectedItem)
+		boolean selectedItem,
+		int attempt)
 	{
-		CompletableFuture<Boolean> result = new CompletableFuture<>();
+		CompletableFuture<CameraTarget> result = new CompletableFuture<>();
 		clientThread.invoke(() ->
 		{
 			Player player = client.getLocalPlayer();
 			if (player == null || player.getWorldLocation() == null)
 			{
-				result.complete(false);
+				result.complete(null);
 				return;
 			}
 			List<TileObject> matches = findObjects(
 				player, objectId, world, within, action, selectedItem);
 			if (matches.isEmpty() || matches.get(0).getWorldLocation() == null)
 			{
-				result.complete(false);
+				result.complete(null);
 				return;
 			}
-			client.setCameraYawTarget(GenericClientGameInput.yawToward(
-				player.getWorldLocation(), matches.get(0).getWorldLocation()));
-			client.setCameraPitchTarget(OCCLUDED_OBJECT_CAMERA_PITCH);
-			result.complete(true);
+			int targetYaw = cameraYawForAttempt(
+				GenericClientGameInput.yawToward(
+					player.getWorldLocation(), matches.get(0).getWorldLocation()),
+				attempt);
+			client.setCameraYawTarget(targetYaw);
+			client.setCameraPitchTarget(GenericClientGameInput.CAMERA_INTERACTION_PITCH);
+			result.complete(new CameraTarget(targetYaw));
 		});
 		return result;
+	}
+
+	private CompletableFuture<Void> waitForCamera(CameraTarget target, int attempt)
+	{
+		CompletableFuture<Void> result = new CompletableFuture<>();
+			executor.schedule(() -> clientThread.invoke(() ->
+		{
+			boolean settled = GenericClientGameInput.angularDistance(
+				client.getCameraYaw(), target.yaw) <= CAMERA_SETTLED_UNITS &&
+				Math.abs(client.getCameraPitch() - GenericClientGameInput.CAMERA_INTERACTION_PITCH) <=
+					CAMERA_SETTLED_UNITS;
+			if (settled || attempt + 1 >= CAMERA_POLL_ATTEMPTS)
+			{
+				result.complete(null);
+			}
+			else
+			{
+				waitForCamera(target, attempt + 1).whenComplete((ignored, error) ->
+				{
+					if (error == null)
+					{
+						result.complete(null);
+					}
+					else
+					{
+						result.completeExceptionally(error);
+					}
+				});
+			}
+		}), CAMERA_POLL_MILLIS, TimeUnit.MILLISECONDS);
+		return result;
+	}
+
+	static int cameraYawForAttempt(int baseYaw, int attempt)
+	{
+		return (baseYaw + (attempt & 3) * GenericClientGameInput.CAMERA_QUARTER_TURN) &
+			GenericClientGameInput.CAMERA_YAW_MASK;
+	}
+
+	private static final class CameraTarget
+	{
+		private final int yaw;
+
+		private CameraTarget(int yaw)
+		{
+			this.yaw = yaw;
+		}
+	}
+
+	private static final class CameraZoom
+	{
+		private final int small;
+		private final int big;
+		private final int smallMinimum;
+		private final int bigMinimum;
+
+		private CameraZoom(int small, int big, int smallMinimum, int bigMinimum)
+		{
+			this.small = small;
+			this.big = big;
+			this.smallMinimum = smallMinimum;
+			this.bigMinimum = bigMinimum;
+		}
 	}
 
 	private GenericClientMenuInput.Resolution resolveObject(
@@ -191,13 +332,14 @@ final class GenericClientObjectInput
 			return GenericClientMenuInput.Resolution.rejected("matching_object_not_found");
 		}
 		TileObject object = matches.get(0);
+		net.runelite.api.Point canvasLocation = object.getCanvasLocation();
 		Shape shape = object.getClickbox();
 		if (shape == null)
 		{
 			shape = object.getCanvasTilePoly();
 		}
-		Point point = GenericClientMenuInput.randomPointInside(
-			shape, client.getCanvasWidth(), client.getCanvasHeight());
+		Point point = clickPoint(
+			shape, canvasLocation, GenericClientMenuInput.viewportBounds(client));
 		if (point == null)
 		{
 			return GenericClientMenuInput.Resolution.rejected("object_not_visible");
@@ -221,6 +363,25 @@ final class GenericClientObjectInput
 				(selectedItem
 					? entry.getType() == MenuAction.WIDGET_TARGET_ON_GAME_OBJECT
 					: action.equalsIgnoreCase(entry.getOption()))));
+	}
+
+	static Point clickPoint(
+		Shape clickShape,
+		net.runelite.api.Point canvasLocation,
+		Rectangle viewport)
+	{
+		Point point = GenericClientMenuInput.randomPointInside(
+			clickShape, viewport);
+		if (point != null)
+		{
+			return point;
+		}
+		if (canvasLocation == null ||
+			!viewport.contains(canvasLocation.getX(), canvasLocation.getY()))
+		{
+			return null;
+		}
+		return new Point(canvasLocation.getX(), canvasLocation.getY());
 	}
 
 	private List<TileObject> findObjects(

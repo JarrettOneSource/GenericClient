@@ -62,6 +62,12 @@ Editable scripts are installed in:
 stable id, display name, description, and Lua filename. Press **Reload
 manifest** after editing it manually.
 
+An optional `random_events` array registers a standalone script as the solver
+for those random-event NPC IDs. GenericClient detects owned events internally,
+interrupts normal automation, and never requires RuneLite's Random Events plugin.
+The lifecycle and solver template are in
+[`docs/random-events.md`](docs/random-events.md).
+
 Large scripts may declare named modules in that same manifest entry. Modules
 stay inside the script sandbox and are loaded with `gc.require`:
 
@@ -116,7 +122,7 @@ gc.next_action()
 gc.require(name) -- only for modules declared by this script
 ```
 
-Implemented reads are `runtime`, `player`, `npcs`, `messages`, `objects`, `ground_items`,
+Implemented reads are `runtime`, `player`, `random_event`, `npcs`, `messages`, `objects`, `ground_items`,
 `dialogue`, `vars`, `behavior`, `skills`, `inventory`, `equipment`, `bank`,
 `quests`, `grand_exchange`, `cash`, and the
 combined `account` frame. `combat` reports the current attack-style index and
@@ -125,8 +131,8 @@ auto-retaliate state. A bank read explicitly reports `unknown`, `open`, or
 presence, canvas clickability, and line of sight. `messages` exposes only a
 bounded history of system feedback, not player chat. Implemented waits are game
 ticks, tick counts, `walk.random`, `walk.to`, and `mouse.offscreen`. New semantic
-actions are added when an automation actually needs them. Object, item,
-item-on-entity, dialogue, bank-loadout, GE-buy, UI-close, and combat-cast
+actions are added when an automation actually needs them. Object, inventory,
+equipment, item-on-entity, dialogue, bank-loadout, GE-buy, UI-close, and combat-cast
 actions use the same receipt model. Lua can arm or clear the framework's
 tick-priority emergency guard with `safety.configure` and `safety.clear`.
 `npc.interact`

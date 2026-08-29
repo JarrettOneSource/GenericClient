@@ -272,6 +272,29 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		return moving;
 	}
 
+	synchronized void cancel(String reason)
+	{
+		if (!moving)
+		{
+			return;
+		}
+		moving = false;
+		for (ScheduledFuture<?> future : new ArrayList<>(pending))
+		{
+			future.cancel(false);
+		}
+		pending.clear();
+		effects.endPath();
+		CompletableFuture<String> completion = activeMove;
+		activeMove = null;
+		if (completion != null)
+		{
+			completion.completeExceptionally(
+				new IllegalStateException("Synthetic mouse cancelled: " + reason));
+		}
+		reporter.accept("SYNTHETIC_MOUSE_CANCELLED reason=" + reason);
+	}
+
 	private void dispatchMove(Point point, int pathIndex)
 	{
 		boolean wasOutside;

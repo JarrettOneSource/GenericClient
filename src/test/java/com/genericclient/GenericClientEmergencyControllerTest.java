@@ -252,6 +252,40 @@ public class GenericClientEmergencyControllerTest
 	}
 
 	@Test
+	public void keepsTheBreakBlockingLuaUntilEmergencyFoodIsDispatched()
+	{
+		CompletableFuture<Map<String, Object>> food = new CompletableFuture<>();
+		AtomicInteger endedBreaks = new AtomicInteger();
+		GenericClientEmergencyController controller = new GenericClientEmergencyController(
+			(itemId, action) -> food,
+			escape -> CompletableFuture.completedFuture(escapeStarted()),
+			() ->
+			{
+				endedBreaks.incrementAndGet();
+				return CompletableFuture.completedFuture(Collections.emptyMap());
+			},
+			reason -> CompletableFuture.completedFuture(null),
+			message -> { });
+		controller.configure(
+			15,
+			Collections.singletonList(
+				new GenericClientEmergencyController.Consumable(1993, "Drink", 11)),
+			null,
+			true,
+			true);
+
+		controller.publishGameTick(snapshotWithHitpoints(15));
+
+		assertEquals(0, endedBreaks.get());
+		assertTrue((Boolean) controller.status().get("recovering"));
+
+		food.complete(dispatched());
+
+		assertEquals(1, endedBreaks.get());
+		assertFalse((Boolean) controller.status().get("recovering"));
+	}
+
+	@Test
 	public void stopsAndEscapesWhenOnlyFoodWouldOverheal()
 	{
 		AtomicInteger consumptions = new AtomicInteger();

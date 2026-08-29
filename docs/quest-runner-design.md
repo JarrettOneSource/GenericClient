@@ -1,8 +1,10 @@
 # Quest Runner design
 
-Status: reusable interaction framework and Witch's House are implemented and
-live-proven. The source is organized by quest under schema v35. Waterfall Quest
-has an isolated definition folder but its phase handlers remain gated.
+Status: reusable interaction framework and Witch's House are live-proven.
+Each quest stays isolated, and the runner includes the complete Waterfall phase
+graph. Waterfall is live-proven end to end, including recovery, long-break
+resume, the final ritual, exact-ID chalice interaction, rewards, and normalized
+completion.
 
 ## Decision
 
@@ -103,6 +105,7 @@ in-progress phases but never prove completion.
 | --- | --- |
 | `object.interact` | Re-resolve an object by ID and optional WorldPoint, validate its live action, face it once if off-camera, use synthetic left/context click, and return the observed menu event. |
 | `item.interact` | Re-resolve an inventory slot by item ID and invoke a named action such as `Read`, `Wear`, `Eat`, or `Rub`. |
+| `equipment.interact` | Open Equipment, re-resolve the exact worn item, and invoke a semantic action such as `Remove`. |
 | `item.use_on_object` | Select `Use` on the requested inventory item, then resolve and click the exact object ID/WorldPoint. Both clicks receive behavior receipts unless `breaks=false`. |
 | `dialogue.continue` | Click the currently visible Continue surface; reject if the dialogue is a choice. |
 | `dialogue.choose` | Click an exact visible option string and return its index/text. No substring-first or fixed-index fallback. |
@@ -142,8 +145,9 @@ retryable or terminal phase failure according to the quest definition.
 
 `bank.loadout` takes an allowlist rather than a tomb denylist. For Glarial's
 Tomb the quest definition requests no equipment and only pebble, approved food,
-and explicit optional jewellery/potions. The bank module rejects extra items
-before the tombstone can be targeted.
+and explicit jewellery. If an amulet is already owned, the observed-state
+loadout retains it and skips reacquiring it. The bank module rejects extra
+items before the tombstone can be targeted.
 
 `ge.buy` is just-in-time. It accepts item ID, quantity, a maximum unit price,
 and minimum cash reserve. It never cancels or replaces an unrelated offer. An
@@ -194,10 +198,10 @@ value 7 on genericBoss; the audited reward produced 25 Hitpoints at 8,184 XP.
 The garden route, both safespots, all four NPC transitions, forced food at 3 HP,
 ball recovery, Burthorpe teleport, and final Boy dialogue were observed live.
 
-Waterfall remains incomplete. Its folder currently provides only preflight
-configuration and a reducer checkpoint. It must gain complete phase handlers,
-phase coverage, package verification, and bounded live evidence before the
-runner may progress that quest.
+Waterfall now has phase-specific preparation, navigation, tomb, equipment, and
+ritual handlers plus reducer coverage. It still requires full package
+verification and bounded live evidence before the runner may progress the
+account.
 
 Quest-specific evidence and exact phase tables live in
 [`witchs-house-quest-runner.md`](witchs-house-quest-runner.md) and

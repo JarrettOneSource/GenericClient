@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.coords.WorldPoint;
 
@@ -45,10 +46,15 @@ final class GenericClientLuaHost implements AutoCloseable
 	private volatile Map<String, Object> activeInputs = Collections.emptyMap();
 	private volatile ActiveRun activeRun;
 	private volatile Runnable manualStopListener = () -> { };
+	private volatile Supplier<Map<String, Object>> randomEventStateSupplier = Collections::emptyMap;
+	private volatile RandomEventSolverListener randomEventSolverListener = (key, state, error) -> { };
+	private volatile String randomEventKey;
+	private volatile boolean randomEventCleanupComplete;
 	private volatile boolean closed;
 	private long nextRunId;
 	private GenericClientSnapshot currentSnapshot;
 	private GenericClientLuaScript session;
+	private SuspendedRun suspendedRun;
 	private GenericClientLuaScript repl;
 	private volatile CompletableFuture<Map<String, Object>> replCompletion;
 	private final List<String> replLogs = new ArrayList<>();
@@ -276,6 +282,11 @@ final class GenericClientLuaHost implements AutoCloseable
 		{
 			return behavior.status();
 		}
+		if ("random_event".equals(subject))
+		{
+			Map<String, Object> value = randomEventStateSupplier.get();
+			return value == null ? Collections.emptyMap() : new LinkedHashMap<>(value);
+		}
 		Object value = snapshot == null ? null : snapshot.read(subject, query);
 		if (script != null && "runtime".equals(subject) && value instanceof Map)
 		{
@@ -319,6 +330,123 @@ final class GenericClientLuaHost implements AutoCloseable
 		return start(scriptId, suppliedInputs, MANUAL_OWNER, true);
 	}
 
+	void setRandomEventHooks(
+		Supplier<Map<String, Object>> stateSupplier,
+		RandomEventSolverListener solverListener)
+	{
+		randomEventStateSupplier = stateSupplier == null ? Collections::emptyMap : stateSupplier;
+		randomEventSolverListener = solverListener == null
+			? (key, state, error) -> { }
+			: solverListener;
+	}
+
+	String findRandomEventSolver(int npcId)
+	{
+		GenericClientScriptRegistry.Script solver = registry.findRandomEventSolver(npcId);
+		return solver == null ? null : solver.getId();
+	}
+
+	boolean isRandomEventBlocked()
+	{
+		return randomEventKey != null;
+	}
+
+	CompletableFuture<String> interruptForRandomEvent(String eventKey)
+	{
+		if (eventKey == null || eventKey.trim().isEmpty())
+		{
+			throw new IllegalArgumentException("Random-event key cannot be empty");
+		}
+		synchronized (this)
+		{
+			if (randomEventKey != null && !randomEventKey.equals(eventKey))
+			{
+				throw new IllegalStateException("Another random event already owns the Lua runtime");
+			}
+			randomEventKey = eventKey;
+			randomEventCleanupComplete = false;
+		}
+		cancelAction.accept("random_event_detected");
+
+		CompletableFuture<String> interrupted = new CompletableFuture<>();
+		scheduler.execute(() ->
+		{
+			ActiveRun run = activeRun;
+			if (session != null && run != null && MANUAL_OWNER.equals(run.owner))
+			{
+				suspendedRun = new SuspendedRun(run.definition.getId(), run.values);
+			}
+			stopOnScheduler("random_event_detected");
+			interruptReplForRandomEvent();
+			status = "ATTENTION_REQUIRED";
+			randomEventCleanupComplete = true;
+			interrupted.complete("RANDOM_EVENT_BLOCKED event=" + eventKey);
+		});
+		return interrupted;
+	}
+
+	CompletableFuture<String> startRandomEventSolver(String eventKey, String solverScript)
+	{
+		if (solverScript == null || solverScript.trim().isEmpty())
+		{
+			throw new IllegalArgumentException("Random-event solver script cannot be empty");
+		}
+		if (!eventKey.equals(randomEventKey) || !randomEventCleanupComplete)
+		{
+			throw new IllegalStateException(
+				"Random-event cleanup must complete before its solver starts");
+		}
+		GenericClientScriptRegistry.Script solver = registry.get(solverScript);
+		int npcId = randomEventNpcId(eventKey);
+		if (!solver.getRandomEvents().contains(npcId))
+		{
+			throw new IllegalArgumentException(
+				"Script " + solverScript + " is not registered for random-event NPC " + npcId);
+		}
+		return start(
+			solverScript,
+			Collections.emptyMap(),
+			randomEventOwner(eventKey),
+			false).thenApply(result ->
+			"RANDOM_EVENT_SOLVER_STARTED event=" + eventKey +
+				" script=" + solverScript + " result=" + result);
+	}
+
+	CompletableFuture<String> releaseRandomEvent(String eventKey, boolean resumeInterrupted)
+	{
+		CompletableFuture<SuspendedRun> released = new CompletableFuture<>();
+		scheduler.execute(() ->
+		{
+			if (randomEventKey == null || !randomEventKey.equals(eventKey))
+			{
+				released.completeExceptionally(
+					new IllegalStateException("Random-event key does not own the Lua runtime"));
+				return;
+			}
+			stopOnScheduler("random_event_release");
+			SuspendedRun resume = resumeInterrupted ? suspendedRun : null;
+			suspendedRun = null;
+			randomEventKey = null;
+			randomEventCleanupComplete = false;
+			released.complete(resume);
+		});
+
+		return released.thenCompose(resume ->
+		{
+			if (resume == null)
+			{
+				return CompletableFuture.completedFuture(
+					"RANDOM_EVENT_RELEASED event=" + eventKey + " resumed=false");
+			}
+			return start(resume.scriptId, resume.inputs, MANUAL_OWNER, true).handle((result, error) ->
+				error == null
+					? "RANDOM_EVENT_RELEASED event=" + eventKey +
+						" resumed=true result=" + result
+					: "RANDOM_EVENT_RELEASED event=" + eventKey +
+						" resumed=false resume_error=" + rootMessage(error));
+		});
+	}
+
 	CompletableFuture<String> startScheduled(
 		String ruleId,
 		String scriptId,
@@ -343,6 +471,12 @@ final class GenericClientLuaHost implements AutoCloseable
 			GenericClientLuaScript candidate = null;
 			try
 			{
+				String blockedBy = randomEventKey;
+				if (blockedBy != null && !randomEventOwner(blockedBy).equals(owner))
+				{
+					throw new IllegalStateException(
+						"A random event requires completion before another standalone script can start");
+				}
 				if (!replaceActive && session != null)
 				{
 					ActiveRun running = activeRun;
@@ -492,12 +626,12 @@ final class GenericClientLuaHost implements AutoCloseable
 		{
 			return;
 		}
-		scheduler.execute(() ->
-		{
-			currentSnapshot = snapshot;
-			GenericClientLuaScript current = session;
-			if (current != null)
+			scheduler.execute(() ->
 			{
+				currentSnapshot = snapshot;
+				GenericClientLuaScript current = session;
+				if (current != null && canAdvance(current))
+				{
 				current.onGameTick(snapshot);
 				reconcileScript(current);
 			}
@@ -692,9 +826,13 @@ final class GenericClientLuaHost implements AutoCloseable
 		}
 		try
 		{
-			scheduler.execute(() ->
-			{
-				Map<String, Object> result = receipt;
+				scheduler.execute(() ->
+				{
+					if (!canAdvance(script))
+					{
+						return;
+					}
+					Map<String, Object> result = receipt;
 				if (error != null)
 				{
 					result = new LinkedHashMap<>();
@@ -724,9 +862,13 @@ final class GenericClientLuaHost implements AutoCloseable
 		}
 		try
 		{
-			scheduler.execute(() ->
-			{
-				Map<String, Object> result = receipt == null
+				scheduler.execute(() ->
+				{
+					if (!canAdvance(script))
+					{
+						return;
+					}
+					Map<String, Object> result = receipt == null
 					? new LinkedHashMap<>()
 					: new LinkedHashMap<>(receipt);
 				result.put("phase", phase);
@@ -811,6 +953,12 @@ final class GenericClientLuaHost implements AutoCloseable
 		CompletableFuture<Map<String, Object>> completion = new CompletableFuture<>();
 		scheduler.execute(() ->
 		{
+			if (randomEventKey != null && !randomEventCleanupComplete)
+			{
+				completion.completeExceptionally(
+					new IllegalStateException("Lua REPL interrupted for random-event cleanup"));
+				return;
+			}
 			if (code == null || code.trim().isEmpty())
 			{
 				completion.completeExceptionally(new IllegalArgumentException("Lua code cannot be empty"));
@@ -899,12 +1047,23 @@ final class GenericClientLuaHost implements AutoCloseable
 		String description,
 		String source)
 	{
+		return saveScript(id, name, description, source, Collections.emptyList());
+	}
+
+	CompletableFuture<Map<String, Object>> saveScript(
+		String id,
+		String name,
+		String description,
+		String source,
+		List<Integer> randomEvents)
+	{
 		CompletableFuture<Map<String, Object>> completion = new CompletableFuture<>();
 		scheduler.execute(() ->
 		{
 			try
 			{
-				completion.complete(registry.save(id, name, description, source).toMap());
+				completion.complete(registry.save(
+					id, name, description, source, randomEvents).toMap());
 			}
 			catch (IOException | RuntimeException exception)
 			{
@@ -943,6 +1102,7 @@ final class GenericClientLuaHost implements AutoCloseable
 		value.put("run_id", run.getRunId() < 0L ? null : run.getRunId());
 		value.put("run_owner", run.getOwner());
 		value.put("repl_busy", replCompletion != null);
+		value.put("random_event_blocked", randomEventKey != null);
 		value.put("scripts", listScriptValues());
 		value.put("recent_logs", getRecentLogLines(20));
 		return value;
@@ -1034,6 +1194,13 @@ final class GenericClientLuaHost implements AutoCloseable
 		cancelAction.accept("script_finished");
 		expected.close();
 		session = null;
+		if (run != null && run.script == expected && run.owner.startsWith("random_event:"))
+		{
+			randomEventSolverListener.finished(
+				run.owner.substring("random_event:".length()),
+				status,
+				expected.getFaultMessage());
+		}
 	}
 
 	private void reconcileRepl()
@@ -1064,6 +1231,7 @@ final class GenericClientLuaHost implements AutoCloseable
 	private void stopOnScheduler(String reason)
 	{
 		GenericClientLuaScript current = session;
+		ActiveRun run = activeRun;
 		session = null;
 		cancelAction.accept("script_stopped_" + reason);
 		if (current != null)
@@ -1074,6 +1242,64 @@ final class GenericClientLuaHost implements AutoCloseable
 		activeInputs = Collections.emptyMap();
 		activeRun = null;
 		status = "IDLE";
+		if (current != null && run != null && run.owner.startsWith("random_event:") &&
+			!"random_event_release".equals(reason))
+		{
+			randomEventSolverListener.finished(
+				run.owner.substring("random_event:".length()),
+				"STOPPED",
+				"Random-event solver was stopped: " + reason);
+		}
+	}
+
+	private static String randomEventOwner(String eventKey)
+	{
+		return "random_event:" + eventKey;
+	}
+
+	private static int randomEventNpcId(String eventKey)
+	{
+		String[] parts = eventKey.split(":", -1);
+		if (parts.length != 3)
+		{
+			throw new IllegalArgumentException("Invalid random-event key: " + eventKey);
+		}
+		try
+		{
+			return Integer.parseInt(parts[1]);
+		}
+		catch (NumberFormatException exception)
+		{
+			throw new IllegalArgumentException("Invalid random-event key: " + eventKey, exception);
+		}
+	}
+
+	private void interruptReplForRandomEvent()
+	{
+		CompletableFuture<Map<String, Object>> pending = replCompletion;
+		replCompletion = null;
+		if (repl != null)
+		{
+			repl.close();
+			repl = null;
+		}
+		replLogs.clear();
+		if (pending != null)
+		{
+			pending.completeExceptionally(
+				new IllegalStateException("Lua REPL interrupted by random event"));
+		}
+	}
+
+	private boolean canAdvance(GenericClientLuaScript script)
+	{
+		String blockedBy = randomEventKey;
+		if (blockedBy == null || script == repl)
+		{
+			return true;
+		}
+		ActiveRun run = activeRun;
+		return session == script && run != null && randomEventOwner(blockedBy).equals(run.owner);
 	}
 
 	private void publishStatus(String message)
@@ -1189,6 +1415,18 @@ final class GenericClientLuaHost implements AutoCloseable
 		}
 	}
 
+	private static final class SuspendedRun
+	{
+		private final String scriptId;
+		private final Map<String, Object> inputs;
+
+		private SuspendedRun(String scriptId, Map<String, Object> inputs)
+		{
+			this.scriptId = scriptId;
+			this.inputs = Collections.unmodifiableMap(new LinkedHashMap<>(inputs));
+		}
+	}
+
 	static final class RunState
 	{
 		private static final RunState NONE = new RunState(-1L, null, null, "IDLE", false);
@@ -1252,6 +1490,12 @@ final class GenericClientLuaHost implements AutoCloseable
 	interface WalkRandomAction
 	{
 		CompletableFuture<GenericClientInteractionResult> walk(boolean breaksEnabled);
+	}
+
+	@FunctionalInterface
+	interface RandomEventSolverListener
+	{
+		void finished(String eventKey, String terminalStatus, String error);
 	}
 
 	@FunctionalInterface

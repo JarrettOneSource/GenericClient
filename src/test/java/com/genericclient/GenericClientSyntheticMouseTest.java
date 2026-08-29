@@ -222,6 +222,31 @@ public class GenericClientSyntheticMouseTest
 	}
 
 	@Test
+	public void cancelStopsAnActiveMovementWithoutClosingTheMouse() throws Exception
+	{
+		Canvas canvas = canvas();
+		ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+		GenericClientSyntheticMouse mouse = mouse(canvas, executor, new Point(10, 10), 500);
+		try
+		{
+			java.util.concurrent.CompletableFuture<String> movement =
+				mouse.move(new Point(700, 500));
+
+			mouse.cancel("random_event");
+
+			assertTrue(movement.isCompletedExceptionally());
+			assertFalse(mouse.isMoving());
+			assertEquals("SYNTHETIC_LEFT_CLICK",
+				mouse.click(MouseEvent.BUTTON1).get(2, TimeUnit.SECONDS));
+		}
+		finally
+		{
+			mouse.close();
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
 	public void realCanvasMovementRefreshesTheNextSyntheticStartPosition() throws Exception
 	{
 		Canvas canvas = canvas();

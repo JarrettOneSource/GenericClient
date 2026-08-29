@@ -47,6 +47,7 @@ final class GenericClientSnapshot
 	private final GenericClientQuestSnapshot quest;
 	private final List<GenericClientGameMessageBuffer.Message> messages;
 	private final GenericClientSceneCollision sceneCollision;
+	private final GenericClientWidgetSnapshot widgets;
 
 	GenericClientSnapshot(
 		long gameTick,
@@ -125,6 +126,22 @@ final class GenericClientSnapshot
 		List<GenericClientGameMessageBuffer.Message> messages,
 		GenericClientSceneCollision sceneCollision)
 	{
+		this(gameTick, gameState, gameRevision, player, npcs, account, quest, messages,
+			sceneCollision, GenericClientWidgetSnapshot.empty());
+	}
+
+	GenericClientSnapshot(
+		long gameTick,
+		String gameState,
+		int gameRevision,
+		PlayerSnapshot player,
+		List<NpcSnapshot> npcs,
+		GenericClientAccountSnapshot account,
+		GenericClientQuestSnapshot quest,
+		List<GenericClientGameMessageBuffer.Message> messages,
+		GenericClientSceneCollision sceneCollision,
+		GenericClientWidgetSnapshot widgets)
+	{
 		this.gameTick = gameTick;
 		this.gameState = gameState;
 		this.gameRevision = gameRevision;
@@ -134,6 +151,7 @@ final class GenericClientSnapshot
 		this.quest = quest;
 		this.messages = Collections.unmodifiableList(new ArrayList<>(messages));
 		this.sceneCollision = sceneCollision;
+		this.widgets = widgets;
 	}
 
 	static GenericClientSnapshot capture(Client client, long gameTick)
@@ -189,6 +207,7 @@ final class GenericClientSnapshot
 				client.getVarpValue(VarPlayerID.OPTION_RUN) == 1,
 				worldDestination);
 
+			Rectangle viewport = GenericClientMenuInput.viewportBounds(client);
 			for (NPC npc : worldView.npcs())
 			{
 				if (npc == null || npc.getWorldLocation() == null)
@@ -204,9 +223,8 @@ final class GenericClientSnapshot
 					clickShape = npc.getCanvasTilePoly();
 				}
 				Point canvasPoint = GenericClientMenuInput.firstPointInside(
-					clickShape, client.getCanvasWidth(), client.getCanvasHeight());
-				Rectangle canvasBounds = visibleBounds(
-					clickShape, client.getCanvasWidth(), client.getCanvasHeight());
+					clickShape, viewport);
+				Rectangle canvasBounds = visibleBounds(clickShape, viewport);
 				npcSnapshots.add(new NpcSnapshot(
 					npc.getIndex(),
 					npc.getId(),
@@ -244,7 +262,8 @@ final class GenericClientSnapshot
 			GenericClientAccountSnapshot.capture(client, bankCache, questCache, gameTick),
 			GenericClientQuestSnapshot.capture(client, localPlayer),
 			messages,
-			sceneCollision);
+			sceneCollision,
+			GenericClientWidgetSnapshot.capture(client));
 	}
 
 	Object read(String subject, Map<?, ?> query)
@@ -265,6 +284,8 @@ final class GenericClientSnapshot
 				return sceneCollision.inspect(
 					worldPoint(query == null ? null : query.get("from"), getPlayerWorldPoint()),
 					worldPoint(query == null ? null : query.get("to"), null));
+			case "widgets":
+				return widgets.read(query);
 			case "vars":
 			case "objects":
 			case "ground_items":
@@ -678,14 +699,13 @@ final class GenericClientSnapshot
 			.collect(Collectors.toList());
 	}
 
-	private static Rectangle visibleBounds(Shape shape, int canvasWidth, int canvasHeight)
+	private static Rectangle visibleBounds(Shape shape, Rectangle clipBounds)
 	{
-		if (shape == null || canvasWidth <= 0 || canvasHeight <= 0)
+		if (shape == null || clipBounds == null || clipBounds.isEmpty())
 		{
 			return null;
 		}
-		Rectangle bounds = shape.getBounds().intersection(
-			new Rectangle(0, 0, canvasWidth, canvasHeight));
+		Rectangle bounds = shape.getBounds().intersection(clipBounds);
 		return bounds.isEmpty() ? null : bounds;
 	}
 

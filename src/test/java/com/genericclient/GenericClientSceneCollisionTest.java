@@ -89,4 +89,17 @@ public class GenericClientSceneCollisionTest
 			new WorldPoint(102, 200, 0));
 		assertEquals(false, ((Map<String, Object>) inspection.get("to")).get("loaded"));
 	}
+
+	@Test
+	public void defersToTheGlobalMapForInteriorScenePaddingSentinels()
+	{
+		int[][] flags = new int[8][8];
+		flags[5][4] = 0xFFFFFF;
+		GenericClientSceneCollision collision =
+			new GenericClientSceneCollision(true, 100, 200, 0, flags);
+
+		assertNull(collision.canMove(
+			new WorldPoint(104, 204, 0),
+			new WorldPoint(105, 204, 0)));
+	}
 }

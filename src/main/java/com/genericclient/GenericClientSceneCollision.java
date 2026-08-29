@@ -200,9 +200,7 @@ final class GenericClientSceneCollision
 			return null;
 		}
 		int tileFlags = flags[sceneX][sceneY];
-		boolean sceneBorder = sceneX == 0 || sceneY == 0 || sceneX == flags.length - 1 ||
-			sceneY == flags[sceneX].length - 1;
-		if ((sceneBorder && tileFlags == SCENE_BORDER_SENTINEL) ||
+		if (tileFlags == SCENE_BORDER_SENTINEL ||
 			(tileFlags & UNINITIALIZED_SENTINEL) != 0)
 		{
 			return null;

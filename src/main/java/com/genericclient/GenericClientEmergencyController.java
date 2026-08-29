@@ -147,21 +147,18 @@ final class GenericClientEmergencyController
 		boolean allowOverhealNow,
 		boolean fallbackRequired)
 	{
-		return endBreakAction.get().handle((result, error) -> null)
-			.thenCompose(ignored -> tryConsumable(
-				current, 0, allowOverhealNow ? null : missingHitpoints))
+		return tryConsumable(current, 0, allowOverhealNow ? null : missingHitpoints)
 			.thenCompose(food ->
 			{
-				if (wasAccepted(food))
+				if (wasAccepted(food) || !fallbackRequired)
 				{
-					return CompletableFuture.completedFuture(food);
-				}
-				if (!fallbackRequired)
-				{
-					return CompletableFuture.completedFuture(food);
+					return endBreakAction.get()
+						.handle((result, error) -> null)
+						.thenApply(ignored -> food);
 				}
 				return stopAction.apply("emergency_consumable_unavailable")
 					.handle((ignored, error) -> null)
+					.thenCompose(ignored -> endBreakAction.get().handle((result, error) -> null))
 					.thenCompose(ignored -> startEscape(current, food));
 			});
 	}

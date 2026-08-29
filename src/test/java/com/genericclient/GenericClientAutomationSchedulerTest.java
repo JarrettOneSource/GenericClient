@@ -90,6 +90,36 @@ public class GenericClientAutomationSchedulerTest
 	}
 
 	@Test
+	public void randomEventAttentionBlocksAndStopsScheduledAutomation() throws Exception
+	{
+		ManualClock clock = new ManualClock(Instant.parse("2026-08-31T12:00:00Z"));
+		FakeRuntime runtime = new FakeRuntime("low-script");
+		GenericClientAutomationScheduler scheduler = scheduler("random-event", runtime, clock);
+		try
+		{
+			scheduler.activateProfile(PROFILE).get(2, TimeUnit.SECONDS);
+			scheduler.configure(config(oneRuleJson("PT10M"))).get(2, TimeUnit.SECONDS);
+			scheduler.setAttentionRequired(true, "random_event");
+			scheduler.publishGameTick(snapshot(1, 20, 1_000L, true));
+			waitFor(() -> "attention_required".equals(scheduler.status().get("mode")));
+			assertEquals(0, runtime.starts.get());
+
+			scheduler.setAttentionRequired(false, "random_event_completed");
+			waitFor(() -> runtime.starts.get() == 1);
+			assertEquals("low", runtime.state.getRuleId());
+
+			scheduler.setAttentionRequired(true, "second_random_event");
+			waitFor(() -> runtime.stops.get() == 1);
+			assertEquals("attention_required", scheduler.status().get("mode"));
+			assertFalse(runtime.state.isRunning());
+		}
+		finally
+		{
+			scheduler.close();
+		}
+	}
+
+	@Test
 	public void terminalCooldownSurvivesSchedulerRestart() throws Exception
 	{
 		Path directory = temporaryFolder.newFolder("cooldown").toPath();

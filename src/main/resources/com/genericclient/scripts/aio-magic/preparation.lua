@@ -38,13 +38,13 @@ local function open_bank()
   local function click_bank()
     return gc.await {
       action = { type = "npc.interact", name = "Banker", action = "Bank", within = 10 },
-      breaks = false,
+      breaks = true,
       timeout = { game_ticks = 30 },
     }
   end
   local receipt = click_bank()
   if receipt.status ~= "dispatched" then
-    gc.await { action = { type = "ui.close" }, breaks = false }
+    gc.await { action = { type = "ui.close" }, breaks = true }
     wait_ticks(2)
     receipt = click_bank()
   end
@@ -92,7 +92,7 @@ local function acquire_missing(missing, target)
       minimum_free_slots = 27,
       close = true,
     },
-    breaks = false,
+    breaks = true,
     timeout = { game_ticks = 200 },
   }
   if coins.status ~= "complete" then
@@ -107,7 +107,7 @@ local function acquire_missing(missing, target)
       action = "Exchange",
       within = 10,
     },
-    breaks = false,
+    breaks = true,
     timeout = { game_ticks = 30 },
   }
   if exchange.status ~= "dispatched" then
@@ -126,7 +126,7 @@ local function acquire_missing(missing, target)
         maximum_unit_price = item.maximum_unit_price,
         minimum_cash_reserve = 5000000,
       },
-      breaks = false,
+      breaks = true,
       timeout = { game_ticks = 300 },
     }
     if purchase.status ~= "complete" then
@@ -134,7 +134,7 @@ local function acquire_missing(missing, target)
     end
   end
 
-  gc.await { action = { type = "ui.close" }, breaks = false }
+  gc.await { action = { type = "ui.close" }, breaks = true }
   wait_ticks(2)
   return true
 end
@@ -171,7 +171,7 @@ local function prepare_loadout(plan, restock, target)
       minimum_free_slots = 16,
       close = true,
     },
-    breaks = false,
+    breaks = true,
     timeout = { game_ticks = 240 },
   }
   if loadout.status ~= "complete" then
@@ -187,7 +187,7 @@ local function equip_staff(id, target, name)
   progress.show(target, "Equipping " .. name)
   local receipt = gc.await {
     action = { type = "item.interact", id = id, action = "Wield" },
-    breaks = false,
+    breaks = true,
     timeout = { game_ticks = 20 },
   }
   if receipt.status ~= "dispatched" then

@@ -4,6 +4,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import java.awt.Rectangle;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -15,7 +17,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import net.runelite.api.Client;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.widgets.Widget;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -31,7 +35,7 @@ public class GenericClientLuaHostTest
 		Path directory = temporaryFolder.newFolder("modular-lua").toPath();
 		Files.createDirectories(directory.resolve("example"));
 		Files.writeString(directory.resolve("manifest.json"),
-			"{\"schema\":\"genericclient_scripts.v35\",\"scripts\":[{" +
+			"{\"schema\":\"genericclient_scripts\",\"scripts\":[{" +
 			"\"id\":\"example\",\"name\":\"Example\",\"description\":\"Module test\"," +
 			"\"file\":\"example.lua\",\"modules\":{\"maths\":\"example/maths.lua\"}}]}\n");
 		Files.writeString(directory.resolve("example.lua"),
@@ -89,7 +93,7 @@ public class GenericClientLuaHostTest
 			assertEquals(3, questInputs.size());
 			assertEquals("quest", questInputs.get(0).getId());
 			assertEquals("restock", questInputs.get(1).getId());
-			assertEquals("combat", questInputs.get(2).getId());
+			assertEquals("scope", questInputs.get(2).getId());
 		}
 		finally
 		{
@@ -287,6 +291,211 @@ public class GenericClientLuaHostTest
 			assertEquals(2903.0, ((Map<?, ?>) requestedAction.get().get("world")).get("x"));
 			assertEquals(Boolean.FALSE, requestedBreaks.get());
 			assertTrue(host.getRecentLogs().contains("item_used_on_object"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void dispatchesEquipmentInteractionThroughTheLuaSurface() throws Exception
+	{
+		AtomicReference<String> requestedType = new AtomicReference<>();
+		AtomicReference<Map<String, Object>> requestedAction = new AtomicReference<>();
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("equipment-action-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(Collections.emptyMap()),
+			(id, name, action, within, breaks) ->
+				CompletableFuture.completedFuture(Collections.emptyMap()),
+			(mode, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(type, action, breaks) ->
+			{
+				requestedType.set(type);
+				requestedAction.set(action);
+				return CompletableFuture.completedFuture(receipt("dispatched"));
+			},
+			reason -> { },
+			GenericClientTestSupport.behavior(
+				temporaryFolder.newFolder("equipment-action-behavior").toPath()),
+			message -> { });
+		try
+		{
+			host.saveScript(
+				"equipment-action",
+				"Equipment action",
+				"Exercise equipped-item interaction dispatch.",
+				script("gc.await { action = { type = 'equipment.interact', " +
+					"id = 2560, action = 'Rub' }, breaks = false }"))
+				.get(2, TimeUnit.SECONDS);
+
+			host.start("equipment-action").get(2, TimeUnit.SECONDS);
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals("equipment.interact", requestedType.get());
+			assertEquals(2560.0, requestedAction.get().get("id"));
+			assertEquals("Rub", requestedAction.get().get("action"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void dispatchesWidgetClickThroughTheLuaSurface() throws Exception
+	{
+		AtomicReference<String> requestedType = new AtomicReference<>();
+		AtomicReference<Map<String, Object>> requestedAction = new AtomicReference<>();
+		AtomicReference<Boolean> requestedBreaks = new AtomicReference<>();
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("widget-action-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(Collections.emptyMap()),
+			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(mode, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			(type, action, breaks) ->
+			{
+				requestedType.set(type);
+				requestedAction.set(action);
+				requestedBreaks.set(breaks);
+				return CompletableFuture.completedFuture(receipt("dispatched"));
+			},
+			reason -> { },
+			GenericClientTestSupport.behavior(
+				temporaryFolder.newFolder("widget-action-behavior").toPath()),
+			message -> { });
+		try
+		{
+			host.saveScript(
+				"widget-action",
+				"Widget action",
+				"Exercise generic widget click dispatch.",
+				script("gc.await { action = { type = 'ui.click', widget_id = 1703941 }, " +
+					"breaks = false }"))
+				.get(2, TimeUnit.SECONDS);
+
+			host.start("widget-action").get(2, TimeUnit.SECONDS);
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals("ui.click", requestedType.get());
+			assertEquals(1703941.0, requestedAction.get().get("widget_id"));
+			assertEquals(Boolean.FALSE, requestedBreaks.get());
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void captArnavSolverAlignsLiveDialsAndRequiresARewardReceipt() throws Exception
+	{
+		AtomicInteger left = new AtomicInteger(2);
+		AtomicInteger centre = new AtomicInteger(3);
+		AtomicInteger right = new AtomicInteger(0);
+		AtomicReference<Boolean> accepted = new AtomicReference<>(false);
+		AtomicReference<Boolean> confirmed = new AtomicReference<>(false);
+		List<Integer> clicks = new java.util.ArrayList<>();
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("capt-arnav-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(Collections.emptyMap()),
+			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(receipt("dispatched")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) ->
+			{
+				if ("dialogue.choose".equals(type))
+				{
+					assertEquals("Yes, I'll help you unlock your chest.", action.get("text"));
+					accepted.set(true);
+				}
+				else if ("ui.click".equals(type))
+				{
+					int widgetId = ((Number) action.get("widget_id")).intValue();
+					clicks.add(widgetId);
+					switch (widgetId)
+					{
+						case 1703941:
+							left.set((left.get() + 1) % 4);
+							break;
+						case 1703942:
+							left.set((left.get() + 3) % 4);
+							break;
+						case 1703944:
+							centre.set((centre.get() + 1) % 4);
+							break;
+						case 1703945:
+							centre.set((centre.get() + 3) % 4);
+							break;
+						case 1703947:
+							right.set((right.get() + 1) % 4);
+							break;
+						case 1703948:
+							right.set((right.get() + 3) % 4);
+							break;
+						case 1703961:
+							confirmed.set(true);
+							break;
+						default:
+							throw new AssertionError("Unexpected widget click: " + widgetId);
+					}
+				}
+				return CompletableFuture.completedFuture(receipt("dispatched"));
+			},
+			reason -> { },
+			GenericClientTestSupport.behavior(
+				temporaryFolder.newFolder("capt-arnav-behavior").toPath()),
+			message -> { });
+		try
+		{
+			Map<String, Object> event = new java.util.LinkedHashMap<>();
+			event.put("active", true);
+			event.put("npc_id", 5426L);
+			host.setRandomEventHooks(() -> event, (key, status, error) -> { });
+			host.publishGameTick(captArnavSnapshot(
+				1,
+				left.get(),
+				centre.get(),
+				right.get(),
+				false,
+				false,
+				GenericClientQuestSnapshot.DialogueSnapshot.closed()));
+			host.interruptForRandomEvent("1:5426:10").get(2, TimeUnit.SECONDS);
+			host.startRandomEventSolver("1:5426:10", "capt-arnav")
+				.get(2, TimeUnit.SECONDS);
+
+			for (int tick = 2; tick <= 40 && !"COMPLETED".equals(host.getStatus()); tick++)
+			{
+				host.publishGameTick(captArnavSnapshot(
+					tick,
+					left.get(),
+					centre.get(),
+					right.get(),
+					confirmed.get(),
+					accepted.get(),
+					accepted.get()
+						? GenericClientQuestSnapshot.DialogueSnapshot.closed()
+						: GenericClientQuestSnapshot.DialogueSnapshot.choice(java.util.Arrays.asList(
+							"Yes, I'll help you unlock your chest.",
+							"No, sorry."))));
+				Thread.sleep(10L);
+			}
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals(0, left.get());
+			assertEquals(3, centre.get());
+			assertEquals(1, right.get());
+			assertEquals(Boolean.TRUE, accepted.get());
+			assertEquals(java.util.Arrays.asList(1703941, 1703941, 1703947, 1703961), clicks);
+			Map<String, Object> result = (Map<String, Object>)
+				host.getActiveScriptView().toMap().get("result");
+			assertEquals("solved", result.get("status"));
 		}
 		finally
 		{
@@ -1026,7 +1235,10 @@ public class GenericClientLuaHostTest
 			message -> { });
 		try
 		{
-			host.start("quest-runner", Collections.singletonMap("quest", "waterfall"))
+			Map<String, Object> inputs = new java.util.LinkedHashMap<>();
+			inputs.put("quest", "waterfall");
+			inputs.put("scope", "complete");
+			host.start("quest-runner", inputs)
 				.get(2, TimeUnit.SECONDS);
 			host.publishGameTick(questSnapshot(1, 1, 10, 0));
 			waitForStatus(host, "COMPLETED");
@@ -1034,6 +1246,841 @@ public class GenericClientLuaHostTest
 			assertTrue(host.getRecentLogs().contains("strict_hitpoints_block"));
 			assertEquals("strict hitpoints block",
 				host.getActiveScriptView().getOverlayRows().get(1).getValue());
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void questRunnerStopsWaterfallAtTheNextObservedCheckpoint() throws Exception
+	{
+		AtomicInteger npcRequests = new AtomicInteger();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-checkpoint-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-checkpoint-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("parked")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(receipt("arrived")),
+			(id, name, action, within, breaks) ->
+			{
+				npcRequests.incrementAndGet();
+				return CompletableFuture.completedFuture(receipt("dispatched"));
+			},
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) -> CompletableFuture.completedFuture(receipt(
+				"safety.configure".equals(type) ? "complete" : "dispatched")),
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			host.start("quest-runner", Collections.singletonMap("quest", "waterfall"))
+				.get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> items = new java.util.ArrayList<>();
+			items.add(itemSnapshot(0, 292, 1, "Book on Baxtorian"));
+			List<GenericClientAccountSnapshot.ItemSnapshot> gnomeItems = new java.util.ArrayList<>();
+			gnomeItems.add(itemSnapshot(0, 2552, 1, "Ring of dueling(8)"));
+			gnomeItems.add(itemSnapshot(1, 1993, 10, "Jug of wine"));
+			for (int tick = 1; tick <= 10 && !"COMPLETED".equals(host.getStatus()); tick++)
+			{
+				host.publishGameTick(waterfallSnapshot(
+					tick,
+					tick == 1 ? 2 : 3,
+					2518,
+					3427,
+					tick == 1 ? items : gnomeItems,
+					Collections.emptyList(),
+					false));
+				Thread.sleep(20L);
+			}
+			waitForStatus(host, "COMPLETED");
+
+			Map<String, Object> result = (Map<String, Object>)
+				host.getActiveScriptView().toMap().get("result");
+			assertEquals("reach_gnome_dungeon_checkpoint", result.get("status"));
+			assertEquals(0, npcRequests.get());
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void questRunnerPreservesOwnedGolrieKeyDuringGnomeRestock() throws Exception
+	{
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-key-restock-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-key-restock-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(receipt("arrived")),
+			(id, name, action, within, breaks) ->
+				CompletableFuture.completedFuture(receipt("rejected")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) -> CompletableFuture.completedFuture(receipt(
+				"safety.configure".equals(type) ? "complete" : "rejected")),
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			Map<String, Object> inputs = new java.util.LinkedHashMap<>();
+			inputs.put("quest", "waterfall");
+			inputs.put("scope", "complete");
+			host.start("quest-runner", inputs).get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> items = new java.util.ArrayList<>();
+			items.add(itemSnapshot(0, 293, 1, "Key"));
+			items.add(itemSnapshot(1, 2554, 1, "Ring of dueling(7)"));
+			for (int tick = 1;
+				tick <= 10 && !host.getRecentLogs().contains("phase=key_loadout_required");
+				tick++)
+			{
+				host.publishGameTick(waterfallSnapshot(
+					tick, 3, 3165, 3491, items, Collections.emptyList(), true));
+				Thread.sleep(20L);
+			}
+
+			assertTrue(host.getStatus() + " " + host.getRecentLogs(),
+				host.getRecentLogs().contains("phase=key_loadout_required"));
+			assertEquals("key loadout required",
+				host.getActiveScriptView().getOverlayRows().get(1).getValue());
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void questRunnerUsesTheCastleWarsBankChestForThePebbleLoadout() throws Exception
+	{
+		AtomicReference<String> bankObject = new AtomicReference<>();
+		AtomicReference<Boolean> bankBreaks = new AtomicReference<>();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-castle-wars-bank-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-castle-wars-bank-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(receipt("arrived")),
+			(id, name, action, within, breaks) ->
+				CompletableFuture.completedFuture(receipt("rejected")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) ->
+			{
+				if ("object.interact".equals(type))
+				{
+					bankObject.set(action.get("id") + ":" + action.get("action"));
+					bankBreaks.set(breaks);
+				}
+				return CompletableFuture.completedFuture(receipt(
+					"safety.configure".equals(type) ? "complete" : "dispatched"));
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			Map<String, Object> inputs = new java.util.LinkedHashMap<>();
+			inputs.put("quest", "waterfall");
+			inputs.put("scope", "complete");
+			host.start("quest-runner", inputs).get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> items = new java.util.ArrayList<>();
+			items.add(itemSnapshot(0, 294, 1, "Glarial's pebble"));
+			items.add(itemSnapshot(1, 1993, 10, "Jug of wine"));
+			items.add(itemSnapshot(2, 2560, 1, "Ring of dueling(4)"));
+			List<GenericClientQuestSnapshot.ObjectSnapshot> objects = Collections.singletonList(
+				new GenericClientQuestSnapshot.ObjectSnapshot(
+					4483, "Bank chest", "game", 2443, 3083, 0, 9,
+					Collections.singletonList("Use")));
+			for (int tick = 1; tick <= 10 && bankObject.get() == null; tick++)
+			{
+				host.publishGameTick(waterfallSnapshot(
+					tick, 3, 2442, 3092, items, Collections.emptyList(), true, objects));
+				Thread.sleep(20L);
+			}
+
+			assertEquals("4483.0:Use", bankObject.get());
+			assertEquals(Boolean.TRUE, bankBreaks.get());
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void questRunnerCarriesAnOwnedAmuletBackForTheUrnRun() throws Exception
+	{
+		AtomicReference<List<Map<String, Object>>> requestedItems = new AtomicReference<>();
+		AtomicReference<Boolean> requestedBreaks = new AtomicReference<>();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-owned-amulet-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-owned-amulet-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(receipt("arrived")),
+			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(receipt("unused")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) ->
+			{
+				if ("bank.loadout".equals(type))
+				{
+					requestedItems.set((List<Map<String, Object>>) action.get("items"));
+					requestedBreaks.set(breaks);
+				}
+				return CompletableFuture.completedFuture(receipt(
+					"safety.configure".equals(type) || "bank.loadout".equals(type)
+						? "complete"
+						: "dispatched"));
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			host.start("quest-runner", Collections.singletonMap("quest", "waterfall"))
+				.get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> inventory = Collections.singletonList(
+				itemSnapshot(0, 294, 1, "Glarial's pebble"));
+			List<GenericClientAccountSnapshot.ItemSnapshot> bank = java.util.Arrays.asList(
+				itemSnapshot(0, 295, 1, "Glarial's amulet"),
+				itemSnapshot(1, 3857, 1, "Games necklace(6)"),
+				itemSnapshot(2, 1993, 10, "Jug of wine"));
+			for (int tick = 1; tick <= 20 && requestedItems.get() == null; tick++)
+			{
+				host.publishGameTick(waterfallSnapshotWithBank(
+					tick,
+					4,
+					2946,
+					3368,
+					inventory,
+					Collections.emptyList(),
+					bank,
+					true,
+					Collections.emptyList()));
+				Thread.sleep(20L);
+			}
+
+			List<Map<String, Object>> loadout = requestedItems.get();
+			assertTrue("No bank loadout was dispatched", loadout != null);
+			assertTrue(loadout.stream().anyMatch(item ->
+				((Number) item.get("id")).intValue() == 295));
+			assertEquals(Boolean.TRUE, requestedBreaks.get());
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void questRunnerPreservesAnOwnedBaxtorianKeyDuringFinalRestock() throws Exception
+	{
+		AtomicReference<List<Map<String, Object>>> requestedItems = new AtomicReference<>();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-baxtorian-key-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-baxtorian-key-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(receipt("arrived")),
+			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(receipt("unused")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) ->
+			{
+				if ("bank.loadout".equals(type))
+				{
+					requestedItems.set((List<Map<String, Object>>) action.get("items"));
+				}
+				return CompletableFuture.completedFuture(receipt(
+					"safety.configure".equals(type) || "bank.loadout".equals(type)
+						? "complete"
+						: "dispatched"));
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			host.start("quest-runner", Collections.singletonMap("quest", "waterfall"))
+				.get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> bank = java.util.Arrays.asList(
+				itemSnapshot(0, 954, 1, "Rope"),
+				itemSnapshot(1, 556, 6, "Air rune"),
+				itemSnapshot(2, 555, 6, "Water rune"),
+				itemSnapshot(3, 557, 6, "Earth rune"),
+				itemSnapshot(4, 295, 1, "Glarial's amulet"),
+				itemSnapshot(5, 296, 1, "Glarial's urn"),
+				itemSnapshot(6, 298, 1, "Key"),
+				itemSnapshot(7, 3863, 1, "Games necklace(3)"),
+				itemSnapshot(8, 1993, 8, "Jug of wine"));
+			for (int tick = 1; tick <= 20 && requestedItems.get() == null; tick++)
+			{
+				host.publishGameTick(waterfallSnapshotWithBank(
+					tick,
+					5,
+					3164,
+					3492,
+					Collections.emptyList(),
+					Collections.emptyList(),
+					bank,
+					true,
+					Collections.emptyList()));
+				Thread.sleep(20L);
+			}
+
+			List<Map<String, Object>> loadout = requestedItems.get();
+			assertTrue("No final bank loadout was dispatched", loadout != null);
+			assertTrue(loadout.stream().anyMatch(item ->
+				((Number) item.get("id")).intValue() == 298));
+			Map<String, Object> necklace = loadout.stream()
+				.filter(item -> java.util.Arrays.asList(
+					3853, 3855, 3857, 3859, 3861, 3863, 3865, 3867)
+					.contains(((Number) item.get("id")).intValue()))
+				.findFirst()
+				.orElseThrow(() -> new AssertionError("Final loadout has no Games necklace"));
+			assertEquals(3863, ((Number) necklace.get("id")).intValue());
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void questRunnerRecognizesTheExactFinalLoadoutWithBaxtorianKey() throws Exception
+	{
+		AtomicReference<String> itemInteraction = new AtomicReference<>();
+		AtomicInteger bankLoadouts = new AtomicInteger();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-exact-key-loadout-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-exact-key-loadout-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(receipt("arrived")),
+			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(receipt("unused")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) ->
+			{
+				if ("bank.loadout".equals(type)) bankLoadouts.incrementAndGet();
+				if ("item.interact".equals(type))
+				{
+					itemInteraction.set(action.get("id") + ":" + action.get("action"));
+				}
+				return CompletableFuture.completedFuture(receipt(
+					"safety.configure".equals(type) ? "complete" : "dispatched"));
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			Map<String, Object> inputs = new java.util.LinkedHashMap<>();
+			inputs.put("quest", "waterfall");
+			inputs.put("scope", "complete");
+			host.start("quest-runner", inputs).get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> inventory = java.util.Arrays.asList(
+				itemSnapshot(0, 298, 1, "Key"),
+				itemSnapshot(1, 954, 1, "Rope"),
+				itemSnapshot(2, 556, 6, "Air rune"),
+				itemSnapshot(3, 555, 6, "Water rune"),
+				itemSnapshot(4, 557, 6, "Earth rune"),
+				itemSnapshot(5, 295, 1, "Glarial's amulet"),
+				itemSnapshot(6, 296, 1, "Glarial's urn"),
+				itemSnapshot(7, 3853, 1, "Games necklace(8)"),
+				itemSnapshot(8, 1993, 8, "Jug of wine"));
+			for (int tick = 1; tick <= 20 && itemInteraction.get() == null; tick++)
+			{
+				host.publishGameTick(waterfallSnapshot(
+					tick, 5, 3164, 3492, inventory, Collections.emptyList(), true));
+				Thread.sleep(20L);
+			}
+
+			assertEquals("3853.0:Rub", itemInteraction.get());
+			assertEquals(0, bankLoadouts.get());
+			assertTrue(host.getRecentLogs().contains("phase=reach_falls"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void questRunnerStartsWaterfallWithAlmeraFromObservedState() throws Exception
+	{
+		AtomicReference<String> npcRequest = new AtomicReference<>();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-almera-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-almera-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(receipt("arrived")),
+			(id, name, action, within, breaks) ->
+			{
+				npcRequest.set(id + ":" + action);
+				return CompletableFuture.completedFuture(receipt("dispatched"));
+			},
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) -> CompletableFuture.completedFuture(receipt("complete")),
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			Map<String, Object> inputs = new java.util.LinkedHashMap<>();
+			inputs.put("quest", "waterfall");
+			inputs.put("scope", "complete");
+			host.start("quest-runner", inputs)
+				.get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> items = new java.util.ArrayList<>();
+			items.add(itemSnapshot(0, 954, 1, "Rope"));
+			items.add(itemSnapshot(1, 3865, 1, "Games necklace(2)"));
+			items.add(itemSnapshot(2, 1993, 6, "Jug of wine"));
+			for (int tick = 1; tick <= 100 && !"COMPLETED".equals(host.getStatus()); tick++)
+			{
+				host.publishGameTick(waterfallSnapshot(
+					tick, 0, 2521, 3495, items, Collections.emptyList(), true));
+				Thread.sleep(10L);
+			}
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals("4181:Talk-to", npcRequest.get());
+			assertTrue(host.getRecentLogs().contains("phase=accept"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void questRunnerRoutesWaterfallTombLootFromTheObservedZone() throws Exception
+	{
+		AtomicReference<String> questRequest = new AtomicReference<>();
+		AtomicReference<Boolean> questBreaks = new AtomicReference<>();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-tomb-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-tomb-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(receipt("arrived")),
+			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(receipt("unused")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) ->
+			{
+				if (!"safety.configure".equals(type))
+				{
+					questRequest.set(type + ":" + action.get("id"));
+					questBreaks.set(breaks);
+				}
+				return CompletableFuture.completedFuture(receipt(
+					"safety.configure".equals(type) ? "complete" : "dispatched"));
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			host.start("quest-runner", Collections.singletonMap("quest", "waterfall"))
+				.get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> items = new java.util.ArrayList<>();
+			items.add(itemSnapshot(0, 295, 1, "Glarial's amulet"));
+			items.add(itemSnapshot(1, 1993, 10, "Jug of wine"));
+			List<GenericClientQuestSnapshot.ObjectSnapshot> objects = Collections.singletonList(
+				new GenericClientQuestSnapshot.ObjectSnapshot(
+					1993, "Glarial's Tomb", "game", 2542, 9811, 0, 1,
+					Collections.singletonList("Search")));
+			for (int tick = 1; tick <= 35 && !"COMPLETED".equals(host.getStatus()); tick++)
+			{
+				host.publishGameTick(waterfallSnapshot(
+					tick, 3, 2542, 9812, items, Collections.emptyList(), false, objects));
+				Thread.sleep(10L);
+			}
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals("object.interact:1993.0", questRequest.get());
+			assertEquals(Boolean.FALSE, questBreaks.get());
+			assertTrue(host.getRecentLogs().contains("phase=obtain_urn"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void questRunnerEscapesTheTombAfterAnUrnInteractionFailure() throws Exception
+	{
+		List<String> requests = new java.util.ArrayList<>();
+		AtomicReference<Boolean> escapeBreaks = new AtomicReference<>();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-tomb-escape-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-tomb-escape-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(receipt("arrived")),
+			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(receipt("unused")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) ->
+			{
+				if (!"safety.configure".equals(type))
+				{
+					requests.add(type + ":" + action.get("id"));
+				}
+				if ("item.interact".equals(type))
+				{
+					escapeBreaks.set(breaks);
+				}
+				return CompletableFuture.completedFuture(receipt(
+					"safety.configure".equals(type)
+						? "complete"
+						: "object.interact".equals(type) ? "rejected" : "dispatched"));
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			host.start("quest-runner", Collections.singletonMap("quest", "waterfall"))
+				.get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> items = java.util.Arrays.asList(
+				itemSnapshot(0, 295, 1, "Glarial's amulet"),
+				itemSnapshot(1, 3857, 1, "Games necklace(6)"),
+				itemSnapshot(2, 1993, 10, "Jug of wine"));
+			List<GenericClientQuestSnapshot.ObjectSnapshot> objects = Collections.singletonList(
+				new GenericClientQuestSnapshot.ObjectSnapshot(
+					1993, "Glarial's Tomb", "game", 2542, 9811, 0, 1,
+					Collections.singletonList("Search")));
+			for (int tick = 1; tick <= 80 && !"COMPLETED".equals(host.getStatus()); tick++)
+			{
+				host.publishGameTick(waterfallSnapshot(
+					tick, 4, 2542, 9812, items, Collections.emptyList(), false, objects));
+				Thread.sleep(10L);
+			}
+			waitForStatus(host, "COMPLETED");
+
+			assertTrue(requests.contains("object.interact:1993.0"));
+			assertTrue(requests.contains("item.interact:3857.0"));
+			assertEquals(Boolean.FALSE, escapeBreaks.get());
+			Map<String, Object> result = (Map<String, Object>)
+				host.getActiveScriptView().toMap().get("result");
+			assertEquals("action_failed", result.get("status"));
+			assertTrue(result.get("escape") instanceof Map);
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void questRunnerEscapesTheWaterfallDungeonAfterAKeyInteractionFailure() throws Exception
+	{
+		List<String> requests = new java.util.ArrayList<>();
+		AtomicReference<Boolean> escapeBreaks = new AtomicReference<>();
+		AtomicReference<Integer> safetyMinimum = new AtomicReference<>();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-dungeon-escape-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-dungeon-escape-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, breaks, useRun) ->
+				CompletableFuture.completedFuture(receipt("arrived")),
+			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(receipt("unused")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) ->
+			{
+				if ("safety.configure".equals(type))
+				{
+					safetyMinimum.set(((Number) action.get("minimum_hitpoints")).intValue());
+				}
+				if (!"safety.configure".equals(type))
+				{
+					requests.add(type + ":" + action.get("id"));
+				}
+				if ("item.interact".equals(type))
+				{
+					escapeBreaks.set(breaks);
+				}
+				return CompletableFuture.completedFuture(receipt(
+					"safety.configure".equals(type)
+						? "complete"
+						: "object.interact".equals(type) ? "rejected" : "dispatched"));
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			host.start("quest-runner", Collections.singletonMap("quest", "waterfall"))
+				.get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> items = java.util.Arrays.asList(
+				itemSnapshot(0, 295, 1, "Glarial's amulet"),
+				itemSnapshot(1, 296, 1, "Glarial's urn"),
+				itemSnapshot(2, 3857, 1, "Games necklace(6)"),
+				itemSnapshot(3, 1993, 8, "Jug of wine"));
+			List<GenericClientQuestSnapshot.ObjectSnapshot> objects = Collections.singletonList(
+				new GenericClientQuestSnapshot.ObjectSnapshot(
+					1999, "Crate", "game", 2589, 9888, 0, 1,
+					Collections.singletonList("Search")));
+			for (int tick = 1; tick <= 100 && !"COMPLETED".equals(host.getStatus()); tick++)
+			{
+				host.publishGameTick(waterfallSnapshot(
+					tick, 4, 2589, 9888, items, Collections.emptyList(), false, objects));
+				Thread.sleep(10L);
+			}
+			waitForStatus(host, "COMPLETED");
+
+			assertTrue(requests.contains("object.interact:1999.0"));
+			assertTrue(requests.contains("item.interact:3857.0"));
+			assertEquals(Boolean.FALSE, escapeBreaks.get());
+			assertEquals(Integer.valueOf(6), safetyMinimum.get());
+			Map<String, Object> result = (Map<String, Object>)
+				host.getActiveScriptView().toMap().get("result");
+			assertEquals("action_failed", result.get("status"));
+			assertTrue(result.get("escape") instanceof Map);
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void questRunnerCrossesAnUnlockedInnerDoorWhenTheKeyCrateIsGone() throws Exception
+	{
+		List<WorldPoint> destinations = new java.util.ArrayList<>();
+		List<Integer> within = new java.util.ArrayList<>();
+		List<Boolean> walkBreaks = new java.util.ArrayList<>();
+		AtomicInteger crateInteractions = new AtomicInteger();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-unlocked-door-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-unlocked-door-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(world, requestedWithin, timeout, breaks, useRun) ->
+			{
+				destinations.add(world);
+				within.add(requestedWithin);
+				walkBreaks.add(breaks);
+				return CompletableFuture.completedFuture(receipt(
+					destinations.size() == 1 ? "arrived" : "rejected"));
+			},
+			(id, name, action, requestedWithin, breaks) ->
+				CompletableFuture.completedFuture(receipt("unused")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) ->
+			{
+				if ("object.interact".equals(type) &&
+					((Number) action.get("id")).intValue() == 1999)
+				{
+					crateInteractions.incrementAndGet();
+				}
+				return CompletableFuture.completedFuture(receipt(
+					"safety.configure".equals(type) ? "complete" : "rejected"));
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			Map<String, Object> inputs = new java.util.LinkedHashMap<>();
+			inputs.put("quest", "waterfall");
+			inputs.put("scope", "complete");
+			host.start("quest-runner", inputs).get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> inventory = java.util.Arrays.asList(
+				itemSnapshot(0, 296, 1, "Glarial's urn"),
+				itemSnapshot(1, 3863, 1, "Games necklace(3)"),
+				itemSnapshot(2, 1993, 8, "Jug of wine"));
+			List<GenericClientAccountSnapshot.ItemSnapshot> equipment = Collections.singletonList(
+				itemSnapshot(0, 295, 1, "Glarial's amulet"));
+			host.publishGameTick(waterfallSnapshot(
+				1, 5, 2588, 9885, inventory, equipment, false, Collections.emptyList()));
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals(java.util.Arrays.asList(
+				new WorldPoint(2568, 9898, 0),
+				new WorldPoint(2566, 9903, 0)), destinations);
+			assertEquals(java.util.Arrays.asList(0, 0), within);
+			assertEquals(java.util.Arrays.asList(false, false), walkBreaks);
+			assertEquals(0, crateInteractions.get());
+			Map<String, Object> result = (Map<String, Object>)
+				host.getActiveScriptView().toMap().get("result");
+			assertEquals("open_inner_door", result.get("phase"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void questRunnerApproachesEachPillarBeforeUsingRunes() throws Exception
+	{
+		AtomicReference<WorldPoint> destination = new AtomicReference<>();
+		AtomicReference<Integer> within = new AtomicReference<>();
+		AtomicReference<Boolean> walkBreaks = new AtomicReference<>();
+		AtomicInteger runeUses = new AtomicInteger();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-pillar-approach-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-pillar-approach-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(world, requestedWithin, timeout, breaks, useRun) ->
+			{
+				destination.set(world);
+				within.set(requestedWithin);
+				walkBreaks.set(breaks);
+				return CompletableFuture.completedFuture(receipt("rejected"));
+			},
+			(id, name, action, requestedWithin, breaks) ->
+				CompletableFuture.completedFuture(receipt("unused")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) ->
+			{
+				if ("item.use_on_object".equals(type)) runeUses.incrementAndGet();
+				return CompletableFuture.completedFuture(receipt(
+					"safety.configure".equals(type) ? "complete" : "rejected"));
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			Map<String, Object> inputs = new java.util.LinkedHashMap<>();
+			inputs.put("quest", "waterfall");
+			inputs.put("scope", "complete");
+			host.start("quest-runner", inputs).get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> inventory = java.util.Arrays.asList(
+				itemSnapshot(0, 295, 1, "Glarial's amulet"),
+				itemSnapshot(1, 296, 1, "Glarial's urn"),
+				itemSnapshot(2, 556, 6, "Air rune"),
+				itemSnapshot(3, 555, 6, "Water rune"),
+				itemSnapshot(4, 557, 6, "Earth rune"),
+				itemSnapshot(5, 3857, 1, "Games necklace(6)"),
+				itemSnapshot(6, 1993, 8, "Jug of wine"));
+			List<GenericClientQuestSnapshot.ObjectSnapshot> objects = new java.util.ArrayList<>();
+			for (int x : new int[]{2562, 2565, 2568})
+			{
+				for (int y : new int[]{9908, 9911})
+				{
+					objects.add(new GenericClientQuestSnapshot.ObjectSnapshot(
+						2005, "Stone pillar", "game", x, y, 0, 4,
+						Collections.emptyList()));
+				}
+			}
+			host.publishGameTick(waterfallSnapshot(
+				1, 6, 2566, 9903, inventory, Collections.emptyList(), false, objects));
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals(new WorldPoint(2562, 9908, 0), destination.get());
+			assertEquals(Integer.valueOf(3), within.get());
+			assertEquals(Boolean.FALSE, walkBreaks.get());
+			assertEquals(0, runeUses.get());
+			Map<String, Object> result = (Map<String, Object>)
+				host.getActiveScriptView().toMap().get("result");
+			assertEquals("charge_pillars", result.get("phase"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void questRunnerFinishesFromTheChaliceRoomAfterTheAmuletIsConsumed() throws Exception
+	{
+		AtomicReference<WorldPoint> destination = new AtomicReference<>();
+		AtomicReference<String> actionType = new AtomicReference<>();
+		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
+			temporaryFolder.newFolder("waterfall-chalice-room-behavior").toPath());
+		behavior.activateAccount(1234L);
+		behavior.setLoggedIn(true);
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("waterfall-chalice-room-scripts").toPath(),
+			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(world, within, timeout, breaks, useRun) ->
+			{
+				destination.set(world);
+				return CompletableFuture.completedFuture(receipt("arrived"));
+			},
+			(id, name, action, within, breaks) ->
+				CompletableFuture.completedFuture(receipt("unused")),
+			(mode, breaks) -> CompletableFuture.completedFuture(receipt("unchanged")),
+			(type, action, breaks) ->
+			{
+				actionType.set(type);
+				return CompletableFuture.completedFuture(receipt(
+					"safety.configure".equals(type) ? "complete" : "rejected"));
+			},
+			reason -> { },
+			behavior,
+			message -> { });
+		try
+		{
+			Map<String, Object> inputs = new java.util.LinkedHashMap<>();
+			inputs.put("quest", "waterfall");
+			inputs.put("scope", "complete");
+			host.start("quest-runner", inputs).get(2, TimeUnit.SECONDS);
+			List<GenericClientAccountSnapshot.ItemSnapshot> inventory =
+				Collections.singletonList(itemSnapshot(0, 296, 1, "Glarial's urn"));
+			List<GenericClientQuestSnapshot.ObjectSnapshot> objects = Collections.singletonList(
+				new GenericClientQuestSnapshot.ObjectSnapshot(
+					2014, "Chalice of Eternity", "game", 2603, 9910, 0, 4,
+					Collections.singletonList("Take")));
+			host.publishGameTick(waterfallSnapshot(
+				1, 8, 2603, 9914, inventory, Collections.emptyList(), false, objects));
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals(new WorldPoint(2603, 9910, 0), destination.get());
+			assertEquals("item.use_on_object", actionType.get());
+			Map<String, Object> result = (Map<String, Object>)
+				host.getActiveScriptView().toMap().get("result");
+			assertEquals("finish_quest", result.get("phase"));
 		}
 		finally
 		{
@@ -1155,7 +2202,7 @@ public class GenericClientLuaHostTest
 		{
 			Map<String, Object> inputs = new java.util.LinkedHashMap<>();
 			inputs.put("quest", "witchs_house");
-			inputs.put("combat", "continue");
+			inputs.put("scope", "complete");
 			host.start("quest-runner", inputs).get(2, TimeUnit.SECONDS);
 			for (int tick = 1; tick <= 4 && !"COMPLETED".equals(host.getStatus()); tick++)
 			{
@@ -1308,6 +2355,7 @@ public class GenericClientLuaHostTest
 		GenericClientQuestSnapshot quest = new GenericClientQuestSnapshot(
 			true,
 			varps,
+			Collections.singletonMap(9110, 0),
 			Collections.emptyList(),
 			GenericClientQuestSnapshot.DialogueSnapshot.closed());
 		return new GenericClientSnapshot(
@@ -1336,6 +2384,130 @@ public class GenericClientLuaHostTest
 		return items;
 	}
 
+	private static GenericClientSnapshot waterfallSnapshot(
+		long tick,
+		int waterfallVarp,
+		int x,
+		int y,
+		List<GenericClientAccountSnapshot.ItemSnapshot> inventoryItems,
+		List<GenericClientAccountSnapshot.ItemSnapshot> equipmentItems,
+		boolean bankKnown)
+	{
+		return waterfallSnapshot(
+			tick,
+			waterfallVarp,
+			x,
+			y,
+			inventoryItems,
+			equipmentItems,
+			bankKnown,
+			Collections.emptyList());
+	}
+
+	private static GenericClientSnapshot waterfallSnapshot(
+		long tick,
+		int waterfallVarp,
+		int x,
+		int y,
+		List<GenericClientAccountSnapshot.ItemSnapshot> inventoryItems,
+		List<GenericClientAccountSnapshot.ItemSnapshot> equipmentItems,
+		boolean bankKnown,
+		List<GenericClientQuestSnapshot.ObjectSnapshot> objects)
+	{
+		return waterfallSnapshotWithBank(
+			tick,
+			waterfallVarp,
+			x,
+			y,
+			inventoryItems,
+			equipmentItems,
+			Collections.emptyList(),
+			false,
+			objects,
+			bankKnown);
+	}
+
+	private static GenericClientSnapshot waterfallSnapshotWithBank(
+		long tick,
+		int waterfallVarp,
+		int x,
+		int y,
+		List<GenericClientAccountSnapshot.ItemSnapshot> inventoryItems,
+		List<GenericClientAccountSnapshot.ItemSnapshot> equipmentItems,
+		List<GenericClientAccountSnapshot.ItemSnapshot> bankItems,
+		boolean bankOpen,
+		List<GenericClientQuestSnapshot.ObjectSnapshot> objects)
+	{
+		return waterfallSnapshotWithBank(
+			tick,
+			waterfallVarp,
+			x,
+			y,
+			inventoryItems,
+			equipmentItems,
+			bankItems,
+			bankOpen,
+			objects,
+			true);
+	}
+
+	private static GenericClientSnapshot waterfallSnapshotWithBank(
+		long tick,
+		int waterfallVarp,
+		int x,
+		int y,
+		List<GenericClientAccountSnapshot.ItemSnapshot> inventoryItems,
+		List<GenericClientAccountSnapshot.ItemSnapshot> equipmentItems,
+		List<GenericClientAccountSnapshot.ItemSnapshot> bankItems,
+		boolean bankOpen,
+		List<GenericClientQuestSnapshot.ObjectSnapshot> objects,
+		boolean bankKnown)
+	{
+		GenericClientAccountSnapshot.ContainerSnapshot inventory =
+			new GenericClientAccountSnapshot.ContainerSnapshot(true, 28, inventoryItems);
+		GenericClientAccountSnapshot.ContainerSnapshot equipment =
+			new GenericClientAccountSnapshot.ContainerSnapshot(true, 14, equipmentItems);
+		GenericClientAccountSnapshot.BankSnapshot bank = bankKnown
+			? new GenericClientAccountSnapshot.BankSnapshot(
+					bankOpen ? "open" : "cached",
+					tick,
+					new GenericClientAccountSnapshot.ContainerSnapshot(
+						true, 816, bankItems))
+			: GenericClientAccountSnapshot.BankSnapshot.unknown();
+		List<GenericClientAccountSnapshot.SkillSnapshot> skills = java.util.Arrays.asList(
+			new GenericClientAccountSnapshot.SkillSnapshot("magic", 16, 16, 3080),
+			new GenericClientAccountSnapshot.SkillSnapshot("hitpoints", 25, 25, 8184));
+		GenericClientAccountSnapshot.QuestListSnapshot quests =
+			new GenericClientAccountSnapshot.QuestListSnapshot(
+				true,
+				tick,
+				java.util.Arrays.asList(
+					new GenericClientAccountSnapshot.QuestSnapshot(
+						"witchs_house", 160, "Witch's House", "finished"),
+					new GenericClientAccountSnapshot.QuestSnapshot(
+						"waterfall_quest", 158, "Waterfall Quest",
+						waterfallVarp == 0 ? "not_started" : "in_progress")));
+		GenericClientAccountSnapshot account = new GenericClientAccountSnapshot(
+			true, 67, skills, inventory, equipment, bank, quests);
+		int[] varps = new int[227];
+		varps[65] = waterfallVarp;
+		GenericClientQuestSnapshot quest = new GenericClientQuestSnapshot(
+			true,
+			varps,
+			Collections.singletonMap(9110, 0),
+			objects,
+			GenericClientQuestSnapshot.DialogueSnapshot.closed());
+		return new GenericClientSnapshot(
+			tick,
+			"LOGGED_IN",
+			231,
+			new GenericClientSnapshot.PlayerSnapshot(
+				"Player", x, y, 0, -1, -1, null, 25, 25, 10000, true, null),
+			Collections.emptyList(),
+			account,
+			quest);
+	}
+
 	private static GenericClientAccountSnapshot.ItemSnapshot itemSnapshot(
 		int slot,
 		int id,
@@ -1344,6 +2516,119 @@ public class GenericClientLuaHostTest
 	{
 		return new GenericClientAccountSnapshot.ItemSnapshot(
 			slot, null, id, quantity, name, false, true, true, Collections.emptyList());
+	}
+
+	private static GenericClientSnapshot captArnavSnapshot(
+		long tick,
+		int left,
+		int centre,
+		int right,
+		boolean rewarded)
+	{
+		return captArnavSnapshot(
+			tick,
+			left,
+			centre,
+			right,
+			rewarded,
+			true,
+			GenericClientQuestSnapshot.DialogueSnapshot.closed());
+	}
+
+	private static GenericClientSnapshot captArnavSnapshot(
+		long tick,
+		int left,
+		int centre,
+		int right,
+		boolean rewarded,
+		boolean puzzleVisible,
+		GenericClientQuestSnapshot.DialogueSnapshot dialogue)
+	{
+		Map<Integer, Integer> varbits = new java.util.LinkedHashMap<>();
+		varbits.put(9585, left);
+		varbits.put(9593, centre);
+		varbits.put(9594, right);
+		GenericClientQuestSnapshot quest = new GenericClientQuestSnapshot(
+			true,
+			new int[0],
+			varbits,
+			Collections.emptyList(),
+			dialogue);
+		GenericClientWidgetSnapshot widgets = puzzleVisible
+			? GenericClientWidgetSnapshot.capture(widgetClient(
+				widget(1703958, "COINS"),
+				widget(1703959, "RING"),
+				widget(1703960, "BOWL"),
+				widget(1703941, ""),
+				widget(1703942, ""),
+				widget(1703944, ""),
+				widget(1703945, ""),
+				widget(1703947, ""),
+				widget(1703948, ""),
+				widget(1703961, "Unlock")))
+			: GenericClientWidgetSnapshot.empty();
+		List<GenericClientGameMessageBuffer.Message> messages = rewarded
+			? Collections.singletonList(new GenericClientGameMessageBuffer.Message(
+				tick, "gamemessage", "", "", "Your reward is: 125 x Coins."))
+			: Collections.emptyList();
+		return new GenericClientSnapshot(
+			tick,
+			"LOGGED_IN",
+			240,
+			new GenericClientSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
+			Collections.emptyList(),
+			GenericClientAccountSnapshot.empty(),
+			quest,
+			messages,
+			GenericClientSceneCollision.empty(),
+			widgets);
+	}
+
+	private static Client widgetClient(Widget... widgets)
+	{
+		Widget root = (Widget) Proxy.newProxyInstance(
+			Widget.class.getClassLoader(),
+			new Class<?>[]{Widget.class},
+			(proxy, method, arguments) ->
+			{
+				if ("getId".equals(method.getName())) return 1703936;
+				if ("getBounds".equals(method.getName())) return new Rectangle(40, 40, 500, 350);
+				if ("getChildren".equals(method.getName())) return widgets;
+				return method.getReturnType().isPrimitive()
+					? method.getReturnType() == boolean.class ? false : 0
+					: null;
+			});
+		return (Client) Proxy.newProxyInstance(
+			Client.class.getClassLoader(),
+			new Class<?>[]{Client.class},
+			(proxy, method, arguments) -> "getWidgetRoots".equals(method.getName())
+				? new Widget[]{root}
+				: method.getReturnType().isPrimitive()
+					? method.getReturnType() == boolean.class ? false : 0
+					: null);
+	}
+
+	private static Widget widget(int id, String text)
+	{
+		return (Widget) Proxy.newProxyInstance(
+			Widget.class.getClassLoader(),
+			new Class<?>[]{Widget.class},
+			(proxy, method, arguments) ->
+			{
+				if ("getId".equals(method.getName())) return id;
+				if ("getText".equals(method.getName())) return text;
+				if ("getBounds".equals(method.getName()))
+				{
+					return new Rectangle(80 + (id & 0xF) * 20, 100, 18, 18);
+				}
+				if ("getItemId".equals(method.getName()) || "getModelId".equals(method.getName()))
+				{
+					return -1;
+				}
+				return method.getReturnType().isPrimitive()
+					? method.getReturnType() == boolean.class ? false : 0
+					: null;
+			});
 	}
 
 	private static String script(String body)

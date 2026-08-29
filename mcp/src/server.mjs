@@ -42,6 +42,7 @@ export function createServer(bridge = new GenericClientBridge()) {
         "Available Lua primitives are gc.read, gc.await, gc.log, gc.overlay, and gc.next_action. " +
         "Each composite client interaction uses the seeded behavior profile unless breaks=false; gc.phase(name) performs a heavier phase evaluation. " +
         "Use script_save for reusable standalone scripts, script_run with declared inputs, and script_action for declared buttons. " +
+        "Use random_event_status whenever client_status reports attention_required; acknowledgement never releases the block, while completion does. " +
         "Use automation_status before changing scheduled rules; scheduled and manual scripts share the single manifest-script slot.",
     },
   );
@@ -51,7 +52,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Read GenericClient status",
       description:
-        "Read the live player position, game state, Lua state, behavior state/profile, registered scripts, mouse profile, recent logs, and bounded chat/system messages. Call this before exploring or interacting.",
+        "Read the live player position, game state, Lua state, behavior profile, latched random-event state, registered scripts, mouse profile, recent logs, and bounded chat/system messages. Call this before exploring or interacting.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: true,
@@ -181,6 +182,73 @@ export function createServer(bridge = new GenericClientBridge()) {
       },
     },
     async () => result(await bridge.call("behavior.break.end")),
+  );
+
+  server.registerTool(
+    "random_event_status",
+    {
+      title: "Read random-event state",
+      description:
+        "Read GenericClient's latched random event, NPC identity and location, registered solver, presence, and attention state. The record remains available if the NPC despawns.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => result(await bridge.call("random_event.status")),
+  );
+
+  server.registerTool(
+    "random_event_acknowledge",
+    {
+      title: "Acknowledge random event",
+      description:
+        "Mark the pending random-event alert as seen. This does not dismiss the event, release the input block, or resume the interrupted script.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => result(await bridge.call("random_event.acknowledge")),
+  );
+
+  server.registerTool(
+    "random_event_complete",
+    {
+      title: "Complete random event",
+      description:
+        "Release a latched random event only after its solution has been observed. Optionally restart the interrupted standalone script from current game state.",
+      inputSchema: z.object({
+        reason: z
+          .string()
+          .min(1)
+          .default("completed_via_mcp")
+          .describe("Short observed completion receipt."),
+        resume_interrupted: z
+          .boolean()
+          .default(true)
+          .describe("Restart the interrupted manual script from current observed state."),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ reason, resume_interrupted }) =>
+      result(
+        await bridge.call("random_event.complete", {
+          reason,
+          resume_interrupted,
+        }),
+      ),
   );
 
   server.registerTool(
@@ -420,6 +488,10 @@ export function createServer(bridge = new GenericClientBridge()) {
           .string()
           .min(1)
           .describe("Complete Lua file returning { inputs = {...}, run = function(input) ... end }."),
+        random_events: z
+          .array(z.number().int().positive())
+          .default([])
+          .describe("Optional RuneLite random-event NPC IDs this standalone solver handles."),
       }),
       annotations: {
         readOnlyHint: false,
@@ -428,8 +500,16 @@ export function createServer(bridge = new GenericClientBridge()) {
         openWorldHint: false,
       },
     },
-    async ({ id, name, description, source }) =>
-      result(await bridge.call("scripts.save", { id, name, description, source })),
+    async ({ id, name, description, source, random_events }) =>
+      result(
+        await bridge.call("scripts.save", {
+          id,
+          name,
+          description,
+          source,
+          random_events,
+        }),
+      ),
   );
 
   server.registerTool(

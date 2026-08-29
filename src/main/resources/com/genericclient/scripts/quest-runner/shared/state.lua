@@ -3,6 +3,10 @@ local varp_ids = {
   waterfall = 65,
 }
 
+local varbit_ids = {
+  waterfall = { 9110 },
+}
+
 local function distance(a, b)
   if not a or a.plane ~= b.plane then return 99999 end
   return math.max(math.abs(a.x - b.x), math.abs(a.y - b.y))
@@ -58,12 +62,36 @@ local function missing_carried_items(state, loadout)
   return missing
 end
 
+local function matches_carried_loadout(state, loadout)
+  if not state.inventory or not state.inventory.items or
+    not state.equipment or not state.equipment.items then
+    return false
+  end
+  if #state.equipment.items > 0 then return false end
+  local allowed = {}
+  for _, requirement in ipairs(loadout) do
+    allowed[requirement.id] = true
+    for _, id in ipairs(requirement.alternative_ids or {}) do allowed[id] = true end
+    if requirement_quantity(state, requirement, false) ~= requirement.quantity then
+      return false
+    end
+  end
+  for _, item in ipairs(state.inventory.items) do
+    if not allowed[item.id] then return false end
+  end
+  return true
+end
+
 local function read(quest)
   local varp_id = assert(varp_ids[quest], "Unknown quest state: " .. tostring(quest))
-  local vars = gc.read("vars", { varps = { varp_id } })
+  local vars = gc.read("vars", {
+    varps = { varp_id },
+    varbits = varbit_ids[quest] or {},
+  })
   return {
     quest = quest,
     varp = vars.varps[varp_id],
+    varbits = vars.varbits or {},
     player = gc.read("player"),
     skills = gc.read("skills"),
     inventory = gc.read("inventory"),
@@ -80,5 +108,6 @@ return {
   total_owned = total_owned,
   missing_items = missing_items,
   missing_carried_items = missing_carried_items,
+  matches_carried_loadout = matches_carried_loadout,
   read = read,
 }

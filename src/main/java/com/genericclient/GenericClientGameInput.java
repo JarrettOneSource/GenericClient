@@ -36,9 +36,13 @@ final class GenericClientGameInput implements AutoCloseable
 	private static final long CLICK_RESULT_TIMEOUT_MILLIS = 2500L;
 	private static final long CAMERA_TURN_TIMEOUT_MILLIS = 1_200L;
 	private static final long CAMERA_POLL_MILLIS = 40L;
-	private static final int CAMERA_SETTLED_UNITS = 24;
+	private static final int CAMERA_SETTLED_UNITS = 192;
 	private static final int CONTEXT_MENU_ENTRY_HEIGHT = 15;
 	private static final int MAX_TARGET_ATTEMPTS = 20;
+	static final int CAMERA_FULL_TURN = 1 << 14;
+	static final int CAMERA_YAW_MASK = CAMERA_FULL_TURN - 1;
+	static final int CAMERA_QUARTER_TURN = CAMERA_FULL_TURN / 4;
+	static final int CAMERA_INTERACTION_PITCH = 383 << 3;
 
 	private final Client client;
 	private final ClientThread clientThread;
@@ -48,6 +52,7 @@ final class GenericClientGameInput implements AutoCloseable
 	private final GenericClientBehaviorController behavior;
 	private final AtomicBoolean running = new AtomicBoolean();
 	private final AtomicLong routeRequestSequence = new AtomicLong();
+	private final AtomicLong cancellationSequence = new AtomicLong();
 	private final List<ScheduledFuture<?>> pending = new CopyOnWriteArrayList<>();
 
 	private volatile boolean awaitingMenuResult;
@@ -118,10 +123,12 @@ final class GenericClientGameInput implements AutoCloseable
 		boolean breaksEnabled,
 		long requestId)
 	{
+		long cancellationId = cancellationSequence.get();
 		return performWithBehavior(
 			behavior,
 			breaksEnabled,
-			() -> beginWalkClickUnlessCancelled(mode, candidates, requestId, breaksEnabled)).thenApply(result ->
+			() -> beginWalkClickUnlessCancelled(
+				mode, candidates, requestId, cancellationId, breaksEnabled)).thenApply(result ->
 			{
 				reporter.accept("WALK_INTERACTION_COMPLETED target=" + result.getTarget() +
 					" clicked=" + result.isClickDispatched() +
@@ -136,9 +143,11 @@ final class GenericClientGameInput implements AutoCloseable
 		SelectionMode mode,
 		List<WorldPoint> candidates,
 		long requestId,
+		long cancellationId,
 		boolean breaksEnabled)
 	{
-		if (closed || (mode == SelectionMode.ROUTE && routeRequestSequence.get() != requestId))
+		if (closed || cancellationSequence.get() != cancellationId ||
+			(mode == SelectionMode.ROUTE && routeRequestSequence.get() != requestId))
 		{
 			return CompletableFuture.completedFuture(new RawWalkResult(
 				null,
@@ -246,6 +255,16 @@ final class GenericClientGameInput implements AutoCloseable
 		if (running.get() && selectionMode == SelectionMode.ROUTE)
 		{
 			finish("WALK_TILE_CLICK_CANCELLED");
+		}
+	}
+
+	void cancel(String reason)
+	{
+		cancellationSequence.incrementAndGet();
+		routeRequestSequence.incrementAndGet();
+		if (running.get())
+		{
+			finish("WALK_CLICK_CANCELLED reason=" + reason);
 		}
 	}
 
@@ -392,13 +411,14 @@ final class GenericClientGameInput implements AutoCloseable
 		double radians = Math.atan2(
 			target.getX() - origin.getX(),
 			target.getY() - origin.getY());
-		return (int) Math.round(radians * 1024.0 / Math.PI) & 2047;
+		return (int) Math.round(radians * (CAMERA_FULL_TURN / 2.0) / Math.PI) &
+			CAMERA_YAW_MASK;
 	}
 
 	static int angularDistance(int first, int second)
 	{
-		int distance = Math.abs((first - second) & 2047);
-		return Math.min(distance, 2048 - distance);
+		int distance = Math.abs((first - second) & CAMERA_YAW_MASK);
+		return Math.min(distance, CAMERA_FULL_TURN - distance);
 	}
 
 	private Target chooseRandomVisibleTile(Player player)
@@ -778,6 +798,7 @@ final class GenericClientGameInput implements AutoCloseable
 	public void close()
 	{
 		closed = true;
+		cancellationSequence.incrementAndGet();
 		routeRequestSequence.incrementAndGet();
 		if (running.get())
 		{

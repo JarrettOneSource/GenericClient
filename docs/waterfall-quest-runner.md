@@ -1,9 +1,9 @@
 # Waterfall Quest Runner
 
-Status: researched and isolated under `quest-runner/waterfall/`, but not yet
-implemented or authorized for live execution. The current module stops at a
-preflight checkpoint; the phase handlers below remain the next implementation
-slice.
+Status: implemented and live-proven end to end under
+`quest-runner/waterfall/`, with separate preparation, navigation, tomb, and
+ritual modules. The final receipt reported normalized quest state `FINISHED`,
+raw varp 10, and the exact quest rewards on genericBoss.
 
 ## Decision
 
@@ -58,6 +58,11 @@ quest API returns `NOT_STARTED`, `IN_PROGRESS`, or `FINISHED` from the game
 quest-status script
 ([source](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/Quest.java#L185-L260)).
 
+The live completion run observed varp 8 after the statue raised the floor and
+varp 10 at normalized completion. Varp 8 changes the inner-door destination:
+crossing it can place the player directly in the chalice chamber rather than
+the six-pillar room.
+
 Three named Waterfall varbits exist in RuneLite 1.12.37:
 
 | Varbit | ID | Use |
@@ -110,7 +115,7 @@ assume a menu index.
 | Object | Golrie gate | `GOLRIE_GATE_WATERFALL_QUEST` | 1991 | `Open` with key present |
 | Object | Glarial's tombstone | `GLARIALS_TOMBSTONE_WATERFALL_QUEST` | 1992 | Use pebble on object |
 | Object | Glarial's tomb/coffin | `GLARIALS_TOMB_WATERFALL_QUEST` | 1993 | `Search` |
-| Object | Amulet chest, closed/open | `GLARIALS_CHEST_*_WATERFALL_QUEST` | 1994/1995 | `Search` |
+| Object | Amulet chest, closed/open | `GLARIALS_CHEST_*_WATERFALL_QUEST` | 1994/1995 | `Open` |
 | Object | Crossing rock | `CROSSING_ROCK_WATERFALL_QUEST` | 1996 | Use rope on object; never bare `Swim to` |
 | Object | Falls crate | `BAXTORIAN_CRATE_WATERFALL_QUEST` | 1999 | `Search` |
 | Object | Inner door | `BAXTORIAN_DOOR_2_WATERFALL_QUEST` | 2002 | `Open` with key present |
@@ -142,14 +147,17 @@ tile. Use inclusive WorldPoint bounds:
 | Chalice chamber | `(2599, 9890, 0)` | `(2608, 9916, 0)` |
 
 Important action anchors are Almera `(2521,3495,0)`, raft
-`(2509,3494,0)`, Hudon `(2511,3484,0)`, rock `(2512,3468,0)`, tree
+`(2509,3493,0)` (live object anchor; Quest Helper's marker is one tile north),
+Hudon `(2511,3484,0)`, rock `(2512,3468,0)`, tree
 `(2512,3465,0)`, barrel `(2512,3463,0)`, tourist stairs
 `(2518,3430,0)`, bookcase `(2520,3427,1)`, gnome ladder
 `(2533,3155,0)`, gnome crate `(2548,9565,0)`, gate `(2515,9575,0)`,
 Golrie `(2514,9580,0)`, tombstone `(2559,3445,0)`, amulet chest
 `(2530,9844,0)`, coffin `(2542,9812,0)`, falls crate `(2589,9888,0)`,
-inner door `(2566,9901,0)`, statue `(2603,9915,0)`, and chalice
-`(2604,9911,0)`.
+inner door `(2566,9901,0)` and statue `(2565,9916,0)`. Quest Helper marks the
+chalice at `(2604,9911,0)`; the live scene exposed object 2014 at
+`(2603,9910,0)`. The runner discovers that exact-ID object at execution time
+instead of relying on either static marker.
 
 The Tree Gnome maze route encoded by Quest Helper is:
 
@@ -184,9 +192,13 @@ Use a strict allowlist loadout rather than trying to maintain the game's entire
 restriction denylist:
 
 - equipped items: none;
-- inventory: one Glarial's pebble, approved food, optionally approved potions
-  or jewellery, and at least two empty slots;
+- inventory: one Glarial's pebble, approved food, explicitly allowed jewellery,
+  and at least two empty slots;
 - everything else: banked.
+
+When an amulet already exists in inventory or bank, the strict loadout carries
+it into the tomb. This skips the western chest route and goes directly to the
+urn rather than discarding useful observed progress.
 
 The current Wiki says the tomb rejects weapons, armour, runes, ranged ammo,
 logs and bow-making supplies, looting bags, clue scrolls, several capes, and
@@ -213,7 +225,7 @@ waterfall entrance. Weapons and armour are allowed in the waterfall dungeon.
 Purchase only the missing quantity immediately before this phase, consistent
 with the account's just-in-time policy.
 
-## Proposed phase table
+## Implemented phase table
 
 Each row is idempotent. After an interaction, wait for one of its listed
 postconditions and then recompute the entire phase instead of advancing an
@@ -235,17 +247,17 @@ in-memory counter.
 | `obtain_pebble` | Same, in Golrie room | Talk to Golrie and continue all pages. | Inventory contains item 294 or varbit 9110 equals 1. One empty slot is mandatory. |
 | `tomb_preflight` | Pebble obtained; amulet or urn absent from inventory/bank | Bank to the strict tomb allowlist; restore HP/run first. | Equipment empty, no disallowed inventory, two free slots, safety gates pass. |
 | `enter_tomb` | Tomb preflight passes; outside tomb | Use pebble on tombstone 1992. | Player enters Glarial's Tomb zone. |
-| `obtain_amulet` | In tomb; amulet absent from inventory/bank | Walk west and search chest 1994/1995. | Inventory contains item 295. |
+| `obtain_amulet` | In tomb; amulet absent from inventory/bank | Walk west and open chest 1994/1995. | Inventory contains item 295. |
 | `obtain_urn` | In tomb; amulet exists; urn absent from inventory/bank | Walk south and search coffin 1993. | Inventory contains full urn 296. Searching can be interrupted by damage only after the game action completes; keep the HP guard active. |
 | `final_preflight` | Amulet and urn exist in inventory/bank | Exit, bank, and withdraw exact final loadout. | Exact items above, five eventual reward slots, safety gates pass. |
 | `reach_falls` | Final loadout passes; outside Hudon zone | Return to raft and board. | Hudon zone. |
 | `reach_ledge_final` | Hudon/dead-tree island | Use rope on rock, then rope on tree. | Ledge zone. Never use the bare object actions. |
 | `enter_falls` | On ledge | Equip amulet if needed, then open door 2010. | Falls dungeon zone. If washed out, reacquire an amulet before retrying. |
 | `obtain_baxtorian_key` | In falls zone; key 298 absent | Search crate 1999 in east room. | Inventory contains key 298. |
-| `open_inner_door` | Key present; not in end chamber | Open/pass door 2002, then travel past the fire giants. | Pillar/end-room zone. |
+| `open_inner_door` | Key present; not in end chamber | Open/pass door 2002, then travel past the fire giants. | Pillar room, or direct chalice chamber when the raised-floor state is already active. |
 | `charge_pillars` | Six unique pillars visible; ritual incomplete | For each unique pillar, use one air, one water, and one earth rune. | Observe inventory deltas and game messages after every use. An already-placed rune is not treated as failure. Re-scan the six objects after scene changes. |
 | `place_amulet` | Pillars charged | Use amulet on statue 2006. | Floor rises and end chamber/chalice becomes reachable. If this washes the player out, pillar state was incomplete; recover another amulet and resume without assuming the pillars reset. |
-| `finish` | Chalice reachable; full urn present; five free slots | Use urn on chalice 2014. | Quest API becomes `FINISHED`. Never invoke the chalice's bare `Take treasure` action. |
+| `finish_quest` | Chalice reachable; full urn present; five free slots | Discover object 2014, approach its observed WorldPoint, and use the urn on it. | Quest API becomes `FINISHED`. Never invoke the chalice's bare `Take treasure` action. |
 
 Quest Helper's nested conditional steps are first-match-wins
 ([dispatcher](https://github.com/Zoinkwiz/quest-helper/blob/c264be77fddb68ab3dfc553f9f113f6ffc60fb71/src/main/java/com/questhelper/steps/ConditionalStep.java#L379-L409)).
@@ -341,8 +353,9 @@ This quest should add only the reusable primitives its phases need:
 3. `object.interact`: interact with a live object by ID, optional WorldPoint,
    and semantic action text, then wait for a movement/zone/item/state
    postcondition.
-4. `item.interact` and `item.use_on_object`: `Read`, `Wear`/`Equip`, and
-   selected-item-on-scene-object through the synthetic client-only cursor.
+4. `item.interact`, `equipment.interact`, and `item.use_on_object`: `Read`,
+   `Wear`, `Remove`, and selected-item-on-scene-object through the synthetic
+   client-only cursor.
 5. `dialogue`: inspect current Continue/choice widgets, continue, and choose an
    exact visible option string. It must tolerate additional warning pages.
 6. `bank.loadout`: deposit all, withdraw exact quantities, equip/unequip, keep
@@ -366,21 +379,24 @@ zones, item/entity IDs, phase ordering, dialogue option, loadouts, and the
 pillar ritual. Entity discovery, menu dispatch, banking, dialogue, vitals,
 break suppression, and postcondition waits belong in the plugin core.
 
-## Acceptance before a live run
+## Live acceptance
 
-- Unit-test every phase selection from synthetic quest/zone/item/bank states,
-  including mid-phase restarts and precedence collisions.
-- Prove object enumeration returns six distinct pillar WorldPoints and that
-  item-on-object targets the requested point rather than an arbitrary same-ID
-  object.
-- Prove the tomb allowlist rejects a rune, equipped weapon, and arbitrary
-  non-allowlisted item before any tombstone click.
-- Prove bare `Swim to`, bare `Climb`, and bare `Take treasure` actions are
-  unrepresentable in the quest script.
-- Prove dialogue selection finds `Yes.` after a variable number of Continue
-  pages.
-- Prove strict safety mode blocks the recorded 10-HP account before Glarial's
-  Tomb and returns an actionable receipt.
-- Only after those checks, perform a bounded manual-observation run one phase at
-  a time. Record raw varp 65 and the three Waterfall varbits after each verified
-  transition to replace the remaining unknowns with live evidence.
+On 2026-08-29 genericBoss completed Waterfall Quest through the standalone
+Quest Runner. The decisive receipts were:
+
+- a strict bank loadout with a five-million-coin reserve and only observed
+  deficits purchased;
+- ordinary breaks enabled for travel and banking, including a natural
+  18-minute AFK break that logged out and automatically resumed;
+- breaks suppressed only in the hostile tomb, falls, ritual, and recovery
+  sections;
+- exact-ID door traversal, six distinct pillar WorldPoints, all 18 rune
+  placements, and successful resume from already-placed rune messages;
+- Statue of Glarial object 2006 at `(2565,9916,0)`, followed by the raised
+  chalice chamber and raw varp 8;
+- direct varp-8 inner-door transition to `(2604,9901,0)`;
+- live discovery of Chalice of Eternity object 2014 at `(2603,9910,0)`, a
+  dispatched urn-on-object action, and the completion dialogue;
+- normalized quest state `FINISHED`, raw varp 10, Attack 30 at 13,842 XP,
+  Strength 30 at 14,050 XP, two diamonds, two gold bars, 40 mithril seeds, and
+  one quest point.

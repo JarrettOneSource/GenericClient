@@ -1,6 +1,8 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import java.awt.Canvas;
 import java.awt.event.KeyAdapter;
@@ -84,6 +86,37 @@ public class GenericClientSyntheticKeyboardTest
 
 			assertEquals("42", typed.toString());
 			assertEquals(1, enters.get());
+		}
+		finally
+		{
+			keyboard.close();
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	public void cancelStopsTypingWithoutClosingTheKeyboard()
+	{
+		Canvas canvas = new Canvas()
+		{
+			@Override
+			public boolean isShowing()
+			{
+				return true;
+			}
+		};
+		ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+		GenericClientSyntheticKeyboard keyboard = new GenericClientSyntheticKeyboard(
+			canvas, executor, ignored -> { });
+		try
+		{
+			java.util.concurrent.CompletableFuture<String> typing =
+				keyboard.typeAndEnter("1234567890");
+
+			keyboard.cancel("random_event");
+
+			assertTrue(typing.isCompletedExceptionally());
+			assertFalse(keyboard.isTyping());
 		}
 		finally
 		{

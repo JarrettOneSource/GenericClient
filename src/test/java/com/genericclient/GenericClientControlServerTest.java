@@ -10,6 +10,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
@@ -45,10 +46,31 @@ public class GenericClientControlServerTest
 		GenericClientAutomationScheduler automation = new GenericClientAutomationScheduler(
 			temporaryFolder.newFolder("control-automation").toPath(), host, message -> { });
 		automation.activateProfile("0123456789abcdef").get();
+		GenericClientRandomEventController randomEvents = new GenericClientRandomEventController(
+			id -> null,
+			new GenericClientRandomEventController.Runtime()
+			{
+				@Override
+				public CompletableFuture<String> interrupt(String eventKey, String solverScript)
+				{
+					return CompletableFuture.completedFuture("interrupted");
+				}
+
+				@Override
+				public CompletableFuture<String> release(
+					String eventKey,
+					boolean resumeInterrupted)
+				{
+					return CompletableFuture.completedFuture("released");
+				}
+			},
+			message -> { },
+			message -> { });
 		GenericClientControlServer server = new GenericClientControlServer(
 			0,
 			host,
 			automation,
+			randomEvents,
 			() -> CompletableFuture.completedFuture("SESSION_LOGGED_OUT"),
 			() -> CompletableFuture.completedFuture("SESSION_LOGGED_IN"),
 			() ->
@@ -93,6 +115,12 @@ public class GenericClientControlServerTest
 				server, "automation.status", new LinkedHashMap<>());
 			assertEquals("0123456789abcdef",
 				((Map<String, Object>) automationStatus.get("result")).get("profile"));
+			Map<String, Object> randomEventStatus = post(
+				server, "random_event.status", new LinkedHashMap<>());
+			assertEquals("idle",
+				((Map<String, Object>) randomEventStatus.get("result")).get("state"));
+			assertEquals(409,
+				send(server, "random_event.acknowledge", new LinkedHashMap<>()).statusCode());
 			Map<String, Object> config = new LinkedHashMap<>();
 			config.put("schema", "genericclient_automation.v1");
 			config.put("zone", "UTC");
@@ -143,8 +171,11 @@ public class GenericClientControlServerTest
 				"run = function(input) gc.log('info', input.greeting); while true do " +
 				"gc.await { event = 'game.tick' }; local action = gc.next_action(); " +
 				"if action then gc.log('info', action); return action end end end }\n");
+			saveParameters.put("random_events", List.of(net.runelite.api.gameval.NpcID.MACRO_MILES));
 			Map<String, Object> saved = post(server, "scripts.save", saveParameters);
 			assertEquals("hello-world", ((Map<String, Object>) saved.get("result")).get("id"));
+			assertEquals(1,
+				((List<?>) ((Map<String, Object>) saved.get("result")).get("random_events")).size());
 
 			Map<String, Object> getParameters = new LinkedHashMap<>();
 			getParameters.put("id", "hello-world");

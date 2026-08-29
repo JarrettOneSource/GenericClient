@@ -39,7 +39,7 @@ The current checkout implements:
 
 - LuaJava 4.1.0 with native PUC Lua 5.4 in the standalone fat JAR;
 - one active standalone script plus one persistent REPL state on one scheduler thread;
-- `gc.read` subjects `runtime`, `player`, `behavior`, `skills`, `inventory`,
+- `gc.read` subjects `runtime`, `player`, `behavior`, `random_event`, `skills`, `inventory`,
   `equipment`, `bank`, `quests`, `grand_exchange`, `cash`, `combat`, the combined
   `account` frame, bounded `npcs` queries with clickability and line-of-sight
   facts, bounded system `messages` without player chat, and adjacent-edge
@@ -58,6 +58,9 @@ The current checkout implements:
   controls, validated `choice` inputs, and generic dashboard controls;
 - a loopback control bridge and stdio MCP server for live/account status, bound
   RuneLite Notes, REPL evaluation, script registration, and on-demand execution;
+- an internal owned-random-event detector that latches NPC context, interrupts
+  normal execution, auto-runs manifest-registered standalone solvers, and keeps
+  unknown or faulted events blocked for MCP inspection;
 - a bounded three-click `walk-stress.lua` automation;
 - `walker.lua`, whose Lua-owned destination catalog drives the Java-owned
   collision planner and synthetic interaction pipeline;
@@ -74,138 +77,40 @@ not read or moved. The complete behavior contract is in
 
 The MCP and manifest interface is documented in
 [`mcp-lua-control.md`](mcp-lua-control.md).
+The random-event ownership, interruption, and standalone-solver contract is in
+[`random-events.md`](random-events.md).
 
 The walker combines the global collision reader with a pinned live-scene
 overlay, bounded A* planning, verified same-plane obstacle actions, and the
 route lifecycle needed by this automation. Its implementation status and limits are documented in
 [`walker-design.md`](walker-design.md). The later Magic and quest slices added
-the object, item, dialogue, bank, GE, spell, and emergency actions they actually
+the object, inventory, equipment, dialogue, bank, GE, spell, and emergency actions they actually
 exercise; their current contract is in
 [`quest-runner-design.md`](quest-runner-design.md).
 
-### Live verification receipt
+### Live verification
 
-GenericClient 0.11.0's tested and installed standalone artifact has SHA-256
-`a132b3d4b249dd326dc714062ed2803969006ea8638bd1cb304232be17d004c0`.
-On stock RuneLite 1.12.37/game revision 240 it:
+The installed artifact is validated from current stock-RuneLite behavior, not a
+local release-number history. Live receipts cover:
 
-- migrated the installed manifest to v7 while preserving its custom script;
-- reconciled exact skills, 24 bank item slots, three finished quests, one GE
-  offer, and the configured cash reserve through Account Auditor;
-- updated the bound account Notes text through the control bridge;
-- opened the GE bank through a two-click synthetic `npc.interact` context menu;
-- closed that modal bank with a synthetic Escape and completed logout/re-login;
-- randomized right-edge re-entry from `(834,103)` to `(797,262)` before applying
-  the recorded movement path;
-- fixed and regression-tested click-to-play world readiness and WorldView NPC
-  menu resolution after live failures exposed both seams;
-- ran AIO Melee to its bounded Attack 2 target, ending at 84 XP with a terminal
-  receipt, no active target, an off-screen synthetic cursor, and 6/10 Hitpoints;
-- disabled auto-retaliate through two synthetic combat-interface clicks after a
-  traversal exposed 8 XP of implicit retaliation, ending at 92 Attack XP;
-- passed 105 Java tests plus three Node MCP tests.
+- Jagex Launcher startup, login, logout, click-to-play readiness, and account
+  profile binding;
+- the compact dashboard, active-script controls, synthetic cursor, break banner,
+  account notes, and behavior overrides;
+- recorded-template mouse movement without moving the operating-system cursor;
+- breaks-enabled walking, camera turns, retained waypoints, live collision
+  overlays, and traversal-object recovery;
+- semantic NPC, object, inventory, equipment, dialogue, widget, bank, Grand
+  Exchange, spell, and safety actions;
+- modular AIO Melee and Magic scripts with exact XP stops and recovery receipts;
+- modular Witch's House and Waterfall Quest completion, including hostile-area
+  safety, long-break logout/relogin, exact-ID ritual interactions, and verified
+  rewards;
+- GenericClient-owned random-event interruption plus a live-completed Capt'
+  Arnav solver.
 
-GenericClient 0.10.0's tested standalone artifact has SHA-256
-`f710afc53f3b158c44f2897b865ca27d0df12dd072c3032d002ee2d26c60926c`.
-The exact installed artifact started through the Jagex Launcher on stock
-RuneLite 1.12.37 and upgraded the live v2 manifest to v3 while preserving its
-custom MCP script. Nearby NPC diagnostics then proved the complete active
-presentation path:
-
-- `client_status.lua.active` reported the script, increasing wall runtime,
-  declared `snapshot_now` action, and overlay values;
-- the 53-pixel-high game overlay showed only name, runtime, NPC count, and last
-  tick;
-- Active Script showed the same running script, runtime, `Snapshot now`,
-  Restart, and Stop without diagnostics clutter;
-- clicking `Snapshot now` queued and consumed the action on the next game tick;
-- Stop returned `active: {}`, changed the host to `IDLE`, and removed the game
-  overlay;
-- completed Walker remained available on Active Script with its Destination
-  configuration and frozen terminal runtime.
-
-The artifact passed 81 Java tests plus three Node MCP tests.
-
-GenericClient 0.9.0's final standalone artifact has SHA-256
-`1734728e4f285a194a338452ad89b9935468e922a4cc0ddf24b5d73bc7905828`.
-The exact installed artifact started through the Jagex Launcher on stock
-RuneLite 1.12.37, returned complete `client_status`, loaded the test account's
-custom 99% micro profile without changing its precise seeded duration/cadence
-values, and completed Walker at the Grand Exchange with `mouse=moved` after a
-real 5.3-second phase micro break. The same 0.9 acceptance sequence also:
-
-- migrated the installed v1 manifest to v2 while retaining its custom MCP script;
-- rendered Walker's six-choice destination control and reached Varrock Center
-  through the selected `script_run` input;
-- restored a persisted long break, displayed the transient sidebar banner,
-  ended it from ×, and resumed the waiting Walker after session confirmation;
-- passed 74 Java tests plus three Node MCP tests.
-
-GenericClient 0.8.0 had SHA-256
-`0abcc592b262f93531102ecce75fbdf7d33b375a6cc187623e4c71c72370d197`.
-The exact installed artifact opened its resizable dashboard from RuneLite's
-toolbar, rendered the persistent synthetic cursor, showed a directional
-off-canvas badge, and displayed an active-break-only `MICRO · 5s` pill. It
-passed 63 Java tests plus three Node MCP tests.
-
-GenericClient 0.7.0 had SHA-256
-`aaf462ae63fe050a6b55d35a6e65ab499649902e4660d776bf420293597f6cd0`.
-The exact installed artifact passed the camera, farthest-route targeting,
-profile-owned mouse timing, and per-click behavior receipt in
-[`walker-design.md`](walker-design.md). It passed 60 Java tests plus three Node
-MCP tests.
-
-GenericClient 0.6.1 had SHA-256
-`11b8bbb3f3d72f4a463ec5f980f94964d57becc6cb7fdaa8a4698958edf75dbe`.
-The exact installed artifact completed the retained-waypoint walker receipt in
-[`walker-design.md`](walker-design.md) and passed 55 Java tests plus three Node
-MCP tests.
-
-GenericClient 0.6.0 had SHA-256
-`4e98bb8cc3c29f5aaede1dfcfda0d48b6d123541f96e1574567de20f43f3ceb7`.
-The exact self-contained artifact loaded through the Jagex Launcher into stock
-RuneLite 1.12.37/game revision 240. The three-tab dashboard fit RuneLite's
-sidebar, Trail and Path rendered over real synthetic ground clicks, and the
-Settings buttons saved then removed an account-specific behavior override.
-It passed 53 Java tests plus three Node MCP tests.
-
-GenericClient 0.5.1 had SHA-256
-`9a7a0d0906caa6b7351cb0e14238e832d3328397b61c17b334998f6d0176f177`.
-It adds login-screen error-confirmation handling before retrying the Jagex Play
-button. The exact installed artifact automatically entered the world and passed
-43 Java tests plus three Node MCP tests.
-
-The 0.5.0 behavior/input receipt follows.
-
-The GenericClient 0.5.0 standalone artifact had SHA-256
-`e13a4c72b5f08fc9f8fed94425baef70f0034596c72c8f5742ad4ea32a91ec68`.
-On stock RuneLite 1.12.36/game revision 240 it:
-
-- derived the same account profile after restart without exposing the account hash;
-- exposed 13 MCP tools plus `gc.read("behavior")` and `gc.phase` receipts;
-- executed synthetic canvas, minimap, and covered-tile context-menu walking;
-- left the Windows pointer byte-for-byte at the same screen coordinates across actions;
-- executed post-action and phase-heavy micro breaks, moved to the profile's right edge,
-  and preserved counts/long pressure across restarts;
-- deliberately logged out through visible widgets, pressed the Jagex-session Play
-  button, dismissed the welcome screen, and resumed in the world;
-- passed 42 Java tests and three Node MCP tests.
-
-The prior 0.4.0 receipt is retained below as the MCP/manifest baseline.
-
-The GenericClient 0.4.0 standalone artifact deployed through the existing Jagex
-Launcher configuration had SHA-256
-`d2d9fdff9e6363ada38f96d991c66157719f18bb7b52c5dea9c7d346a67b73c0`.
-On RuneLite 1.12.36/game revision 240 it:
-
-- loaded native Lua 5.4 and started `npc-diagnostics.lua`;
-- exposed all nine MCP tools through the official TypeScript MCP client;
-- returned live player, runtime, and nearby-NPC snapshots with proper JSON arrays;
-- preserved a REPL global across separate calls with results `1` and `2`;
-- dispatched a generated-mouse `Walk here` click from Lua and moved the player;
-- saved, registered, displayed, and completed `mcp-location-check.lua` on demand;
-- ran `return gc.read("player")` from the RuneLite Console tab and displayed the result;
-- passed 12 Java tests and three Node MCP tests.
+Artifact hashes and suite counts remain transient build receipts produced by the
+validation workflow; they are not maintained as design history.
 
 This is a refinement of the initial LuaJ-first idea. The decisive reasons are:
 

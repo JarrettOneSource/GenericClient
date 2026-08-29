@@ -76,6 +76,25 @@ public class GenericClientGrandExchangeInputTest
 	}
 
 	@Test
+	public void findsPriceWarningChoiceInsideAttachedPopupRoot()
+	{
+		Rectangle scope = new Rectangle(20, 20, 480, 300);
+		Widget yes = widget(new Rectangle(307, 201, 40, 32), 0, 0, null, null, "Yes", null);
+		Widget popup = widget(new Rectangle(35, 125, 440, 120), 0, 0, null, null, null, null, yes);
+
+		assertTrue(yes ==
+			GenericClientGrandExchangeInput.findByTextWithin(popup, "Yes", scope));
+	}
+
+	@Test
+	public void scopesPriceWarningToTheOfferIndexAfterSetupCloses()
+	{
+		Rectangle index = new Rectangle(20, 20, 480, 300);
+
+		assertEquals(index, GenericClientGrandExchangeInput.priceWarningScope(null, index));
+	}
+
+	@Test
 	public void resolvesSentinelSearchRowBoundsThroughItsVisibleParent()
 	{
 		Widget parent = widget(new Rectangle(9, 367, 485, 104), 0, 0, null);
@@ -83,6 +102,16 @@ public class GenericClientGrandExchangeInputTest
 
 		assertEquals(new Rectangle(9, 367, 161, 32),
 			GenericClientGrandExchangeInput.resolvedWidgetBounds(row));
+	}
+
+	@Test
+	public void aimsAtTheExactSearchResultIconInsteadOfBlankRowSpace()
+	{
+		Widget row = widget(new Rectangle(9, 367, 485, 104), 0, 0, null);
+		Widget icon = widget(new Rectangle(17, 374, 36, 32), 0, 0, row);
+
+		assertEquals(new Rectangle(17, 374, 36, 32),
+			GenericClientGrandExchangeInput.searchResultHitbox(row, icon));
 	}
 
 	@Test
@@ -159,7 +188,8 @@ public class GenericClientGrandExchangeInputTest
 		Widget parent,
 		String[] actions,
 		String text,
-		String name)
+		String name,
+		Widget... children)
 	{
 		return (Widget) Proxy.newProxyInstance(
 			Widget.class.getClassLoader(),
@@ -182,8 +212,12 @@ public class GenericClientGrandExchangeInputTest
 						return text;
 					case "getName":
 						return name;
+					case "getChildren":
+						return children;
 					default:
-						return method.getReturnType().isPrimitive() ? 0 : null;
+						return method.getReturnType() == boolean.class
+							? false
+							: method.getReturnType().isPrimitive() ? 0 : null;
 				}
 			});
 	}

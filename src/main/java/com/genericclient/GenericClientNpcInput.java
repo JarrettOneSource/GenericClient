@@ -24,9 +24,13 @@ import net.runelite.client.callback.ClientThread;
 
 final class GenericClientNpcInput
 {
-	private static final int OCCLUDED_NPC_CAMERA_PITCH = 383;
-	private static final int[] CAMERA_YAW_OFFSETS = {0, 512, 1024, 1536};
-	private static final int CAMERA_SETTLED_UNITS = 8;
+	private static final int[] CAMERA_YAW_OFFSETS = {
+		0,
+		GenericClientGameInput.CAMERA_QUARTER_TURN,
+		GenericClientGameInput.CAMERA_QUARTER_TURN * 2,
+		GenericClientGameInput.CAMERA_QUARTER_TURN * 3,
+	};
+	private static final int CAMERA_SETTLED_UNITS = 64;
 	private static final long CAMERA_POLL_MILLIS = 40L;
 	private static final long CAMERA_SETTLE_TIMEOUT_MILLIS = 3_000L;
 
@@ -202,13 +206,14 @@ final class GenericClientNpcInput
 				return;
 			}
 			int targetYaw = (GenericClientGameInput.yawToward(
-				player.getWorldLocation(), closest.getWorldLocation()) + yawOffset) & 2047;
+				player.getWorldLocation(), closest.getWorldLocation()) + yawOffset) &
+				GenericClientGameInput.CAMERA_YAW_MASK;
 			client.setCameraYawTarget(targetYaw);
-			client.setCameraPitchTarget(OCCLUDED_NPC_CAMERA_PITCH);
+			client.setCameraPitchTarget(GenericClientGameInput.CAMERA_INTERACTION_PITCH);
 			reporter.accept("NPC_CAMERA_TURN_STARTED id=" + closest.getId() +
 				" yaw=" + client.getCameraYaw() + " targetYaw=" + targetYaw +
 				" pitch=" + client.getCameraPitch() +
-				" targetPitch=" + OCCLUDED_NPC_CAMERA_PITCH);
+				" targetPitch=" + GenericClientGameInput.CAMERA_INTERACTION_PITCH);
 			awaitCameraSettled(
 				closest.getId(),
 				targetYaw,
@@ -231,13 +236,13 @@ final class GenericClientNpcInput
 		int yaw = client.getCameraYaw();
 		int pitch = client.getCameraPitch();
 		int yawRemaining = GenericClientGameInput.angularDistance(yaw, targetYaw);
-		int pitchRemaining = Math.abs(pitch - OCCLUDED_NPC_CAMERA_PITCH);
+		int pitchRemaining = Math.abs(pitch - GenericClientGameInput.CAMERA_INTERACTION_PITCH);
 		boolean timedOut = System.nanoTime() >= deadlineNanos;
 		if ((yawRemaining <= CAMERA_SETTLED_UNITS && pitchRemaining <= CAMERA_SETTLED_UNITS) || timedOut)
 		{
 			reporter.accept("NPC_CAMERA_TURN_" + (timedOut ? "TIMED_OUT" : "COMPLETED") +
 				" id=" + npcId + " yaw=" + yaw + " targetYaw=" + targetYaw +
-				" pitch=" + pitch + " targetPitch=" + OCCLUDED_NPC_CAMERA_PITCH +
+				" pitch=" + pitch + " targetPitch=" + GenericClientGameInput.CAMERA_INTERACTION_PITCH +
 				" yawRemaining=" + yawRemaining + " pitchRemaining=" + pitchRemaining);
 			result.complete(true);
 			return;
@@ -313,7 +318,7 @@ final class GenericClientNpcInput
 				candidateShape = npc.getCanvasTilePoly();
 			}
 			Point candidatePoint = GenericClientMenuInput.randomPointInside(
-				candidateShape, client.getCanvasWidth(), client.getCanvasHeight());
+				candidateShape, GenericClientMenuInput.viewportBounds(client));
 			if (candidatePoint != null && distance < nearestDistance)
 			{
 				nearest = npc;

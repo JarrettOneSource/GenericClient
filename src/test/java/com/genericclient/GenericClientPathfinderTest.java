@@ -130,6 +130,20 @@ public class GenericClientPathfinderTest
 			destination), result.getPath());
 	}
 
+	@Test
+	public void routesFromFaladorWestBankToTheGrandExchange() throws Exception
+	{
+		GenericClientPathfinder pathfinder = new GenericClientPathfinder(
+			GenericClientCollisionMap.loadBundled());
+
+		GenericClientPathfinder.Result result = pathfinder.find(
+			new WorldPoint(2945, 3376, 0),
+			new WorldPoint(3165, 3491, 0),
+			8);
+
+		assertEquals(GenericClientPathfinder.Status.FOUND, result.getStatus());
+	}
+
 	private static String edge(WorldPoint first, WorldPoint second)
 	{
 		String left = first.getX() + "," + first.getY() + "," + first.getPlane();

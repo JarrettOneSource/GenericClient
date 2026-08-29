@@ -3,6 +3,7 @@ package com.genericclient;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
+import com.google.gson.annotations.SerializedName;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -25,42 +26,7 @@ import java.util.regex.Pattern;
 
 final class GenericClientScriptRegistry
 {
-	private static final String SCHEMA = "genericclient_scripts.v35";
-	private static final Set<String> PREVIOUS_SCHEMAS = Set.of(
-		"genericclient_scripts.v1",
-		"genericclient_scripts.v2",
-		"genericclient_scripts.v3",
-		"genericclient_scripts.v4",
-		"genericclient_scripts.v5",
-		"genericclient_scripts.v6",
-		"genericclient_scripts.v7",
-		"genericclient_scripts.v8",
-		"genericclient_scripts.v9",
-		"genericclient_scripts.v10",
-		"genericclient_scripts.v11",
-		"genericclient_scripts.v12",
-		"genericclient_scripts.v13",
-		"genericclient_scripts.v14",
-		"genericclient_scripts.v15",
-		"genericclient_scripts.v16",
-		"genericclient_scripts.v17",
-		"genericclient_scripts.v18",
-		"genericclient_scripts.v19",
-		"genericclient_scripts.v20",
-		"genericclient_scripts.v21",
-		"genericclient_scripts.v22",
-		"genericclient_scripts.v23",
-		"genericclient_scripts.v24",
-		"genericclient_scripts.v25",
-		"genericclient_scripts.v26",
-		"genericclient_scripts.v27",
-		"genericclient_scripts.v28",
-		"genericclient_scripts.v29",
-		"genericclient_scripts.v30",
-		"genericclient_scripts.v31",
-		"genericclient_scripts.v32",
-		"genericclient_scripts.v33",
-		"genericclient_scripts.v34");
+	private static final String SCHEMA = "genericclient_scripts";
 	private static final String MANIFEST_FILE = "manifest.json";
 	private static final String RESOURCE_DIRECTORY = "/com/genericclient/scripts/";
 	private static final Pattern SCRIPT_ID = Pattern.compile("[a-z0-9][a-z0-9_-]*");
@@ -76,6 +42,7 @@ final class GenericClientScriptRegistry
 		"aio-magic/progress.lua",
 		"aio-magic/supplies.lua",
 		"aio-magic/training.lua",
+		"capt-arnav.lua",
 		"quest-runner.lua",
 		"quest-runner/shared/preparation.lua",
 		"quest-runner/shared/state.lua",
@@ -88,7 +55,11 @@ final class GenericClientScriptRegistry
 		"quest-runner/witchs_house/quest.lua",
 		"quest-runner/witchs_house/state.lua",
 		"quest-runner/waterfall/config.lua",
+		"quest-runner/waterfall/navigation.lua",
+		"quest-runner/waterfall/preparation.lua",
 		"quest-runner/waterfall/quest.lua",
+		"quest-runner/waterfall/ritual.lua",
+		"quest-runner/waterfall/tomb.lua",
 		"quest-runner/waterfall/state.lua",
 		"walker.lua",
 		"walk-stress.lua"
@@ -110,6 +81,7 @@ final class GenericClientScriptRegistry
 		"account-auditor",
 		"aio-magic",
 		"aio-melee",
+		"capt-arnav",
 		"lumbridge-varrock",
 		"npc-diagnostics",
 		"quest-runner",
@@ -145,6 +117,11 @@ final class GenericClientScriptRegistry
 			throw new IllegalArgumentException("Unknown script id: " + id);
 		}
 		return script;
+	}
+
+	Script findRandomEventSolver(int npcId)
+	{
+		return state.randomEventSolvers.get(npcId);
 	}
 
 	String readSource(String id) throws IOException
@@ -185,6 +162,16 @@ final class GenericClientScriptRegistry
 
 	synchronized Script save(String id, String name, String description, String source) throws IOException
 	{
+		return save(id, name, description, source, Collections.emptyList());
+	}
+
+	synchronized Script save(
+		String id,
+		String name,
+		String description,
+		String source,
+		List<Integer> randomEvents) throws IOException
+	{
 		validateId(id);
 		String cleanName = requireText(name, "Script name");
 		String cleanDescription = requireText(description, "Script description");
@@ -194,7 +181,22 @@ final class GenericClientScriptRegistry
 		}
 
 		String file = id + ".lua";
-		Script saved = new Script(id, cleanName, cleanDescription, file, Collections.emptyMap());
+		Script saved = new Script(
+			id,
+			cleanName,
+			cleanDescription,
+			file,
+			Collections.emptyMap(),
+			validateRandomEvents(randomEvents));
+		for (int npcId : saved.randomEvents)
+		{
+			Script existing = state.randomEventSolvers.get(npcId);
+			if (existing != null && !existing.id.equals(id))
+			{
+				throw new IllegalArgumentException(
+					"Random-event NPC " + npcId + " is already handled by script " + existing.id);
+			}
+		}
 		writeAtomically(directory.resolve(file), source);
 
 		List<Script> scripts = new ArrayList<>(state.scripts);
@@ -224,6 +226,7 @@ final class GenericClientScriptRegistry
 		List<Script> scripts = new ArrayList<>(manifest.scripts.size());
 		Set<String> ids = new HashSet<>();
 		Set<String> files = new HashSet<>();
+		Map<Integer, String> randomEventOwners = new HashMap<>();
 		for (int index = 0; index < manifest.scripts.size(); index++)
 		{
 			ManifestScript entry = manifest.scripts.get(index);
@@ -244,7 +247,17 @@ final class GenericClientScriptRegistry
 				throw new IOException("Duplicate script file: " + file);
 			}
 			Map<String, String> modules = validateModules(entry.modules);
-			Script script = new Script(entry.id, name, description, file, modules);
+			List<Integer> randomEvents = validateRandomEvents(entry.randomEvents);
+			for (int npcId : randomEvents)
+			{
+				String existing = randomEventOwners.putIfAbsent(npcId, entry.id);
+				if (existing != null)
+				{
+					throw new IOException("Random-event NPC " + npcId +
+						" is already handled by script " + existing);
+				}
+			}
+			Script script = new Script(entry.id, name, description, file, modules, randomEvents);
 			if (!Files.isRegularFile(sourcePath(script)))
 			{
 				throw new IOException("Script file does not exist: " + file);
@@ -285,23 +298,10 @@ final class GenericClientScriptRegistry
 			return;
 		}
 
-		ManifestFile existing = readManifest(manifestPath);
-		if (PREVIOUS_SCHEMAS.contains(existing.schema))
-		{
-			migrateBundledManifest(existing);
-			return;
-		}
-
-		for (String file : BUNDLED_SCRIPT_FILES)
-		{
-			if (!Files.exists(directory.resolve(file)))
-			{
-				copyBundledResource(file, false);
-			}
-		}
+		refreshBundledManifest(readManifest(manifestPath));
 	}
 
-	private void migrateBundledManifest(ManifestFile existing) throws IOException
+	private void refreshBundledManifest(ManifestFile existing) throws IOException
 	{
 		if (existing.scripts == null)
 		{
@@ -341,7 +341,8 @@ final class GenericClientScriptRegistry
 			requireText(entry.name, "Script name"),
 			requireText(entry.description, "Script description"),
 			validateFileName(entry.file),
-			validateModules(entry.modules));
+			validateModules(entry.modules),
+			validateRandomEvents(entry.randomEvents));
 	}
 
 	private static ManifestFile readManifest(Path path) throws IOException
@@ -422,6 +423,9 @@ final class GenericClientScriptRegistry
 			entry.modules = script.modules.isEmpty()
 				? null
 				: new LinkedHashMap<>(script.modules);
+			entry.randomEvents = script.randomEvents.isEmpty()
+				? null
+				: new ArrayList<>(script.randomEvents);
 			manifest.scripts.add(entry);
 		}
 		String json = new GsonBuilder().setPrettyPrinting().create().toJson(manifest) + System.lineSeparator();
@@ -437,11 +441,19 @@ final class GenericClientScriptRegistry
 	{
 		List<Script> immutable = Collections.unmodifiableList(new ArrayList<>(scripts));
 		Map<String, Script> byId = new HashMap<>();
+		Map<Integer, Script> randomEventSolvers = new HashMap<>();
 		for (Script script : immutable)
 		{
 			byId.put(script.id, script);
+			for (int npcId : script.randomEvents)
+			{
+				randomEventSolvers.put(npcId, script);
+			}
 		}
-		return new State(immutable, Collections.unmodifiableMap(byId));
+		return new State(
+			immutable,
+			Collections.unmodifiableMap(byId),
+			Collections.unmodifiableMap(randomEventSolvers));
 	}
 
 	private static void writeAtomically(Path path, String value) throws IOException
@@ -500,6 +512,30 @@ final class GenericClientScriptRegistry
 		return Collections.unmodifiableMap(modules);
 	}
 
+	private static List<Integer> validateRandomEvents(List<Integer> raw)
+	{
+		if (raw == null || raw.isEmpty())
+		{
+			return Collections.emptyList();
+		}
+		List<Integer> randomEvents = new ArrayList<>(raw.size());
+		Set<Integer> unique = new HashSet<>();
+		for (Integer npcId : raw)
+		{
+			if (npcId == null || !GenericClientRandomEventController.isRandomEventNpcId(npcId))
+			{
+				throw new IllegalArgumentException(
+					"NPC id " + npcId + " is not a supported random-event NPC");
+			}
+			if (!unique.add(npcId))
+			{
+				throw new IllegalArgumentException("Duplicate random-event NPC id: " + npcId);
+			}
+			randomEvents.add(npcId);
+		}
+		return Collections.unmodifiableList(randomEvents);
+	}
+
 	private static String modulePrelude()
 	{
 		return "local __gc_module_loaders = {}\n" +
@@ -536,19 +572,22 @@ final class GenericClientScriptRegistry
 		private final String description;
 		private final String file;
 		private final Map<String, String> modules;
+		private final List<Integer> randomEvents;
 
 		private Script(
 			String id,
 			String name,
 			String description,
 			String file,
-			Map<String, String> modules)
+			Map<String, String> modules,
+			List<Integer> randomEvents)
 		{
 			this.id = id;
 			this.name = name;
 			this.description = description;
 			this.file = file;
 			this.modules = Collections.unmodifiableMap(new LinkedHashMap<>(modules));
+			this.randomEvents = Collections.unmodifiableList(new ArrayList<>(randomEvents));
 		}
 
 		String getId()
@@ -566,6 +605,11 @@ final class GenericClientScriptRegistry
 			return description;
 		}
 
+		List<Integer> getRandomEvents()
+		{
+			return randomEvents;
+		}
+
 		Map<String, Object> toMap()
 		{
 			Map<String, Object> value = new LinkedHashMap<>();
@@ -576,6 +620,10 @@ final class GenericClientScriptRegistry
 			if (!modules.isEmpty())
 			{
 				value.put("modules", new LinkedHashMap<>(modules));
+			}
+			if (!randomEvents.isEmpty())
+			{
+				value.put("random_events", new ArrayList<>(randomEvents));
 			}
 			return value;
 		}
@@ -591,11 +639,16 @@ final class GenericClientScriptRegistry
 	{
 		private final List<Script> scripts;
 		private final Map<String, Script> byId;
+		private final Map<Integer, Script> randomEventSolvers;
 
-		private State(List<Script> scripts, Map<String, Script> byId)
+		private State(
+			List<Script> scripts,
+			Map<String, Script> byId,
+			Map<Integer, Script> randomEventSolvers)
 		{
 			this.scripts = scripts;
 			this.byId = byId;
+			this.randomEventSolvers = randomEventSolvers;
 		}
 	}
 
@@ -612,5 +665,7 @@ final class GenericClientScriptRegistry
 		private String description;
 		private String file;
 		private Map<String, String> modules;
+		@SerializedName("random_events")
+		private List<Integer> randomEvents;
 	}
 }

@@ -274,7 +274,7 @@ local segments as soon as the player is within two tiles of a handoff. The live
 account crossed the first segment endpoint at `(3034,3263)` and continued north
 without consuming a recovery replan.
 
-GenericClient 0.7.0 completed a breaks-enabled Varrock-to-Grand-Exchange run
+A breaks-enabled Varrock-to-Grand-Exchange live run completed
 with eight route clicks, eight camera turns, and eight interaction behavior
 receipts. Five clicks selected micro breaks, no click was rejected, and one
 accepted edge-of-minimap leg was automatically shortened after it produced no
@@ -283,8 +283,8 @@ active execution ticks after excluding camera, mouse, click, and break time.
 The seeded mouse duration was 550 milliseconds, and the account finished ready
 at `3166,3483`.
 
-GenericClient 0.6.1 changed route pacing from a two-tick-only gate to retained
-waypoints. The exact release artifact completed the Grand-Exchange-to-Varrock
+The retained-waypoint update changed route pacing from a two-tick-only gate.
+Its live Grand-Exchange-to-Varrock
 leg in 42 game ticks with eight clicks, one plan, and no rejected clicks. Six
 handoffs occurred one or two tiles from the accepted waypoint; one occurred at
 three tiles only after the player had passed that waypoint's route index. The

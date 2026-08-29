@@ -767,6 +767,7 @@ final class GenericClientLuaScript implements AutoCloseable
 	{
 		return "object.interact".equals(type) ||
 			"item.interact".equals(type) ||
+			"equipment.interact".equals(type) ||
 			"item.use_on_object".equals(type) ||
 			"item.use_on_npc".equals(type) ||
 			"ground_item.take".equals(type) ||
@@ -777,6 +778,7 @@ final class GenericClientLuaScript implements AutoCloseable
 			"combat.cast".equals(type) ||
 			"combat.set_autocast".equals(type) ||
 			"ui.close".equals(type) ||
+			"ui.click".equals(type) ||
 			"safety.configure".equals(type) ||
 			"safety.clear".equals(type);
 	}

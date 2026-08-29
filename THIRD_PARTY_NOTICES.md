@@ -17,3 +17,16 @@ The upstream repository's license text is reproduced in
 The upstream file at the pinned commit contains the literal placeholders
 `<YEAR>` and `<COPYRIGHT HOLDER>`; they are preserved exactly instead of being
 silently attributed by GenericClient.
+
+## Infinitay/Random-Event-Helper
+
+The Capt' Arnav Lua solver's dial model and RuneLite interface mapping were
+cross-checked against
+[`Infinitay/Random-Event-Helper`](https://github.com/Infinitay/Random-Event-Helper)
+commit `43e578fd30f60ac765a32b7b99c82b6ca3791776`.
+
+- Upstream license: BSD 2-Clause
+- License copy:
+  `src/main/resources/com/genericclient/random-events/Random-Event-Helper-LICENSE.txt`
+
+GenericClient does not load, install, or depend on the reference plugin.

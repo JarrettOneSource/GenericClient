@@ -361,20 +361,9 @@ final class GenericClientMenuInput implements AutoCloseable
 				finishRejected("synthetic_context_open: " + rootMessage(clickError));
 				return;
 			}
-			behavior.afterAction(breaksEnabled).thenCompose(after ->
-			{
-				behaviorAfter = after;
-				return behavior.beforeAction(breaksEnabled);
-			}).whenComplete((before, behaviorError) ->
-			{
-				if (behaviorError != null)
-				{
-					finishRejected("context_behavior: " + rootMessage(behaviorError));
-					return;
-				}
-				behaviorBefore = before;
-				schedule(() -> clientThread.invoke(this::moveToContextEntry), CONTEXT_MENU_SETTLE_MILLIS);
-			});
+			// Opening the menu and selecting its entry are one composite interaction.
+			// Moving offscreen between those clicks closes the menu before it can be used.
+			schedule(() -> clientThread.invoke(this::moveToContextEntry), CONTEXT_MENU_SETTLE_MILLIS);
 		});
 	}
 
@@ -476,7 +465,13 @@ final class GenericClientMenuInput implements AutoCloseable
 
 	static Point randomPointInside(Shape shape, int canvasWidth, int canvasHeight)
 	{
-		java.awt.Rectangle bounds = boundedShape(shape, canvasWidth, canvasHeight);
+		return randomPointInside(
+			shape, new java.awt.Rectangle(0, 0, canvasWidth, canvasHeight));
+	}
+
+	static Point randomPointInside(Shape shape, java.awt.Rectangle clipBounds)
+	{
+		java.awt.Rectangle bounds = boundedShape(shape, clipBounds);
 		if (bounds == null)
 		{
 			return null;
@@ -492,12 +487,18 @@ final class GenericClientMenuInput implements AutoCloseable
 				return new Point(x, y);
 			}
 		}
-		return firstPointInside(shape, canvasWidth, canvasHeight);
+		return firstPointInside(shape, clipBounds);
 	}
 
 	static Point firstPointInside(Shape shape, int canvasWidth, int canvasHeight)
 	{
-		java.awt.Rectangle bounds = boundedShape(shape, canvasWidth, canvasHeight);
+		return firstPointInside(
+			shape, new java.awt.Rectangle(0, 0, canvasWidth, canvasHeight));
+	}
+
+	static Point firstPointInside(Shape shape, java.awt.Rectangle clipBounds)
+	{
+		java.awt.Rectangle bounds = boundedShape(shape, clipBounds);
 		if (bounds == null)
 		{
 			return null;
@@ -521,17 +522,27 @@ final class GenericClientMenuInput implements AutoCloseable
 		return null;
 	}
 
+	static java.awt.Rectangle viewportBounds(Client client)
+	{
+		java.awt.Rectangle canvas = new java.awt.Rectangle(
+			0, 0, client.getCanvasWidth(), client.getCanvasHeight());
+		java.awt.Rectangle viewport = new java.awt.Rectangle(
+			client.getViewportXOffset(),
+			client.getViewportYOffset(),
+			client.getViewportWidth(),
+			client.getViewportHeight());
+		return viewport.intersection(canvas);
+	}
+
 	private static java.awt.Rectangle boundedShape(
 		Shape shape,
-		int canvasWidth,
-		int canvasHeight)
+		java.awt.Rectangle clipBounds)
 	{
-		if (shape == null || canvasWidth <= 0 || canvasHeight <= 0)
+		if (shape == null || clipBounds == null || clipBounds.isEmpty())
 		{
 			return null;
 		}
-		java.awt.Rectangle bounds = shape.getBounds().intersection(
-			new java.awt.Rectangle(0, 0, canvasWidth, canvasHeight));
+		java.awt.Rectangle bounds = shape.getBounds().intersection(clipBounds);
 		return bounds.isEmpty() ? null : bounds;
 	}
 

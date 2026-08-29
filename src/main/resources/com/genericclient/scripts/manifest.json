@@ -1,5 +1,5 @@
 {
-  "schema": "genericclient_scripts.v35",
+  "schema": "genericclient_scripts",
   "scripts": [
     {
         "id": "aio-magic",
@@ -27,6 +27,13 @@
       "file": "account-auditor.lua"
     },
     {
+      "id": "capt-arnav",
+      "name": "Capt' Arnav",
+      "description": "Open Capt' Arnav's combination chest from live labels and dial state.",
+      "file": "capt-arnav.lua",
+      "random_events": [5426]
+    },
+    {
         "id": "quest-runner",
         "name": "Quest Runner",
         "description": "Run resumable quest phases from observed state with strict safety gates and exact interaction receipts.",
@@ -43,7 +50,11 @@
           "witch_quest": "quest-runner/witchs_house/quest.lua",
           "witch_state": "quest-runner/witchs_house/state.lua",
           "waterfall_config": "quest-runner/waterfall/config.lua",
+          "waterfall_navigation": "quest-runner/waterfall/navigation.lua",
+          "waterfall_preparation": "quest-runner/waterfall/preparation.lua",
           "waterfall_quest": "quest-runner/waterfall/quest.lua",
+          "waterfall_ritual": "quest-runner/waterfall/ritual.lua",
+          "waterfall_tomb": "quest-runner/waterfall/tomb.lua",
           "waterfall_state": "quest-runner/waterfall/state.lua"
         }
     },

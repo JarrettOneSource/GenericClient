@@ -55,7 +55,7 @@ the same port in the MCP server configuration.
 
 | Tool | Purpose |
 | --- | --- |
-| `client_status` | Read player position, game state, Lua state, scripts, mouse profile, and recent logs. |
+| `client_status` | Read player position, game state, Lua/scripts, random-event state, mouse profile, and recent logs. |
 | `client_screenshot` | Return the next fully rendered RuneLite game canvas as a PNG image. |
 | `account_snapshot` | Read one pinned frame of skills, items, bank state, quests, GE offers, and known cash. |
 | `account_note_get` | Read the Notes text stored in the bound RuneLite profile. |
@@ -63,6 +63,9 @@ the same port in the MCP server configuration.
 | `behavior_profile` | Read the deterministic human-readable profile and numeric traits. |
 | `behavior_status` | Read the current break, countdown, long pressure, and break counts. |
 | `behavior_end_break` | Manually end the active break, matching the X on the in-client banner. |
+| `random_event_status` | Read the latched owned random event, NPC snapshot, solver, and attention state. |
+| `random_event_acknowledge` | Mark the alert as seen without releasing the automation block. |
+| `random_event_complete` | Release a solved event and optionally restart the interrupted manual script. |
 | `automation_status` | Read schedules, rule truth/reasons, cooldowns, selection, and the active lease. |
 | `automation_config_get` | Read the complete active-account rule configuration. |
 | `automation_config_set` | Validate and atomically replace that configuration. |
@@ -89,6 +92,13 @@ system messages, and a completed script's structured return value remains on
 `client_screenshot` whenever those structures do not fully explain visible
 world, camera, widget, dialogue, or menu state. If the bank state is `unknown`,
 open the bank once before treating the cash or supply inventory as complete.
+
+`client_status.random_event` is GenericClient's own latched event state. When
+`attention_required` is true, inspect it with `random_event_status`, use the REPL
+and screenshot surface to solve the event, then call `random_event_complete`
+only after observing completion. `random_event_acknowledge` does not release the
+block. Manifest-registered solvers can run automatically; the complete lifecycle
+and registration example are in [`random-events.md`](random-events.md).
 
 ## Scheduled automation
 
@@ -157,6 +167,27 @@ return gc.read("npcs", {
   within = 12,
   limit = 20,
 })
+```
+
+Visible widgets are copied into the same immutable tick frame. Query packed
+widget IDs instead of reading mutable client objects:
+
+```lua
+return gc.read("widgets", {
+  ids = { 1703958, 1703959, 1703960 },
+  limit = 3,
+})
+```
+
+Rows include packed/group/component IDs, dynamic index, cleaned text/name,
+actions, item/model IDs, and canvas bounds. A script may click one currently
+visible packed ID through the shared synthetic input path:
+
+```lua
+return gc.await {
+  action = { type = "ui.click", widget_id = 1703941 },
+  breaks = false,
+}
 ```
 
 NPC rows include separate `in_scene`, `clickable`, and `line_of_sight` fields,
@@ -276,8 +307,8 @@ return gc.await {
 }
 ```
 
-The same request shape covers exact object, inventory, dialogue, banking, GE,
-and spell interactions. Lua supplies semantic facts rather than canvas
+The same request shape covers exact object, inventory, widget, dialogue,
+banking, GE, and spell interactions. Lua supplies semantic facts rather than canvas
 coordinates or RuneLite menu opcodes:
 
 ```lua
@@ -288,6 +319,17 @@ local result = gc.await {
     npc_name = "Goblin",
     within = 15,
   },
+}
+```
+
+Equipped items use the same semantic menu seam. For example, Waterfall removes
+Glarial's amulet before using it on the statue without encoding the equipment
+tab or amulet-slot coordinates:
+
+```lua
+return gc.await {
+  action = { type = "equipment.interact", id = 295, action = "Remove" },
+  breaks = false,
 }
 ```
 
@@ -381,7 +423,7 @@ Standalone scripts live in:
 
 ```json
 {
-  "schema": "genericclient_scripts.v35",
+  "schema": "genericclient_scripts",
   "scripts": [
     {
       "id": "where-am-i",
@@ -482,7 +524,9 @@ label/value rows. Passing `nil` clears those rows, and the whole overlay hides
 when the script stops or completes.
 
 The easiest programmatic path is `script_save`, which writes both the Lua file
-and manifest entry. For manual editing, add the file and manifest row, then
+and manifest entry. Its optional `random_events` integer array registers that
+script as the unique solver for those supported event NPC IDs. For manual
+editing, add the file and manifest row, then
 press **Reload list** in Automations or call `script_reload_manifest`.
 
 Only one standalone script is active at a time. A manual start replaces the

@@ -1,7 +1,7 @@
 # Account builder
 
 Status: active persistent goal. Historical baseline captured 2026-08-27; latest
-live reconciliation recorded 2026-08-28 after Witch's House.
+live reconciliation recorded after Waterfall completion on 2026-08-29.
 
 ## Account goal
 
@@ -54,21 +54,22 @@ member-optimized implementation.
 
 ## Current live progress
 
-The 2026-08-28 GenericClient account snapshot verified:
+The 2026-08-29 GenericClient account snapshots verified:
 
-- Attack 2 / 92 XP, Strength 4 / 300 XP, Defence 1 / 0 XP;
+- Attack 30 / 13,842 XP, Strength 30 / 14,050 XP, Defence 1 / 0 XP;
 - Hitpoints 25 / 8,184 XP, Ranged 1 / 12 XP, Prayer 1 / 0 XP, Magic 16 / 3,080 XP;
-- Witch's House, Ernest the Chicken, X Marks the Spot, and Learning the Ropes
-  complete; Waterfall Quest not started;
-- full 25 Hitpoints at `(2929,3455,0)`, with run enabled and 100% energy;
-- the pre-existing Old school bond sell offer still active and untouched;
-- the bank cache currently unknown, so no exact cash or supply quantity may be
-  inferred until the bank is opened again.
+- Waterfall Quest, Witch's House, Ernest the Chicken, X Marks the Spot, and
+  Learning the Ropes complete;
+- Waterfall rewards received: one quest point, two diamonds, two gold bars,
+  and 40 mithril seeds;
+- the complete bank frame contained 14,182,577 coins; the 5,000,000 reserve
+  remained intact;
+- the pre-existing Old school bond sell offer remains active and untouched.
 
 ## Live Account Auditor receipt
 
-GenericClient 0.11.0 reconciled the official baseline against the logged-in
-client on 2026-08-27 at the Grand Exchange (3167, 3488, plane 0):
+GenericClient reconciled the official baseline against the logged-in client on
+2026-08-27 at the Grand Exchange (3167, 3488, plane 0):
 
 - the seven target combat skills and exact XP matched the official Hiscores;
 - inventory and all equipment slots were empty;
@@ -151,11 +152,11 @@ starts.
 ## Opening milestones
 
 Witch's House was completed first to validate the framework and raise the
-account from 12 to 25 Hitpoints. The next substantive milestone is Waterfall
-Quest. It has no skill requirement, awards 13,750 Attack and Strength XP, and
-is a direct Desert Treasure I prerequisite. It remains not started. Its exact
-JIT supply deficit must be recomputed after opening the bank; the old bank audit
-is not current enough to authorize a purchase.
+account from 12 to 25 Hitpoints. Waterfall Quest then completed through the
+modular Quest Runner, raising Attack and Strength to 30 and satisfying a direct
+Desert Treasure I prerequisite. Its bank preparation, long-break logout and
+resume, tomb recovery, doors, six-pillar ritual, statue transition, live
+chalice discovery, rewards, and normalized completion are all live-proven.
 
 Before running a quest that crosses dialogues, item restrictions, object
 interactions, and hostile rooms, the first live validation is a zero-cost AIO
@@ -255,9 +256,8 @@ Reference surfaces used for this envelope:
 
 ## Next evidence gate
 
-Finish and install the schema-v35 per-quest Quest Runner package. On the already
-completed Witch's House account, it must recognize terminal state, clear stale
-safety, park the synthetic mouse, and perform no quest mutation. Then implement
-Waterfall entirely inside `quest-runner/waterfall/`, prove its reducers and
-semantic actions, refresh the bank cache, acquire only the observed next-phase
-deficit while preserving 5,000,000 coins, and begin bounded live phases.
+Preserve Waterfall as a completed standalone quest module. Reconcile the live
+bank and quest graph, select the next efficient members-first prerequisite or
+combat milestone, and implement only the reusable AIO/quest slice needed for
+that milestone. Continue enforcing exact Attack, Defence, and Prayer caps,
+just-in-time purchasing, and the 5,000,000-coin reserve.

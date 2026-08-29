@@ -27,6 +27,7 @@ import net.runelite.api.WorldView;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.util.Text;
 
@@ -34,10 +35,18 @@ final class GenericClientQuestSnapshot
 {
 	private static final int OBJECT_RADIUS = 32;
 	private static final int MAX_QUERY_RESULTS = 100;
-	private static final int MAX_VARP_QUERY = 32;
+	private static final int MAX_VAR_QUERY = 32;
+	private static final int[] CAPTURED_VARBITS =
+	{
+		9110,
+		VarbitID.PIRATE_COMBILOCK_LEFT,
+		VarbitID.PIRATE_COMBILOCK_CENTRE,
+		VarbitID.PIRATE_COMBILOCK_RIGHT
+	};
 
 	private final boolean available;
 	private final int[] varps;
+	private final Map<Integer, Integer> varbits;
 	private final List<ObjectSnapshot> objects;
 	private final List<GroundItemSnapshot> groundItems;
 	private final DialogueSnapshot dialogue;
@@ -48,7 +57,23 @@ final class GenericClientQuestSnapshot
 		List<ObjectSnapshot> objects,
 		DialogueSnapshot dialogue)
 	{
-		this(available, varps, objects, Collections.emptyList(), dialogue);
+		this(
+			available,
+			varps,
+			Collections.emptyMap(),
+			objects,
+			Collections.emptyList(),
+			dialogue);
+	}
+
+	GenericClientQuestSnapshot(
+		boolean available,
+		int[] varps,
+		Map<Integer, Integer> varbits,
+		List<ObjectSnapshot> objects,
+		DialogueSnapshot dialogue)
+	{
+		this(available, varps, varbits, objects, Collections.emptyList(), dialogue);
 	}
 
 	GenericClientQuestSnapshot(
@@ -58,8 +83,20 @@ final class GenericClientQuestSnapshot
 		List<GroundItemSnapshot> groundItems,
 		DialogueSnapshot dialogue)
 	{
+		this(available, varps, Collections.emptyMap(), objects, groundItems, dialogue);
+	}
+
+	private GenericClientQuestSnapshot(
+		boolean available,
+		int[] varps,
+		Map<Integer, Integer> varbits,
+		List<ObjectSnapshot> objects,
+		List<GroundItemSnapshot> groundItems,
+		DialogueSnapshot dialogue)
+	{
 		this.available = available;
 		this.varps = varps.clone();
+		this.varbits = Collections.unmodifiableMap(new LinkedHashMap<>(varbits));
 		this.objects = Collections.unmodifiableList(new ArrayList<>(objects));
 		this.groundItems = Collections.unmodifiableList(new ArrayList<>(groundItems));
 		this.dialogue = dialogue;
@@ -84,6 +121,7 @@ final class GenericClientQuestSnapshot
 		return new GenericClientQuestSnapshot(
 			true,
 			client.getVarps(),
+			captureVarbits(client),
 			scene.objects,
 			scene.groundItems,
 			captureDialogue(client));
@@ -116,13 +154,15 @@ final class GenericClientQuestSnapshot
 		Map<String, Object> value = new LinkedHashMap<>();
 		value.put("available", available);
 		Map<Long, Object> selectedVarps = new LinkedHashMap<>();
+		Map<Long, Object> selectedVarbits = new LinkedHashMap<>();
 		if (!available)
 		{
 			value.put("varps", selectedVarps);
+			value.put("varbits", selectedVarbits);
 			return value;
 		}
 		List<Integer> ids = numericValues(query == null ? null : query.get("varps"));
-		if (ids.size() > MAX_VARP_QUERY)
+		if (ids.size() > MAX_VAR_QUERY)
 		{
 			throw new IllegalArgumentException("vars reads support at most 32 varps");
 		}
@@ -135,7 +175,32 @@ final class GenericClientQuestSnapshot
 			selectedVarps.put((long) id, (long) varps[id]);
 		}
 		value.put("varps", selectedVarps);
+		List<Integer> varbitIds = numericValues(query == null ? null : query.get("varbits"));
+		if (varbitIds.size() > MAX_VAR_QUERY)
+		{
+			throw new IllegalArgumentException("vars reads support at most 32 varbits");
+		}
+		for (int id : varbitIds)
+		{
+			Integer selected = varbits.get(id);
+			if (selected == null)
+			{
+				throw new IllegalArgumentException("varbit id is not captured: " + id);
+			}
+			selectedVarbits.put((long) id, (long) selected);
+		}
+		value.put("varbits", selectedVarbits);
 		return value;
+	}
+
+	private static Map<Integer, Integer> captureVarbits(Client client)
+	{
+		Map<Integer, Integer> captured = new LinkedHashMap<>();
+		for (int id : CAPTURED_VARBITS)
+		{
+			captured.put(id, client.getVarbitValue(id));
+		}
+		return captured;
 	}
 
 	private List<Map<String, Object>> queryObjects(Map<?, ?> query)

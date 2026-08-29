@@ -11,6 +11,7 @@ final class GenericClientQuestActions
 {
 	private final GenericClientObjectInput objectInput;
 	private final GenericClientInventoryInput inventoryInput;
+	private final GenericClientEquipmentInput equipmentInput;
 	private final GenericClientNpcInput npcInput;
 	private final GenericClientGroundItemInput groundItemInput;
 	private final GenericClientDialogueInput dialogueInput;
@@ -24,6 +25,7 @@ final class GenericClientQuestActions
 	GenericClientQuestActions(
 		GenericClientObjectInput objectInput,
 		GenericClientInventoryInput inventoryInput,
+		GenericClientEquipmentInput equipmentInput,
 		GenericClientNpcInput npcInput,
 		GenericClientGroundItemInput groundItemInput,
 		GenericClientDialogueInput dialogueInput,
@@ -36,6 +38,7 @@ final class GenericClientQuestActions
 	{
 		this.objectInput = objectInput;
 		this.inventoryInput = inventoryInput;
+		this.equipmentInput = equipmentInput;
 		this.npcInput = npcInput;
 		this.groundItemInput = groundItemInput;
 		this.dialogueInput = dialogueInput;
@@ -65,6 +68,11 @@ final class GenericClientQuestActions
 				return inventoryInput.interact(
 					requiredInt(action, "id", type),
 					optionalSlot(action, type),
+					requiredText(action, "action", type),
+					breaksEnabled);
+			case "equipment.interact":
+				return equipmentInput.interact(
+					requiredInt(action, "id", type),
 					requiredText(action, "action", type),
 					breaksEnabled);
 			case "item.use_on_object":
@@ -111,6 +119,8 @@ final class GenericClientQuestActions
 				return autocastInput.set(requiredText(action, "spell", type), breaksEnabled);
 			case "ui.close":
 				return uiInput.closeTopLevel(breaksEnabled);
+			case "ui.click":
+				return uiInput.click(requiredInt(action, "widget_id", type), breaksEnabled);
 			case "safety.configure":
 				return emergencyController.configure(
 					requiredPositiveInt(action, "minimum_hitpoints", type),

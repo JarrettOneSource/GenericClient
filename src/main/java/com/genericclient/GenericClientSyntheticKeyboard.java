@@ -219,6 +219,28 @@ final class GenericClientSyntheticKeyboard implements AutoCloseable
 		return typing;
 	}
 
+	synchronized void cancel(String reason)
+	{
+		if (!typing)
+		{
+			return;
+		}
+		typing = false;
+		for (ScheduledFuture<?> future : pending)
+		{
+			future.cancel(false);
+		}
+		pending.clear();
+		CompletableFuture<String> result = activeResult;
+		activeResult = null;
+		if (result != null)
+		{
+			result.completeExceptionally(
+				new IllegalStateException("Synthetic keyboard cancelled: " + reason));
+		}
+		reporter.accept("SYNTHETIC_KEYBOARD_CANCELLED reason=" + reason);
+	}
+
 	private void dispatchCharacter(char character)
 	{
 		int keyCode = KeyEvent.getExtendedKeyCodeForChar(character);

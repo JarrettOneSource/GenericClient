@@ -9,9 +9,14 @@ local configs = {
 
 local ge = { x = 3165, y = 3491, plane = 0 }
 local banks = {
+  { x = 2443, y = 3083, plane = 0 },
   { x = 2946, y = 3368, plane = 0 },
   { x = 3092, y = 3245, plane = 0 },
   ge,
+}
+
+local bank_objects = {
+  { id = 4483, action = "Use" },
 }
 
 local function overlay(quest, phase)
@@ -68,15 +73,36 @@ local function open_bank()
     return bank
   end
   local function click_bank()
+    for _, target in ipairs(bank_objects) do
+      local objects = gc.read("objects", {
+        id = target.id,
+        action = target.action,
+        within = 12,
+        limit = 1,
+      })
+      if #objects > 0 then
+        return gc.await {
+          action = {
+            type = "object.interact",
+            id = target.id,
+            action = target.action,
+            world = objects[1].world,
+            within = 12,
+          },
+          breaks = true,
+          timeout = { game_ticks = 30 },
+        }
+      end
+    end
     return gc.await {
       action = { type = "npc.interact", name = "Banker", action = "Bank", within = 10 },
-      breaks = false,
+      breaks = true,
       timeout = { game_ticks = 30 },
     }
   end
   local receipt = click_bank()
   if receipt.status ~= "dispatched" then
-    gc.await { action = { type = "ui.close" }, breaks = false }
+    gc.await { action = { type = "ui.close" }, breaks = true }
     gc.await { ticks = 2 }
     receipt = click_bank()
   end
@@ -109,7 +135,7 @@ local function acquire_missing(missing, quest)
       minimum_free_slots = 27,
       close = true,
     },
-    breaks = false,
+    breaks = true,
     timeout = { game_ticks = 200 },
   }
   if coins.status ~= "complete" then
@@ -124,7 +150,7 @@ local function acquire_missing(missing, quest)
       action = "Exchange",
       within = 10,
     },
-    breaks = false,
+    breaks = true,
     timeout = { game_ticks = 30 },
   }
   if exchange.status ~= "dispatched" then
@@ -143,7 +169,7 @@ local function acquire_missing(missing, quest)
         maximum_unit_price = item.maximum_unit_price,
         minimum_cash_reserve = 5000000,
       },
-      breaks = false,
+      breaks = true,
       timeout = { game_ticks = 300 },
     }
     if purchase.status ~= "complete" then
@@ -151,14 +177,15 @@ local function acquire_missing(missing, quest)
     end
   end
 
-  gc.await { action = { type = "ui.close" }, breaks = false }
+  gc.await { action = { type = "ui.close" }, breaks = true }
   gc.await { ticks = 2 }
   return true
 end
 
-local function prepare_items(quest, restock, loadout)
+local function prepare_items(quest, restock, loadout, exact)
   local state = state_api.read(quest)
-  if #state_api.missing_carried_items(state, loadout) == 0 then
+  if #state_api.missing_carried_items(state, loadout) == 0 and
+    (not exact or state_api.matches_carried_loadout(state, loadout)) then
     return true
   end
   local at_bank, travel_error = ensure_at_bank(quest)
@@ -176,7 +203,7 @@ local function prepare_items(quest, restock, loadout)
       return nil, { status = "supplies_missing", items = missing }
     end
     if state_api.distance(gc.read("player").world, ge) > 8 then
-      gc.await { action = { type = "ui.close" }, breaks = false }
+      gc.await { action = { type = "ui.close" }, breaks = true }
       local at_ge, ge_error = ensure_at_ge(quest)
       if not at_ge then return nil, ge_error end
       bank, bank_error = open_bank()
@@ -218,16 +245,30 @@ local function prepare_items(quest, restock, loadout)
       minimum_free_slots = 4,
       close = true,
     },
-    breaks = false,
+    breaks = true,
     timeout = { game_ticks = 240 },
   }
   if receipt.status ~= "complete" then
     return nil, { status = "quest_loadout_failed", receipt = receipt }
   end
   state = state_api.read(quest)
-  if #state_api.missing_carried_items(state, loadout) > 0 then
+  if #state_api.missing_carried_items(state, loadout) > 0 or
+    (exact and not state_api.matches_carried_loadout(state, loadout)) then
     return nil, { status = "quest_loadout_unverified" }
   end
+  return true
+end
+
+local function refresh_bank(quest)
+  local at_bank, travel_error = ensure_at_bank(quest)
+  if not at_bank then return nil, travel_error end
+  local bank, bank_error = open_bank()
+  if not bank then return nil, bank_error end
+  local closed = gc.await { action = { type = "ui.close" }, breaks = true }
+  if closed.status ~= "dispatched" and closed.status ~= "complete" then
+    return nil, { status = "bank_close_failed", receipt = closed }
+  end
+  gc.await { ticks = 2 }
   return true
 end
 
@@ -235,4 +276,4 @@ local function prepare(quest, restock)
   return prepare_items(quest, restock, configs[quest].loadout)
 end
 
-return { prepare = prepare, prepare_items = prepare_items }
+return { prepare = prepare, prepare_items = prepare_items, refresh_bank = refresh_bank }

@@ -30,6 +30,7 @@ final class GenericClientControlServer implements AutoCloseable
 	private final int requestedPort;
 	private final GenericClientLuaHost luaHost;
 	private final GenericClientAutomationScheduler automationScheduler;
+	private final GenericClientRandomEventController randomEventController;
 	private final Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction;
 	private final Supplier<java.util.concurrent.CompletableFuture<String>> loginAction;
 	private final Supplier<Map<String, Object>> statusSupplier;
@@ -58,6 +59,7 @@ final class GenericClientControlServer implements AutoCloseable
 			port,
 			luaHost,
 			null,
+			null,
 			logoutAction,
 			loginAction,
 			statusSupplier,
@@ -81,9 +83,39 @@ final class GenericClientControlServer implements AutoCloseable
 		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> endBreakAction,
 		Consumer<String> reporter)
 	{
+		this(
+			port,
+			luaHost,
+			automationScheduler,
+			null,
+			logoutAction,
+			loginAction,
+			statusSupplier,
+			noteSupplier,
+			noteSetter,
+			screenshotAction,
+			endBreakAction,
+			reporter);
+	}
+
+	GenericClientControlServer(
+		int port,
+		GenericClientLuaHost luaHost,
+		GenericClientAutomationScheduler automationScheduler,
+		GenericClientRandomEventController randomEventController,
+		Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction,
+		Supplier<java.util.concurrent.CompletableFuture<String>> loginAction,
+		Supplier<Map<String, Object>> statusSupplier,
+		Supplier<String> noteSupplier,
+		Function<String, java.util.concurrent.CompletableFuture<String>> noteSetter,
+		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> screenshotAction,
+		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> endBreakAction,
+		Consumer<String> reporter)
+	{
 		this.requestedPort = port;
 		this.luaHost = luaHost;
 		this.automationScheduler = automationScheduler;
+		this.randomEventController = randomEventController;
 		this.logoutAction = logoutAction;
 		this.loginAction = loginAction;
 		this.statusSupplier = statusSupplier;
@@ -177,6 +209,10 @@ final class GenericClientControlServer implements AutoCloseable
 			Throwable cause = exception.getCause() == null ? exception : exception.getCause();
 			write(exchange, 409, error(cause.getMessage()));
 		}
+		catch (IllegalStateException exception)
+		{
+			write(exchange, 409, error(exception.getMessage()));
+		}
 		catch (TimeoutException exception)
 		{
 			write(exchange, 504, error("Lua execution exceeded " + LUA_TIMEOUT_SECONDS + " seconds"));
@@ -214,6 +250,15 @@ final class GenericClientControlServer implements AutoCloseable
 				return behavior instanceof Map ? ((Map<?, ?>) behavior).get("profile") : null;
 			case "behavior.break.end":
 				return endBreakAction.get().get(30, TimeUnit.SECONDS);
+			case "random_event.status":
+				return randomEvents().status();
+			case "random_event.acknowledge":
+				return randomEvents().acknowledge().get(10, TimeUnit.SECONDS);
+			case "random_event.complete":
+				return randomEvents().complete(
+					optionalStringParameter(parameters, "reason", "completed_via_control"),
+					optionalBooleanParameter(parameters, "resume_interrupted", true))
+					.get(30, TimeUnit.SECONDS);
 			case "automation.status":
 				return automation().status();
 			case "automation.config.get":
@@ -270,7 +315,8 @@ final class GenericClientControlServer implements AutoCloseable
 					stringParameter(parameters, "id"),
 					stringParameter(parameters, "name"),
 					stringParameter(parameters, "description"),
-					stringParameter(parameters, "source"))
+					stringParameter(parameters, "source"),
+					integerListParameter(parameters, "random_events"))
 					.get(10, TimeUnit.SECONDS);
 			case "scripts.run":
 				return luaHost.start(
@@ -300,6 +346,15 @@ final class GenericClientControlServer implements AutoCloseable
 			throw new IllegalStateException("Automation scheduler is unavailable");
 		}
 		return automationScheduler;
+	}
+
+	private GenericClientRandomEventController randomEvents()
+	{
+		if (randomEventController == null)
+		{
+			throw new IllegalStateException("Random-event controller is unavailable");
+		}
+		return randomEventController;
 	}
 
 	private static String stringParameter(Map<String, Object> parameters, String name)
@@ -334,6 +389,71 @@ final class GenericClientControlServer implements AutoCloseable
 			throw new IllegalArgumentException("RPC parameter " + name + " must be a boolean");
 		}
 		return (Boolean) value;
+	}
+
+	private static boolean optionalBooleanParameter(
+		Map<String, Object> parameters,
+		String name,
+		boolean defaultValue)
+	{
+		Object value = parameters.get(name);
+		if (value == null)
+		{
+			return defaultValue;
+		}
+		if (!(value instanceof Boolean))
+		{
+			throw new IllegalArgumentException("RPC parameter " + name + " must be a boolean");
+		}
+		return (Boolean) value;
+	}
+
+	private static String optionalStringParameter(
+		Map<String, Object> parameters,
+		String name,
+		String defaultValue)
+	{
+		Object value = parameters.get(name);
+		if (value == null)
+		{
+			return defaultValue;
+		}
+		if (!(value instanceof String) || ((String) value).trim().isEmpty())
+		{
+			throw new IllegalArgumentException("RPC parameter " + name + " must be a non-empty string");
+		}
+		return ((String) value).trim();
+	}
+
+	private static List<Integer> integerListParameter(Map<String, Object> parameters, String name)
+	{
+		Object value = parameters.get(name);
+		if (value == null)
+		{
+			return Collections.emptyList();
+		}
+		if (!(value instanceof List))
+		{
+			throw new IllegalArgumentException("RPC parameter " + name + " must be an array of integers");
+		}
+		List<Integer> result = new ArrayList<>();
+		for (Object item : (List<?>) value)
+		{
+			if (!(item instanceof Number))
+			{
+				throw new IllegalArgumentException(
+					"RPC parameter " + name + " must contain only integers");
+			}
+			double numeric = ((Number) item).doubleValue();
+			int integer = ((Number) item).intValue();
+			if (numeric != integer || integer <= 0)
+			{
+				throw new IllegalArgumentException(
+					"RPC parameter " + name + " must contain only positive integers");
+			}
+			result.add(integer);
+		}
+		return result;
 	}
 
 	private static Map<String, Object> objectParameter(Map<String, Object> parameters, String name)

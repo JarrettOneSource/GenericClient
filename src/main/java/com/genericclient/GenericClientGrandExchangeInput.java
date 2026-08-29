@@ -262,14 +262,32 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 	private Widget priceWarningTarget()
 	{
 		Widget setup = visibleWidget(InterfaceID.GeOffers.SETUP);
-		if (setup == null)
+		Widget index = visibleWidget(InterfaceID.GeOffers.INDEX);
+		Rectangle scope = priceWarningScope(
+			resolvedWidgetBounds(setup), resolvedWidgetBounds(index));
+		if (scope == null)
 		{
 			return null;
 		}
-		Widget target = findByTextAcrossVisibleRoots("Yes", setup.getBounds());
+		Widget popup = visibleWidget(InterfaceID.Popupoverlay.UNIVERSE);
+		Widget target = findByTextWithin(popup, "Yes", scope);
+		if (target == null)
+		{
+			target = findByAction(popup, "Yes", null);
+		}
+		if (target != null && inside(target, scope))
+		{
+			return target;
+		}
+		target = findByTextAcrossVisibleRoots("Yes", scope);
 		return target == null
-			? findByActionAcrossVisibleRoots("Yes", setup.getBounds())
+			? findByActionAcrossVisibleRoots("Yes", scope)
 			: target;
+	}
+
+	static Rectangle priceWarningScope(Rectangle setupBounds, Rectangle indexBounds)
+	{
+		return setupBounds == null ? indexBounds : setupBounds;
 	}
 
 	private Widget findByTextAcrossVisibleRoots(String text, Rectangle scope)
@@ -281,12 +299,22 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		}
 		for (Widget root : roots)
 		{
-			for (Widget candidate : descendants(root))
+			Widget candidate = findByTextWithin(root, text, scope);
+			if (candidate != null)
 			{
-				if (inside(candidate, scope) && matchesWidgetText(candidate, text))
-				{
-					return candidate;
-				}
+				return candidate;
+			}
+		}
+		return null;
+	}
+
+	static Widget findByTextWithin(Widget root, String text, Rectangle scope)
+	{
+		for (Widget candidate : descendants(root))
+		{
+			if (inside(candidate, scope) && matchesWidgetText(candidate, text))
+			{
+				return candidate;
 			}
 		}
 		return null;
@@ -710,11 +738,15 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		return menuInput.interact(() ->
 		{
 			Widget widget = findItemSearchResult(itemId);
-			return targetForSearchResult(widget, itemId);
+			Widget item = findItemSearchResultItem(itemId);
+			return targetForSearchResult(widget, item, itemId);
 		}, breaksEnabled);
 	}
 
-	private GenericClientMenuInput.Resolution targetForSearchResult(Widget widget, int itemId)
+	private GenericClientMenuInput.Resolution targetForSearchResult(
+		Widget widget,
+		Widget item,
+		int itemId)
 	{
 		if (!geOpen())
 		{
@@ -725,7 +757,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 			return GenericClientMenuInput.Resolution.rejected("ge_search_result_not_visible");
 		}
 		Point point = GenericClientMenuInput.randomPointInside(
-			resolvedWidgetBounds(widget), client.getCanvasWidth(), client.getCanvasHeight());
+			searchResultHitbox(widget, item), client.getCanvasWidth(), client.getCanvasHeight());
 		if (point == null)
 		{
 			return GenericClientMenuInput.Resolution.rejected("ge_search_result_not_clickable");
@@ -977,6 +1009,19 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		for (Widget widget : widgets)
 		{
 			if (hasAction(widget, "Select") && expectedName.equalsIgnoreCase(clean(widget.getName())))
+			{
+				return widget;
+			}
+		}
+		return null;
+	}
+
+	private Widget findItemSearchResultItem(int itemId)
+	{
+		Widget root = visibleWidget(InterfaceID.Chatbox.MES_LAYER_SCROLLCONTENTS);
+		for (Widget widget : descendants(root))
+		{
+			if (widget.getItemId() == itemId)
 			{
 				return widget;
 			}
@@ -1394,6 +1439,14 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 			parent = parent.getParent();
 		}
 		return bounds;
+	}
+
+	static Rectangle searchResultHitbox(Widget actionWidget, Widget itemWidget)
+	{
+		Rectangle itemBounds = resolvedWidgetBounds(itemWidget);
+		return itemBounds != null && itemBounds.width > 0 && itemBounds.height > 0
+			? itemBounds
+			: resolvedWidgetBounds(actionWidget);
 	}
 
 	private static CompletableFuture<List<Map<String, Object>>> append(

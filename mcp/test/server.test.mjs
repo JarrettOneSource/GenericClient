@@ -45,6 +45,9 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
     "behavior_profile",
     "behavior_status",
     "behavior_end_break",
+    "random_event_status",
+    "random_event_acknowledge",
+    "random_event_complete",
     "automation_status",
     "automation_config_get",
     "automation_config_set",
@@ -76,6 +79,12 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
   await client.callTool({ name: "account_note_get", arguments: {} });
   await client.callTool({ name: "account_note_set", arguments: { text: "Account Goal" } });
   await client.callTool({ name: "behavior_end_break", arguments: {} });
+  await client.callTool({ name: "random_event_status", arguments: {} });
+  await client.callTool({ name: "random_event_acknowledge", arguments: {} });
+  await client.callTool({
+    name: "random_event_complete",
+    arguments: { reason: "solved_from_repl", resume_interrupted: false },
+  });
   await client.callTool({ name: "automation_status", arguments: {} });
   await client.callTool({ name: "automation_config_get", arguments: {} });
   const automationConfig = {
@@ -94,6 +103,16 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
   await client.callTool({ name: "automation_resume", arguments: {} });
   await client.callTool({ name: "automation_reload", arguments: {} });
   await client.callTool({
+    name: "script_save",
+    arguments: {
+      id: "miles-solver",
+      name: "Miles Solver",
+      description: "Solve the Miles random event.",
+      source: "return { run = function() return 'solved' end }",
+      random_events: [5437],
+    },
+  });
+  await client.callTool({
     name: "script_run",
     arguments: { id: "walker", inputs: { destination: "varrock_center" } },
   });
@@ -105,6 +124,12 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
     { method: "account.note.get", params: {} },
     { method: "account.note.set", params: { text: "Account Goal" } },
     { method: "behavior.break.end", params: {} },
+    { method: "random_event.status", params: {} },
+    { method: "random_event.acknowledge", params: {} },
+    {
+      method: "random_event.complete",
+      params: { reason: "solved_from_repl", resume_interrupted: false },
+    },
     { method: "automation.status", params: {} },
     { method: "automation.config.get", params: {} },
     { method: "automation.config.set", params: { config: automationConfig } },
@@ -112,6 +137,16 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
     { method: "automation.pause", params: {} },
     { method: "automation.resume", params: {} },
     { method: "automation.reload", params: {} },
+    {
+      method: "scripts.save",
+      params: {
+        id: "miles-solver",
+        name: "Miles Solver",
+        description: "Solve the Miles random event.",
+        source: "return { run = function() return 'solved' end }",
+        random_events: [5437],
+      },
+    },
     {
       method: "scripts.run",
       params: { id: "walker", inputs: { destination: "varrock_center" } },

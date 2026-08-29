@@ -26,8 +26,12 @@ import net.runelite.client.callback.ClientThread;
 
 final class GenericClientGroundItemInput
 {
-	private static final int OCCLUDED_GROUND_ITEM_CAMERA_PITCH = 383;
-	private static final int[] CAMERA_YAW_OFFSETS = {0, 512, 1024, 1536};
+	private static final int[] CAMERA_YAW_OFFSETS = {
+		0,
+		GenericClientGameInput.CAMERA_QUARTER_TURN,
+		GenericClientGameInput.CAMERA_QUARTER_TURN * 2,
+		GenericClientGameInput.CAMERA_QUARTER_TURN * 3,
+	};
 	private static final long CAMERA_SETTLE_MILLIS = 1_600L;
 
 	private final Client client;
@@ -129,8 +133,9 @@ final class GenericClientGroundItemInput
 				return;
 			}
 			client.setCameraYawTarget((GenericClientGameInput.yawToward(
-				player.getWorldLocation(), targets.get(0).tile.getWorldLocation()) + yawOffset) & 2047);
-			client.setCameraPitchTarget(OCCLUDED_GROUND_ITEM_CAMERA_PITCH);
+				player.getWorldLocation(), targets.get(0).tile.getWorldLocation()) + yawOffset) &
+				GenericClientGameInput.CAMERA_YAW_MASK);
+			client.setCameraPitchTarget(GenericClientGameInput.CAMERA_INTERACTION_PITCH);
 			result.complete(true);
 		});
 		return result;
@@ -163,7 +168,7 @@ final class GenericClientGroundItemInput
 			shape = itemLayer.getCanvasTilePoly();
 		}
 		Point point = GenericClientMenuInput.randomPointInside(
-			shape, client.getCanvasWidth(), client.getCanvasHeight());
+			shape, GenericClientMenuInput.viewportBounds(client));
 		if (point == null)
 		{
 			return GenericClientMenuInput.Resolution.rejected("ground_item_not_visible");

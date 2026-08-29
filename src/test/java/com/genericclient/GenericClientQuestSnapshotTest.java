@@ -44,6 +44,29 @@ public class GenericClientQuestSnapshotTest
 
 	@Test
 	@SuppressWarnings("unchecked")
+	public void readsRequestedCapturedVarbits()
+	{
+		Map<Integer, Integer> captured = new LinkedHashMap<>();
+		captured.put(9110, 1);
+		captured.put(9585, 3);
+		GenericClientQuestSnapshot snapshot = new GenericClientQuestSnapshot(
+			true,
+			new int[0],
+			captured,
+			Collections.emptyList(),
+			GenericClientQuestSnapshot.DialogueSnapshot.closed());
+		Map<String, Object> query = new LinkedHashMap<>();
+		query.put("varbits", Arrays.asList(9110L, 9585L));
+
+		Map<String, Object> value = (Map<String, Object>) snapshot.read("vars", query);
+		Map<Long, Object> selected = (Map<Long, Object>) value.get("varbits");
+
+		assertEquals(1L, selected.get(9110L));
+		assertEquals(3L, selected.get(9585L));
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
 	public void keepsDistinctSameIdObjectsAndFiltersByAction()
 	{
 		GenericClientQuestSnapshot snapshot = new GenericClientQuestSnapshot(

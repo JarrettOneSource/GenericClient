@@ -27,7 +27,10 @@ import net.runelite.api.events.AccountHashChanged;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.InteractingChanged;
 import net.runelite.api.events.MenuOptionClicked;
+import net.runelite.api.events.NpcDespawned;
+import net.runelite.client.Notifier;
 import net.runelite.client.RuneLiteProperties;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -82,6 +85,9 @@ public final class GenericClientPlugin extends Plugin
 	@Inject
 	private MouseManager mouseManager;
 
+	@Inject
+	private Notifier notifier;
+
 	private volatile String lifecycle = "CREATED";
 	private volatile String gameStateName = "UNKNOWN";
 	private volatile String lastStatus = "Plugin instance created";
@@ -98,6 +104,7 @@ public final class GenericClientPlugin extends Plugin
 	private GenericClientRunInput runInput;
 	private GenericClientObjectInput objectInput;
 	private GenericClientInventoryInput inventoryInput;
+	private GenericClientEquipmentInput equipmentInput;
 	private GenericClientGroundItemInput groundItemInput;
 	private GenericClientDialogueInput dialogueInput;
 	private GenericClientQuestActions questActions;
@@ -116,6 +123,7 @@ public final class GenericClientPlugin extends Plugin
 	private GenericClientWalker walker;
 	private GenericClientLuaHost luaHost;
 	private GenericClientAutomationScheduler automationScheduler;
+	private GenericClientRandomEventController randomEventController;
 	private GenericClientScreenshot screenshot;
 	private NavigationButton navigationButton;
 	private Path mouseProfilesDirectory;
@@ -211,9 +219,11 @@ public final class GenericClientPlugin extends Plugin
 		spellInput = new GenericClientSpellInput(client, clientThread, executor, menuInput, npcInput);
 		autocastInput = new GenericClientAutocastInput(
 			client, clientThread, executor, menuInput, this::publishResult);
-		uiInput = new GenericClientUiInput(syntheticKeyboard, behaviorController);
+		uiInput = new GenericClientUiInput(
+			client, menuInput, syntheticKeyboard, behaviorController);
 		objectInput = new GenericClientObjectInput(client, clientThread, executor, menuInput);
 		inventoryInput = new GenericClientInventoryInput(client, clientThread, executor, menuInput);
+		equipmentInput = new GenericClientEquipmentInput(client, clientThread, executor, menuInput);
 		groundItemInput = new GenericClientGroundItemInput(
 			client, clientThread, executor, menuInput);
 		dialogueInput = new GenericClientDialogueInput(client, menuInput);
@@ -243,6 +253,7 @@ public final class GenericClientPlugin extends Plugin
 		questActions = new GenericClientQuestActions(
 			objectInput,
 			inventoryInput,
+			equipmentInput,
 			npcInput,
 			groundItemInput,
 			dialogueInput,
@@ -281,12 +292,76 @@ public final class GenericClientPlugin extends Plugin
 				.resolve("genericclient").resolve("automation"),
 			luaHost,
 			this::publishResult);
+		randomEventController = new GenericClientRandomEventController(
+			luaHost::findRandomEventSolver,
+			new GenericClientRandomEventController.Runtime()
+			{
+				@Override
+				public java.util.concurrent.CompletableFuture<String> interrupt(
+					String eventKey,
+					String solverScript)
+				{
+					automationScheduler.setAttentionRequired(true, "random_event:" + eventKey);
+					java.util.concurrent.CompletableFuture<String> interrupted =
+						luaHost.interruptForRandomEvent(eventKey);
+					syntheticMouse.cancel("random_event_detected");
+					syntheticKeyboard.cancel("random_event_detected");
+					java.util.concurrent.CompletableFuture<String> breakEnded;
+					try
+					{
+						breakEnded = behaviorController.endActiveBreak().handle((result, error) ->
+						{
+							if (error != null)
+							{
+								publishResult(
+									"RANDOM_EVENT_BREAK_END_FAILED message=" + error.getMessage());
+							}
+							return "break_ready";
+						});
+					}
+					catch (RuntimeException exception)
+					{
+						publishResult("RANDOM_EVENT_BREAK_END_FAILED message=" + exception.getMessage());
+						breakEnded = java.util.concurrent.CompletableFuture.completedFuture("break_ready");
+					}
+					return interrupted.thenCombine(breakEnded, (result, ignored) -> result)
+						.thenCompose(result -> solverScript == null
+							? java.util.concurrent.CompletableFuture.completedFuture(result)
+							: luaHost.startRandomEventSolver(eventKey, solverScript));
+				}
+
+				@Override
+				public java.util.concurrent.CompletableFuture<String> release(
+					String eventKey,
+					boolean resumeInterrupted)
+				{
+					return luaHost.releaseRandomEvent(eventKey, resumeInterrupted).whenComplete(
+						(result, error) ->
+						{
+							if (error == null)
+							{
+								automationScheduler.setAttentionRequired(
+									false, "random_event_completed");
+							}
+						});
+				}
+			},
+			message ->
+			{
+				notifier.notify(message);
+				postChat(message);
+			},
+			this::publishResult);
+		luaHost.setRandomEventHooks(
+			randomEventController::status,
+			randomEventController::solverFinished);
 		screenshot = new GenericClientScreenshot(drawManager, executor);
 		scriptOverlay = new GenericClientScriptOverlay(luaHost::getActiveScriptView);
 		controlServer = new GenericClientControlServer(
 			config.controlPort(),
 			luaHost,
 			automationScheduler,
+			randomEventController,
 			sessionController::logout,
 			sessionController::ensureLoggedIn,
 			this::controlStatus,
@@ -370,9 +445,11 @@ public final class GenericClientPlugin extends Plugin
 		}
 		if (luaHost != null)
 		{
+			luaHost.setRandomEventHooks(null, null);
 			luaHost.close();
 			luaHost = null;
 		}
+		randomEventController = null;
 		if (walker != null)
 		{
 			walker.close();
@@ -415,6 +492,7 @@ public final class GenericClientPlugin extends Plugin
 		dialogueInput = null;
 		groundItemInput = null;
 		inventoryInput = null;
+		equipmentInput = null;
 		objectInput = null;
 		runInput = null;
 		if (menuInput != null)
@@ -561,6 +639,26 @@ public final class GenericClientPlugin extends Plugin
 		if (menu != null)
 		{
 			menu.onMenuOptionClicked(event);
+		}
+	}
+
+	@Subscribe
+	public void onInteractingChanged(InteractingChanged event)
+	{
+		GenericClientRandomEventController randomEvents = randomEventController;
+		if (randomEvents != null)
+		{
+			randomEvents.onInteractingChanged(client.getLocalPlayer(), event, tickCount);
+		}
+	}
+
+	@Subscribe
+	public void onNpcDespawned(NpcDespawned event)
+	{
+		GenericClientRandomEventController randomEvents = randomEventController;
+		if (randomEvents != null)
+		{
+			randomEvents.onNpcDespawned(event, tickCount);
 		}
 	}
 
@@ -883,6 +981,8 @@ public final class GenericClientPlugin extends Plugin
 		value.put("automation", automations == null ? null : automations.status());
 		GenericClientEmergencyController emergency = emergencyController;
 		value.put("safety", emergency == null ? null : emergency.status());
+		GenericClientRandomEventController randomEvents = randomEventController;
+		value.put("random_event", randomEvents == null ? null : randomEvents.status());
 		GenericClientControlServer bridge = controlServer;
 		value.put("control_url", bridge == null ? null : bridge.getUrl());
 		return value;
@@ -890,6 +990,11 @@ public final class GenericClientPlugin extends Plugin
 
 	private void cancelActiveActions(String reason)
 	{
+		GenericClientGameInput activeGameInput = gameInput;
+		if (activeGameInput != null)
+		{
+			activeGameInput.cancel(reason);
+		}
 		GenericClientWalker activeWalker = walker;
 		if (activeWalker != null)
 		{

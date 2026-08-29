@@ -15,6 +15,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -44,6 +45,8 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 	private boolean actionPending;
 	private String fault;
 	private volatile boolean manualPauseRequested;
+	private volatile boolean attentionRequired;
+	private volatile String attentionReason;
 
 	GenericClientAutomationScheduler(
 		Path directory,
@@ -111,7 +114,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		{
 			return;
 		}
-		executor.execute(() ->
+		executeIfOpen(() ->
 		{
 			latestSnapshot = snapshot;
 			evaluate("game_tick");
@@ -124,7 +127,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		{
 			return;
 		}
-		executor.execute(() ->
+		executeIfOpen(() ->
 		{
 			latestSnapshot = null;
 			evaluate("game_state_unavailable");
@@ -200,6 +203,13 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 			evaluate(paused ? "paused" : "resumed");
 			return status();
 		});
+	}
+
+	void setAttentionRequired(boolean required, String reason)
+	{
+		attentionRequired = required;
+		attentionReason = required ? reason : null;
+		executeIfOpen(() -> evaluate(required ? "attention_required" : "attention_released"));
 	}
 
 	CompletableFuture<Map<String, Object>> reload()
@@ -301,6 +311,9 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		GenericClientRuleEngine.Evaluation decision = ruleEngine.evaluate(
 			config, scheduleSnapshot, account, state.getCooldowns(), now);
 		GenericClientLuaHost.RunState run = runtime.getRunState();
+		boolean attentionPending = attentionRequired;
+		String attentionDetail = attentionReason;
+		boolean pausePending = state.isPaused() || manualPauseRequested;
 
 		if (run.getRunId() >= 0L && !run.isRunning() && run.getRuleId() != null &&
 			run.getRunId() != state.getHandledRunId())
@@ -322,7 +335,13 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 			detail = "automation is disabled";
 			stopIfOwned(run, "disabled");
 		}
-		else if (state.isPaused() || manualPauseRequested)
+		else if (attentionPending)
+		{
+			mode = "attention_required";
+			detail = attentionDetail == null ? "external attention is required" : attentionDetail;
+			stopIfOwned(run, "attention_required");
+		}
+		else if (pausePending)
 		{
 			mode = "paused";
 			detail = state.getLastEvent();
@@ -374,7 +393,8 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 			detail = "no rule is eligible";
 			clearActiveRuleIfNeeded();
 		}
-		publishStatus(mode, detail, trigger, scheduleSnapshot, decision, run);
+		publishStatus(
+			mode, detail, trigger, scheduleSnapshot, decision, run, pausePending, attentionPending);
 		rescheduleBoundary(scheduleSnapshot.getNextTransition());
 	}
 
@@ -400,7 +420,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		state.setLastEvent("starting:" + rule.getId());
 		saveStateQuietly();
 		runtime.startScheduled(rule.getId(), rule.getRun().getScript(), rule.getRun().getInputs())
-			.whenComplete((result, error) -> executor.execute(() ->
+			.whenComplete((result, error) -> executeIfOpen(() ->
 			{
 				actionPending = false;
 				if (error != null)
@@ -437,7 +457,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		actionPending = true;
 		state.setLastEvent("stopping:" + ruleId + ":" + reason);
 		saveStateQuietly();
-		runtime.stopScheduled(ruleId, reason).whenComplete((result, error) -> executor.execute(() ->
+		runtime.stopScheduled(ruleId, reason).whenComplete((result, error) -> executeIfOpen(() ->
 		{
 			actionPending = false;
 			state.setActiveRule(null);
@@ -492,14 +512,17 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		String trigger,
 		GenericClientSchedule.Snapshot scheduleSnapshot,
 		GenericClientRuleEngine.Evaluation decision,
-		GenericClientLuaHost.RunState run)
+		GenericClientLuaHost.RunState run,
+		boolean pausePending,
+		boolean attentionPending)
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
 		value.put("available", true);
 		value.put("profile", profileId);
 		value.put("config_path", store.configPath(profileId).toString());
 		value.put("enabled", config.isEnabled());
-		value.put("paused", state.isPaused() || manualPauseRequested);
+		value.put("paused", pausePending);
+		value.put("attention_required", attentionPending);
 		value.put("mode", mode);
 		value.put("detail", detail);
 		value.put("trigger", trigger);
@@ -576,7 +599,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 			completion.completeExceptionally(new IllegalStateException("Automation scheduler is closed"));
 			return completion;
 		}
-		executor.execute(() ->
+		if (!executeIfOpen(() ->
 		{
 			try
 			{
@@ -586,8 +609,32 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 			{
 				completion.completeExceptionally(exception);
 			}
-		});
+		}))
+		{
+			completion.completeExceptionally(new IllegalStateException("Automation scheduler is closed"));
+		}
 		return completion;
+	}
+
+	private boolean executeIfOpen(Runnable task)
+	{
+		if (closed)
+		{
+			return false;
+		}
+		try
+		{
+			executor.execute(task);
+			return true;
+		}
+		catch (RejectedExecutionException exception)
+		{
+			if (!closed)
+			{
+				throw exception;
+			}
+			return false;
+		}
 	}
 
 	private void ensureProfile()
