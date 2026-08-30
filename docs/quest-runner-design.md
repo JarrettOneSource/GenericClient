@@ -2,7 +2,7 @@
 
 Status: four modular quest definitions are live-proven end to end: Witch's
 House, Waterfall Quest, Tree Gnome Village, and Fight Arena. The Grand Tree is
-live-proven through its lumber-order checkpoint at varp 90.
+live-proven through its post-lumber-order checkpoint at varp 100.
 
 ## Decision
 
@@ -210,7 +210,9 @@ translation choices, same-ID ladder approaches, hostile-floor safety
 preservation, repeated same-varp location reduction, and post-break semantic
 target reacquisition. Shipyard proof adds a dialogue-gated object transition,
 an in-yard walk, resumable NPC dialogue, and item-plus-varp completion evidence.
-Its current stable stop is varp 90 with the lumber order verified.
+The return route now handles the quest-locked Stronghold gate through Femi and
+reaches Charlie without consuming another transport charge after a resume. Its
+current stable stop is varp 100 on the Grand Tree top floor.
 
 Quest-specific evidence and exact phase tables live in
 [`witchs-house-quest-runner.md`](witchs-house-quest-runner.md) and

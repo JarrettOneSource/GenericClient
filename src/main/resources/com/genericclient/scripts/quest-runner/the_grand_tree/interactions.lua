@@ -639,6 +639,70 @@ local function talk_shipyard_foreman()
   return { status = "complete", result = "lumber_order_obtained", receipt = clicked }
 end
 
+local function return_lumber_order_to_charlie()
+  local started_tick = gc.read("runtime").game_tick
+  local clicked = { status = "dispatched", result = "resumed_open_dialogue" }
+  if not gc.read("dialogue").open then
+    local target = npc(config.npcs.charlie, 20, true)
+    if not target then return { status = "charlie_not_reachable_for_lumber_order" } end
+    clicked = gc.await {
+      action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 20 },
+      breaks = false,
+      timeout = { game_ticks = 40 },
+    }
+    if clicked.status ~= "dispatched" then return clicked end
+  end
+  local finished, failure = finish_dialogue(
+    function()
+      local vars = gc.read("vars", { varps = { config.varp } })
+      return vars.varps[config.varp] >= 100
+    end,
+    {},
+    started_tick)
+  if not finished then return failure end
+  return { status = "complete", result = "lumber_order_returned", receipt = clicked }
+end
+
+local function enter_stronghold_with_femi()
+  if gc.read("player").world.y >= 3384 then
+    return { status = "complete", result = "stronghold_already_entered" }
+  end
+  for _ = 1, 20 do
+    local dialogue = gc.read("dialogue")
+    if dialogue.type == "continue" then
+      local receipt = gc.await {
+        action = { type = "dialogue.continue" },
+        breaks = false,
+        timeout = { game_ticks = 20 },
+      }
+      if receipt.status ~= "dispatched" then return receipt end
+    elseif dialogue.type == "choice" then
+      return { status = "unexpected_stronghold_gate_choice", dialogue = dialogue }
+    elseif not dialogue.open then
+      break
+    end
+    gc.await { event = "game.tick" }
+  end
+
+  local target = npc(config.npcs.femi, 12, true)
+  if not target then
+    return { status = "femi_not_reachable", nearby = gc.read("npcs", { within = 15, limit = 30 }) }
+  end
+  local started_tick = gc.read("runtime").game_tick
+  local talked = gc.await {
+    action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 12 },
+    breaks = false,
+    timeout = { game_ticks = 30 },
+  }
+  if talked.status ~= "dispatched" then return talked end
+  local finished, failure = finish_dialogue(
+    function() return gc.read("player").world.y >= 3384 end,
+    {},
+    started_tick)
+  if not finished then return failure end
+  return { status = "complete", result = "stronghold_femi_entry_verified", receipt = talked }
+end
+
 return {
   npc = npc,
   talk_narnode = talk_narnode,
@@ -658,4 +722,6 @@ return {
   take_glider_to_karamja = take_glider_to_karamja,
   enter_shipyard = enter_shipyard,
   talk_shipyard_foreman = talk_shipyard_foreman,
+  return_lumber_order_to_charlie = return_lumber_order_to_charlie,
+  enter_stronghold_with_femi = enter_stronghold_with_femi,
 }

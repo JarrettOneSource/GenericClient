@@ -111,10 +111,16 @@ local function return_to_narnode()
         end
       end
     end
-    if distance(gc.read("player").world, config.points.stronghold_gate_inside) > 1 then
-      local entered = walk(config.points.stronghold_gate_inside, 1)
-      if entered.status ~= "arrived" then
-        return nil, { status = "stronghold_reentry_failed", receipt = entered }
+    if gc.read("player").world.y < 3384 then
+      local stage = gc.read("vars", { varps = { config.varp } }).varps[config.varp]
+      if stage >= 90 then
+        local entered = interactions.enter_stronghold_with_femi()
+        if entered.status ~= "complete" then return nil, entered end
+      else
+        local entered = walk(config.points.stronghold_gate_inside, 1)
+        if entered.status ~= "arrived" then
+          return nil, { status = "stronghold_reentry_failed", receipt = entered }
+        end
       end
     end
   end
@@ -219,6 +225,16 @@ local function reach_shipyard_foreman()
   }
 end
 
+local function return_lumber_order_to_charlie()
+  if interactions.npc(config.npcs.charlie, 20, true) then return true end
+  local player = gc.read("player").world
+  if player.plane ~= 3 or distance(player, config.points.grand_tree_top) > 20 then
+    local returned, failure = return_to_narnode()
+    if not returned then return nil, failure end
+  end
+  return reach_charlie()
+end
+
 return {
   reach_narnode = reach_narnode,
   reach_hazelmere = reach_hazelmere,
@@ -228,4 +244,5 @@ return {
   reach_charlie = reach_charlie,
   return_to_glough_for_journal = return_to_glough_for_journal,
   reach_shipyard_foreman = reach_shipyard_foreman,
+  return_lumber_order_to_charlie = return_lumber_order_to_charlie,
 }

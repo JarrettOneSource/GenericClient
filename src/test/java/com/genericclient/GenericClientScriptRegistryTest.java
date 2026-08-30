@@ -23,7 +23,7 @@ public class GenericClientScriptRegistryTest
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(
 			temporaryFolder.newFolder("scripts").toPath());
 
-		assertEquals(12, registry.list().size());
+		assertEquals(13, registry.list().size());
 		assertEquals("Account Auditor", registry.get("account-auditor").getName());
 		assertEquals("AIO Agility Trainer", registry.get("aio-agility").getName());
 		assertTrue(registry.readExecutableSource("aio-agility").contains("agility_xp_unverified"));
@@ -87,6 +87,8 @@ public class GenericClientScriptRegistryTest
 		assertEquals("mime",
 			registry.findRandomEventSolver(NpcID.MACRO_MIME_INVITATION).getId());
 		assertTrue(registry.readSource("mime").contains("EMOTES[actor.animation]"));
+		assertEquals("molly", registry.findRandomEventSolver(NpcID.GRAB_POSTMAN).getId());
+		assertTrue(registry.readSource("molly").contains("MATCHING_SUSPECT"));
 		assertEquals("pinball", registry.findRandomEventSolver(NpcID.PINBALL_INVITATION).getId());
 		assertTrue(registry.readSource("pinball").contains("VARBITS.score"));
 		assertEquals("Walker", registry.get("walker").getName());
@@ -139,7 +141,7 @@ public class GenericClientScriptRegistryTest
 
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
 
-		assertEquals(13, registry.list().size());
+		assertEquals(14, registry.list().size());
 		assertEquals("Custom", registry.get("custom").getName());
 		assertTrue(registry.readExecutableSource("quest-runner")
 			.contains("local approach = walk(pillar.world, 3, 120)"));

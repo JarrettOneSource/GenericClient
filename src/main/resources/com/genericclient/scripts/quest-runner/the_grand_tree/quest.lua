@@ -56,6 +56,11 @@ local function execute(phase)
     if not reached then return failure end
     return interactions.talk_shipyard_foreman()
   end
+  if phase == "return_lumber_order" then
+    local reached, failure = navigation.return_lumber_order_to_charlie()
+    if not reached then return failure end
+    return interactions.return_lumber_order_to_charlie()
+  end
   return { status = "rejected", result = "grand_tree_phase_not_implemented:" .. tostring(phase) }
 end
 

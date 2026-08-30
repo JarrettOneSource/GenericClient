@@ -70,6 +70,14 @@ The first live receipt completed five correctly observed rounds, unlocked the
 Lean emote, and returned the player to `(2487, 3420, 0)` on the interrupted
 Gnome Stronghold course before the runner resumed.
 
+The bundled Molly solver owns Postie Pete NPC `6738`. Molly's client ID encodes
+her outfit and colour, so the solver maps it to the matching suspect ID instead
+of comparing pixels. It opens the crane panel, follows the moving suspect from
+live world coordinates, grabs only on a shared tile, and requires the capture
+and reward messages before completion. The first live receipt caught Molly ID
+`352`'s matching suspect `357`, received three noted uncut diamonds, and resumed
+the interrupted Grand Tree route.
+
 ## Registering a standalone solver
 
 A solver is an ordinary standalone Lua script. Add the NPC IDs it owns to the

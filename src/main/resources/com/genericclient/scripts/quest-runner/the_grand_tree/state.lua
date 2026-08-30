@@ -58,7 +58,8 @@ local function resolve(state)
     end
     return "unknown_stage"
   end
-  if state.varp >= 90 then return "lumber_order_checkpoint" end
+  if state.varp == 90 then return "return_lumber_order" end
+  if state.varp >= 100 then return "glough_key_checkpoint" end
   return "unknown_stage"
 end
 

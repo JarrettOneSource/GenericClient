@@ -67,6 +67,8 @@ for those random-event NPC IDs. GenericClient detects owned events internally,
 interrupts normal automation, and never requires RuneLite's Random Events plugin.
 The bundled Mime solver remembers the last performed animation before each
 answer panel and clicks the matching emote until the reward is verified.
+The Molly solver maps her live appearance ID to the matching suspect, follows
+that suspect with the crane, and requires both capture and reward messages.
 The lifecycle and solver template are in
 [`docs/random-events.md`](docs/random-events.md).
 
@@ -116,7 +118,7 @@ House, Waterfall Quest, Tree Gnome Village, and Fight Arena are isolated in
 their own folders and live-proven through normalized completion. The Grand Tree
 has its own folder and is live-proven through Hazelmere, the translated report,
 Glough's journal, the prison-cell transition, and the Karamja shipyard interview.
-The current live stop is varp 90 with the lumber order verified.
+The current live stop is varp 100 after returning the lumber order to Charlie.
 
 The current scripting interface intentionally contains only:
 

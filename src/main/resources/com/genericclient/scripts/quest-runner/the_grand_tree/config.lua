@@ -37,6 +37,7 @@ return {
     charlie = { 1428, 122 },
     captain_errdo = { 10467 },
     shipyard_foreman = { 1429 },
+    femi = { 1431 },
   },
   objects = {
     hazelmere_ladder = 16683,

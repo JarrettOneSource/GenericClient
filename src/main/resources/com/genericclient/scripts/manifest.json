@@ -68,6 +68,13 @@
       "random_events": [6753]
     },
     {
+      "id": "molly",
+      "name": "Molly",
+      "description": "Match Molly's appearance and capture her evil twin with the live crane controls.",
+      "file": "molly.lua",
+      "random_events": [6738]
+    },
+    {
       "id": "pinball",
       "name": "Pinball",
       "description": "Play Flippa's pinball game from the live target and score state.",
