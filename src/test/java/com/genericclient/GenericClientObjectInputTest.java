@@ -53,6 +53,8 @@ public class GenericClientObjectInputTest
 		assertTrue(GenericClientObjectInput.shouldFaceAndRetry(
 			receipt("hover_has_no_matching_action")));
 		assertTrue(GenericClientObjectInput.shouldFaceAndRetry(
+			receipt("context_menu_has_no_matching_action")));
+		assertTrue(GenericClientObjectInput.shouldFaceAndRetry(
 			receipt("object_not_visible")));
 		assertFalse(GenericClientObjectInput.shouldFaceAndRetry(
 			receipt("matching_object_not_found")));

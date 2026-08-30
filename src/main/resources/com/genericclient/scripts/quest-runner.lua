@@ -20,6 +20,9 @@ local fight_arena_runner = gc.require("fight_arena_runner")
 local grand_tree_config = gc.require("grand_tree_config")
 local grand_tree_state = gc.require("grand_tree_state")
 local grand_tree_runner = gc.require("grand_tree_runner")
+local monkey_madness_config = gc.require("monkey_madness_config")
+local monkey_madness_state = gc.require("monkey_madness_state")
+local monkey_madness_runner = gc.require("monkey_madness_runner")
 
 local quest_labels = {
   witchs_house = witch_config.label,
@@ -27,6 +30,7 @@ local quest_labels = {
   tree_gnome_village = tree_gnome_config.label,
   fight_arena = fight_arena_config.label,
   the_grand_tree = grand_tree_config.label,
+  monkey_madness_i = monkey_madness_config.label,
 }
 local state_modules = {
   witchs_house = witch_state,
@@ -34,6 +38,7 @@ local state_modules = {
   tree_gnome_village = tree_gnome_state,
   fight_arena = fight_arena_state,
   the_grand_tree = grand_tree_state,
+  monkey_madness_i = monkey_madness_state,
 }
 local waterfall_checkpoints = {
   accept = 1,
@@ -127,6 +132,7 @@ return {
         { value = "tree_gnome_village", label = "Tree Gnome Village" },
         { value = "fight_arena", label = "Fight Arena" },
         { value = "the_grand_tree", label = "The Grand Tree" },
+        { value = "monkey_madness_i", label = "Monkey Madness I" },
       },
     },
     {
@@ -166,6 +172,9 @@ return {
     end
     if input.quest == "the_grand_tree" then
       return grand_tree_runner.run(input)
+    end
+    if input.quest == "monkey_madness_i" then
+      return monkey_madness_runner.run(input)
     end
     gc.await { event = "game.tick" }
 

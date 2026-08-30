@@ -288,8 +288,14 @@ Reference surfaces used for this envelope:
 - [Arcane prayer scroll](https://oldschool.runescape.wiki/w/Arcane_prayer_scroll)
 - [Pay-to-play Prayer training](https://oldschool.runescape.wiki/w/Pay-to-play_Prayer_training)
 
-## Next evidence gate
+## Current evidence gate
 
-Begin Monkey Madness I in its own modular quest folder. Preserve the deliberate
-reward-training choice, exact Attack and Defence caps, and the 5,000,000-coin
-reserve.
+Monkey Madness I is in progress through the reinitialisation sequence. Live
+receipts verify Narnode `7`, Caranock `3`, and Daero `7`; the shipyard report,
+Narnode's orders, hangar transfer, 153-move sliding puzzle, and post-puzzle Daero
+confirmation are complete. The account is paused in the post-puzzle hangar
+before speaking to Waydar.
+
+Before the Ape Atoll travel phase, prepare only its next required hostile-area
+loadout. Preserve the deliberate reward-training choice, exact Attack and
+Defence caps, and the 5,000,000-coin reserve.

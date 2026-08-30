@@ -28,13 +28,16 @@ final class GenericClientUiInput
 		this.behavior = behavior;
 	}
 
-	CompletableFuture<Map<String, Object>> click(int widgetId, GenericClientActivityContext activityContext)
+	CompletableFuture<Map<String, Object>> click(
+		int widgetId,
+		Integer widgetIndex,
+		GenericClientActivityContext activityContext)
 	{
 		if (widgetId < 0)
 		{
 			throw new IllegalArgumentException("Widget id cannot be negative");
 		}
-		return menuInput.interactDirect(() -> resolve(widgetId), activityContext);
+		return menuInput.interactDirect(() -> resolve(widgetId, widgetIndex), activityContext);
 	}
 
 	CompletableFuture<Map<String, Object>> closeTopLevel(GenericClientActivityContext activityContext)
@@ -54,13 +57,17 @@ final class GenericClientUiInput
 				})));
 	}
 
-	private GenericClientMenuInput.Resolution resolve(int widgetId)
+	private GenericClientMenuInput.Resolution resolve(int widgetId, Integer widgetIndex)
 	{
 		if (client.getGameState() != GameState.LOGGED_IN)
 		{
 			return GenericClientMenuInput.Resolution.rejected("client_not_logged_in");
 		}
 		Widget widget = client.getWidget(widgetId);
+		if (widgetIndex != null && widget != null)
+		{
+			widget = indexedChild(widget.getDynamicChildren(), widgetIndex);
+		}
 		if (widget == null || widget.isHidden() || widget.isSelfHidden())
 		{
 			return GenericClientMenuInput.Resolution.rejected("widget_not_visible:" + widgetId);
@@ -75,11 +82,39 @@ final class GenericClientUiInput
 		target.put("kind", "widget");
 		target.put("widget_id", (long) widget.getId());
 		target.put("widget_index", (long) widget.getIndex());
+		Widget targetWidget = widget;
 		return GenericClientMenuInput.Resolution.resolved(new GenericClientMenuInput.Target(
 			point,
 			"Click",
 			"widget:" + widgetId,
 			target,
-			entry -> true));
+			entry -> matchesWidget(entry, targetWidget)));
+	}
+
+	private static Widget indexedChild(Widget[] children, int index)
+	{
+		if (children == null)
+		{
+			return null;
+		}
+		for (Widget child : children)
+		{
+			if (child != null && child.getIndex() == index)
+			{
+				return child;
+			}
+		}
+		return null;
+	}
+
+	private static boolean matchesWidget(net.runelite.api.MenuEntry entry, Widget target)
+	{
+		Widget widget = entry.getWidget();
+		if (widget != null)
+		{
+			return widget.getId() == target.getId() && widget.getIndex() == target.getIndex();
+		}
+		return entry.getParam1() == target.getId() &&
+			(target.getIndex() < 0 || entry.getParam0() == target.getIndex());
 	}
 }

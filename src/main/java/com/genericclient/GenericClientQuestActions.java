@@ -120,7 +120,10 @@ final class GenericClientQuestActions
 			case "ui.close":
 				return uiInput.closeTopLevel(activityContext);
 			case "ui.click":
-				return uiInput.click(requiredInt(action, "widget_id", type), activityContext);
+				return uiInput.click(
+					requiredInt(action, "widget_id", type),
+					optionalInt(action, "widget_index", type),
+					activityContext);
 			case "safety.configure":
 				return emergencyController.configure(
 					requiredPositiveInt(action, "minimum_hitpoints", type),

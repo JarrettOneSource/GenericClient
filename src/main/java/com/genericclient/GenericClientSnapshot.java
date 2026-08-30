@@ -289,6 +289,8 @@ final class GenericClientSnapshot
 					worldPoint(query == null ? null : query.get("template"), null));
 			case "widgets":
 				return widgets.read(query);
+			case "sliding_puzzle":
+				return widgets.readSlidingPuzzle();
 			case "vars":
 			case "objects":
 			case "ground_items":

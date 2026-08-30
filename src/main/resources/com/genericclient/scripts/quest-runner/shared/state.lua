@@ -4,12 +4,14 @@ local varp_ids = {
   tree_gnome_village = 111,
   fight_arena = 17,
   the_grand_tree = 150,
+  monkey_madness_i = 365,
 }
 
 local varbit_ids = {
   waterfall = { 9110 },
   tree_gnome_village = { 598, 599, 600, 601, 602 },
   fight_arena = { 14717, 14718, 14719, 14720, 14721 },
+  monkey_madness_i = { 121, 122, 123, 125, 126, 127 },
 }
 
 local function distance(a, b)

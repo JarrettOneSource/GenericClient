@@ -180,14 +180,32 @@ return gc.read("widgets", {
 ```
 
 Rows include packed/group/component IDs, dynamic index, cleaned text/name,
-actions, item/model IDs, and canvas bounds. A script may click one currently
-visible packed ID through the shared synthetic input path:
+actions, item/model/sprite IDs, and canvas bounds. A script may click a packed
+ID or one of its dynamic children through the shared synthetic input path:
 
 ```lua
 return gc.await {
   action = { type = "ui.click", widget_id = 1703941 },
   breaks = false,
 }
+```
+
+```lua
+return gc.await {
+  action = {
+    type = "ui.click",
+    widget_id = 20054020,
+    widget_index = 12,
+  },
+  breaks = true,
+}
+```
+
+The standard 5x5 sliding-puzzle adapter returns the normalized board, blank
+position, dynamic widget ID, and a legal move sequence:
+
+```lua
+return gc.read("sliding_puzzle")
 ```
 
 NPC rows include separate `in_scene`, `clickable`, and `line_of_sight` fields,

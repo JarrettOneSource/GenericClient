@@ -54,6 +54,7 @@ final class GenericClientMenuInput implements AutoCloseable
 	private volatile int contextReopenCount;
 	private volatile int postLongBreakResolveRetries;
 	private volatile String dispatch;
+	private volatile boolean cursorRetained;
 	private volatile Map<String, Object> behaviorBefore = Collections.emptyMap();
 	private volatile Map<String, Object> behaviorAfter = Collections.emptyMap();
 	private volatile boolean closed;
@@ -121,6 +122,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		contextReopenCount = 0;
 		postLongBreakResolveRetries = 0;
 		dispatch = null;
+		cursorRetained = false;
 		behaviorBefore = Collections.emptyMap();
 		behaviorAfter = Collections.emptyMap();
 
@@ -210,6 +212,17 @@ final class GenericClientMenuInput implements AutoCloseable
 			finishRejected("canvas_not_showing");
 			return;
 		}
+		net.runelite.api.Point mouse = client.getMouseCanvasPosition();
+		if (!client.isMenuOpen() && mouse.getX() >= 0 && mouse.getY() >= 0 &&
+			mouse.getX() < client.getCanvasWidth() && mouse.getY() < client.getCanvasHeight() &&
+			findEntryIndex(client.getMenu().getMenuEntries(), target) >= 0)
+		{
+			cursorRetained = true;
+			reporter.accept("MENU_INTERACTION_CURSOR_RETAINED description=" + target.description +
+				" action=" + target.action + " canvas=" + mouse.getX() + "," + mouse.getY());
+			schedule(() -> clientThread.invoke(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+			return;
+		}
 		syntheticMouse.move(target.point).whenComplete((ignored, error) ->
 		{
 			if (error != null)
@@ -278,6 +291,7 @@ final class GenericClientMenuInput implements AutoCloseable
 					return;
 				}
 				dynamicRetargetCount++;
+				cursorRetained = false;
 				Target destination = current;
 				reporter.accept("MENU_INTERACTION_RETARGET description=" + current.description +
 					" attempt=" + dynamicRetargetCount +
@@ -299,7 +313,24 @@ final class GenericClientMenuInput implements AutoCloseable
 			}
 		}
 		net.runelite.api.Point mouse = client.getMouseCanvasPosition();
-		if (!current.acceptsMouse(mouse.getX(), mouse.getY()))
+		MenuEntry[] entries = client.getMenu().getMenuEntries();
+		if (cursorRetained && findEntryIndex(entries, current) < 0)
+		{
+			cursorRetained = false;
+			reporter.accept("MENU_INTERACTION_CURSOR_RETENTION_EXPIRED description=" +
+				current.description + " canvas=" + current.point.x + "," + current.point.y);
+			syntheticMouse.move(current.point).whenComplete((ignored, error) ->
+			{
+				if (error != null)
+				{
+					finishRejected("synthetic_mouse_move: " + rootMessage(error));
+					return;
+				}
+				schedule(() -> clientThread.invoke(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+			});
+			return;
+		}
+		if (!cursorRetained && !current.acceptsMouse(mouse.getX(), mouse.getY()))
 		{
 			finishRejected("mouse_missed_target");
 			return;
@@ -310,7 +341,6 @@ final class GenericClientMenuInput implements AutoCloseable
 			return;
 		}
 
-		MenuEntry[] entries = client.getMenu().getMenuEntries();
 		int desiredIndex = findEntryIndex(entries, current);
 		if (desiredIndex < 0)
 		{
@@ -632,6 +662,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		receipt.put("target", current == null ? null : current.value);
 		receipt.put("dispatch", dispatch);
 		receipt.put("click_count", (long) clickCount);
+		receipt.put("cursor_retained", cursorRetained);
 		receipt.put("behavior_before", behaviorBefore);
 		if (!behaviorAfter.isEmpty())
 		{

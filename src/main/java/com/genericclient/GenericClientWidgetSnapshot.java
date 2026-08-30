@@ -3,6 +3,7 @@ package com.genericclient;
 import java.awt.Rectangle;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -12,9 +13,13 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import net.runelite.client.plugins.puzzlesolver.solver.PuzzleState;
+import net.runelite.client.plugins.puzzlesolver.solver.heuristics.ManhattanDistance;
+import net.runelite.client.plugins.puzzlesolver.solver.pathfinding.IDAStarMM;
 import net.runelite.api.Client;
 import net.runelite.api.HashTable;
 import net.runelite.api.WidgetNode;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.util.Text;
 
@@ -119,6 +124,79 @@ final class GenericClientWidgetSnapshot
 		return result;
 	}
 
+	Map<String, Object> readSlidingPuzzle()
+	{
+		Map<Rectangle, Integer> positions = new LinkedHashMap<>();
+		Map<Integer, Integer> modelAtPosition = new LinkedHashMap<>();
+		Set<Integer> modelIds = new LinkedHashSet<>();
+		int widgetId = -1;
+		for (WidgetValue widget : widgets)
+		{
+			if (widget.groupId == InterfaceID.TRAIL_SLIDEPUZZLE && "Sliding piece".equals(widget.name) &&
+				widget.index >= 0 && widget.index < 25)
+			{
+				positions.put(widget.bounds, widget.index);
+				widgetId = widget.id;
+			}
+		}
+		for (WidgetValue widget : widgets)
+		{
+			Integer position = positions.get(widget.bounds);
+			if (widget.groupId == InterfaceID.TRAIL_SLIDEPUZZLE && widget.type == 6 &&
+				widget.modelId >= 0 && position != null)
+			{
+				modelAtPosition.put(position, widget.modelId);
+				modelIds.add(widget.modelId);
+			}
+		}
+
+		Map<String, Object> value = new LinkedHashMap<>();
+		if (positions.size() != 24 || modelAtPosition.size() != 24 || modelIds.size() != 24)
+		{
+			value.put("available", false);
+			return value;
+		}
+		List<Integer> sortedModels = new ArrayList<>(modelIds);
+		Collections.sort(sortedModels);
+		Map<Integer, Integer> ranks = new LinkedHashMap<>();
+		for (int index = 0; index < sortedModels.size(); index++)
+		{
+			ranks.put(sortedModels.get(index), index);
+		}
+		int[] board = new int[25];
+		Arrays.fill(board, -1);
+		int blank = -1;
+		List<Long> boardValue = new ArrayList<>();
+		for (int position = 0; position < board.length; position++)
+		{
+			Integer modelId = modelAtPosition.get(position);
+			if (modelId == null)
+			{
+				blank = position;
+			}
+			else
+			{
+				board[position] = ranks.get(modelId);
+			}
+			boardValue.add((long) board[position]);
+		}
+
+		List<PuzzleState> path = new IDAStarMM(new ManhattanDistance())
+			.computePath(new PuzzleState(board));
+		List<Long> moves = new ArrayList<>();
+		for (int index = 1; index < path.size(); index++)
+		{
+			moves.add((long) path.get(index).getEmptyPiece());
+		}
+		value.put("available", true);
+		value.put("widget_id", (long) widgetId);
+		value.put("blank", (long) blank);
+		value.put("board", boardValue);
+		value.put("moves", moves);
+		value.put("move_count", (long) moves.size());
+		return value;
+	}
+
 	private static Set<Integer> ids(Map<?, ?> query)
 	{
 		if (query == null)
@@ -190,6 +268,7 @@ final class GenericClientWidgetSnapshot
 		private final List<String> actions;
 		private final int itemId;
 		private final int modelId;
+		private final int spriteId;
 		private final Rectangle bounds;
 
 		private WidgetValue(
@@ -202,6 +281,7 @@ final class GenericClientWidgetSnapshot
 			List<String> actions,
 			int itemId,
 			int modelId,
+			int spriteId,
 			Rectangle bounds)
 		{
 			this.id = id;
@@ -215,6 +295,7 @@ final class GenericClientWidgetSnapshot
 			this.actions = actions;
 			this.itemId = itemId;
 			this.modelId = modelId;
+			this.spriteId = spriteId;
 			this.bounds = new Rectangle(bounds);
 		}
 
@@ -242,6 +323,7 @@ final class GenericClientWidgetSnapshot
 				Collections.unmodifiableList(actions),
 				widget.getItemId(),
 				widget.getModelId(),
+				widget.getSpriteId(),
 				bounds);
 		}
 
@@ -269,6 +351,7 @@ final class GenericClientWidgetSnapshot
 			value.put("actions", actions);
 			value.put("item_id", itemId < 0 ? null : (long) itemId);
 			value.put("model_id", modelId < 0 ? null : (long) modelId);
+			value.put("sprite_id", spriteId < 0 ? null : (long) spriteId);
 			Map<String, Object> rectangle = new LinkedHashMap<>();
 			rectangle.put("x", (long) bounds.x);
 			rectangle.put("y", (long) bounds.y);

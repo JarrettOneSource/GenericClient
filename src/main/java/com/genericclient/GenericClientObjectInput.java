@@ -198,7 +198,8 @@ final class GenericClientObjectInput
 	{
 		Object result = receipt == null ? null : receipt.get("result");
 		return "object_not_visible".equals(result) ||
-			"hover_has_no_matching_action".equals(result);
+			"hover_has_no_matching_action".equals(result) ||
+			"context_menu_has_no_matching_action".equals(result);
 	}
 
 	private CompletableFuture<CameraTarget> faceObject(
