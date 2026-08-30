@@ -235,6 +235,34 @@ local function return_lumber_order_to_charlie()
   return reach_charlie()
 end
 
+local function reach_anita()
+  if interactions.npc(config.npcs.anita, 20, true) then return true end
+  local player = gc.read("player").world
+  if player.plane == 3 then
+    local descended = interactions.descend_grand_tree_bottom()
+    if descended.status ~= "complete" then return nil, descended end
+  elseif player.plane == 1 and distance(player, config.points.anita_upstairs) <= 12 then
+    if interactions.npc(config.npcs.anita, 20, true) then return true end
+  elseif player.plane ~= 0 then
+    return nil, { status = "anita_resume_location_unknown", player = player }
+  end
+  gc.activity("travel")
+  if gc.read("player").world.plane == 0 then
+    local reached = walk(config.points.anita_stairs, 1)
+    if reached.status ~= "arrived" then
+      return nil, { status = "anita_house_travel_failed", receipt = reached }
+    end
+    local climbed = interactions.climb_anita_stairs()
+    if climbed.status ~= "complete" then return nil, climbed end
+  end
+  if interactions.npc(config.npcs.anita, 20, true) then return true end
+  return nil, {
+    status = "anita_not_observed_after_travel",
+    player = gc.read("player"),
+    nearby = gc.read("npcs", { within = 20, limit = 30 }),
+  }
+end
+
 return {
   reach_narnode = reach_narnode,
   reach_hazelmere = reach_hazelmere,
@@ -245,4 +273,5 @@ return {
   return_to_glough_for_journal = return_to_glough_for_journal,
   reach_shipyard_foreman = reach_shipyard_foreman,
   return_lumber_order_to_charlie = return_lumber_order_to_charlie,
+  reach_anita = reach_anita,
 }

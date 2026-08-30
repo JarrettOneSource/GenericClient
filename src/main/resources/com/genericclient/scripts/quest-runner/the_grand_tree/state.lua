@@ -59,7 +59,10 @@ local function resolve(state)
     return "unknown_stage"
   end
   if state.varp == 90 then return "return_lumber_order" end
-  if state.varp >= 100 then return "glough_key_checkpoint" end
+  if state.varp == 100 and carried(state, config.items.glough_key) == 0 then
+    return "talk_anita"
+  end
+  if state.varp >= 100 then return "invasion_plans_checkpoint" end
   return "unknown_stage"
 end
 

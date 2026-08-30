@@ -245,7 +245,8 @@ dialogue, took Captain Errdo's glider to Karamja, entered the shipyard with the
 passphrase, and answered the foreman's questions. Item 787 and varp 90 verify
 the lumber-order checkpoint. On the return route it solved Molly for three noted
 uncut diamonds, used Femi to bypass the locked Stronghold gate, and returned the
-order to Charlie. The account is safely idle on the Grand Tree top floor.
+order to Charlie. It then visited Anita and obtained Glough's key; the current
+safe stop is her upstairs room before the invasion-plans chest.
 
 Sources:
 
@@ -285,6 +286,6 @@ Reference surfaces used for this envelope:
 
 ## Next evidence gate
 
-Continue The Grand Tree from the varp-100 Glough-key checkpoint. Restock food only when
+Continue The Grand Tree from the varp-100 invasion-plans checkpoint. Restock food only when
 its next live phase requires it, before the eventual combat section. Continue enforcing exact
 Attack, Defence, and Prayer caps and the 5,000,000-coin reserve.

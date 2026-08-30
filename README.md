@@ -118,7 +118,7 @@ House, Waterfall Quest, Tree Gnome Village, and Fight Arena are isolated in
 their own folders and live-proven through normalized completion. The Grand Tree
 has its own folder and is live-proven through Hazelmere, the translated report,
 Glough's journal, the prison-cell transition, and the Karamja shipyard interview.
-The current live stop is varp 100 after returning the lumber order to Charlie.
+The current live stop is varp 100 with Glough's key obtained from Anita.
 
 The current scripting interface intentionally contains only:
 

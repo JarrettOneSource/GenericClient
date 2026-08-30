@@ -212,7 +212,8 @@ target reacquisition. Shipyard proof adds a dialogue-gated object transition,
 an in-yard walk, resumable NPC dialogue, and item-plus-varp completion evidence.
 The return route now handles the quest-locked Stronghold gate through Femi and
 reaches Charlie without consuming another transport charge after a resume. Its
-current stable stop is varp 100 on the Grand Tree top floor.
+current stable stop is varp 100 with Glough's key verified in Anita's upstairs
+room, before the invasion-plans chest.
 
 Quest-specific evidence and exact phase tables live in
 [`witchs-house-quest-runner.md`](witchs-house-quest-runner.md) and

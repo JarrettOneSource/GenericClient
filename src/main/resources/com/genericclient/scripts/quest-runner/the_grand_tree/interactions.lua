@@ -703,6 +703,59 @@ local function enter_stronghold_with_femi()
   return { status = "complete", result = "stronghold_femi_entry_verified", receipt = talked }
 end
 
+local function climb_anita_stairs()
+  local world = gc.read("player").world
+  if world.plane == 1 and math.max(
+    math.abs(world.x - config.points.anita_upstairs.x),
+    math.abs(world.y - config.points.anita_upstairs.y)) <= 12 then
+    return { status = "complete", result = "anita_stairs_already_climbed" }
+  end
+  local stairs = object(config.objects.anita_stairs, "Climb-up", 12)
+  if not stairs then
+    return { status = "anita_stairs_not_observed", objects = gc.read("objects", { within = 12, limit = 40 }) }
+  end
+  local climbed = gc.await {
+    action = {
+      type = "object.interact",
+      id = stairs.id,
+      action = "Climb-up",
+      world = stairs.world,
+      within = 12,
+    },
+    breaks = true,
+    timeout = { game_ticks = 30 },
+  }
+  if climbed.status ~= "dispatched" then return climbed end
+  for _ = 1, 30 do
+    gc.await { event = "game.tick" }
+    if gc.read("player").world.plane == 1 then
+      return { status = "complete", result = "anita_stairs_climbed", receipt = climbed }
+    end
+  end
+  return { status = "anita_stairs_unverified", receipt = climbed }
+end
+
+local function talk_anita()
+  if has_inventory_item(config.items.glough_key) then
+    return { status = "complete", result = "glough_key_already_owned" }
+  end
+  local target = npc(config.npcs.anita, 20, true)
+  if not target then return { status = "anita_not_reachable" } end
+  local started_tick = gc.read("runtime").game_tick
+  local talked = gc.await {
+    action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 20 },
+    breaks = false,
+    timeout = { game_ticks = 30 },
+  }
+  if talked.status ~= "dispatched" then return talked end
+  local finished, failure = finish_dialogue(
+    function() return has_inventory_item(config.items.glough_key) end,
+    { "I suppose so." },
+    started_tick)
+  if not finished then return failure end
+  return { status = "complete", result = "glough_key_obtained", receipt = talked }
+end
+
 return {
   npc = npc,
   talk_narnode = talk_narnode,
@@ -724,4 +777,6 @@ return {
   talk_shipyard_foreman = talk_shipyard_foreman,
   return_lumber_order_to_charlie = return_lumber_order_to_charlie,
   enter_stronghold_with_femi = enter_stronghold_with_femi,
+  climb_anita_stairs = climb_anita_stairs,
+  talk_anita = talk_anita,
 }

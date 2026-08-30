@@ -44,8 +44,8 @@ local function run(input)
     initial_phase == "unknown_stage" then
     return terminal(initial_phase, initial)
   end
-  if initial_phase == "glough_key_checkpoint" then
-    return terminal("glough_key_checkpoint", initial)
+  if initial_phase == "invasion_plans_checkpoint" then
+    return terminal("invasion_plans_checkpoint", initial)
   end
 
   local safety = gc.await {
@@ -77,8 +77,8 @@ local function run(input)
     local state = read()
     local phase = state_module.resolve(state)
     if phase ~= initial_phase then
-      if phase == "glough_key_checkpoint" then
-        return terminal("glough_key_checkpoint", state, receipt)
+      if phase == "invasion_plans_checkpoint" then
+        return terminal("invasion_plans_checkpoint", state, receipt)
       end
       return terminal(phase, state, receipt)
     end
