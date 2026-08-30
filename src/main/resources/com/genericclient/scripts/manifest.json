@@ -82,6 +82,13 @@
       "random_events": [6744]
     },
     {
+      "id": "rick-turpentine",
+      "name": "Rick Turpentine",
+      "description": "Accept Rick Turpentine's restitution gift and verify its reward message.",
+      "file": "rick-turpentine.lua",
+      "random_events": [375]
+    },
+    {
         "id": "quest-runner",
         "name": "Quest Runner",
         "description": "Run resumable quest phases from observed state with strict safety gates and exact interaction receipts.",
@@ -105,6 +112,8 @@
           "fight_arena_runner": "quest-runner/fight_arena/runner.lua",
           "fight_arena_state": "quest-runner/fight_arena/state.lua",
           "grand_tree_config": "quest-runner/the_grand_tree/config.lua",
+          "grand_tree_combat": "quest-runner/the_grand_tree/combat.lua",
+          "grand_tree_completion": "quest-runner/the_grand_tree/completion.lua",
           "grand_tree_interactions": "quest-runner/the_grand_tree/interactions.lua",
           "grand_tree_navigation": "quest-runner/the_grand_tree/navigation.lua",
           "grand_tree_quest": "quest-runner/the_grand_tree/quest.lua",

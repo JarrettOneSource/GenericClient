@@ -1280,8 +1280,7 @@ public class GenericClientLuaHostTest
 			waitForStatus(host, "COMPLETED");
 
 			assertTrue(host.getRecentLogs().contains("strict_stats_block"));
-			assertEquals("strict stats block",
-				host.getActiveScriptView().getOverlayRows().get(1).getValue());
+			assertEquals("strict_stats_block", host.getScriptState());
 		}
 		finally
 		{
@@ -1311,8 +1310,7 @@ public class GenericClientLuaHostTest
 			waitForStatus(host, "COMPLETED");
 
 			assertTrue(host.getRecentLogs().contains("strict_hitpoints_block"));
-			assertEquals("strict hitpoints block",
-				host.getActiveScriptView().getOverlayRows().get(1).getValue());
+			assertEquals("strict_hitpoints_block", host.getScriptState());
 		}
 		finally
 		{
@@ -1419,8 +1417,7 @@ public class GenericClientLuaHostTest
 
 			assertTrue(host.getStatus() + " " + host.getRecentLogs(),
 				host.getRecentLogs().contains("phase=key_loadout_required"));
-			assertEquals("key loadout required",
-				host.getActiveScriptView().getOverlayRows().get(1).getValue());
+			assertEquals("key_loadout_required", host.getScriptState());
 		}
 		finally
 		{
@@ -2185,8 +2182,7 @@ public class GenericClientLuaHostTest
 			waitForStatus(host, "COMPLETED");
 
 			assertTrue(host.getRecentLogs().contains("shed_ready_checkpoint"));
-			assertEquals("shed ready checkpoint",
-				host.getActiveScriptView().getOverlayRows().get(1).getValue());
+			assertEquals("shed_ready_checkpoint", host.getScriptState());
 		}
 		finally
 		{

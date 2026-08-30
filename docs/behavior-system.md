@@ -55,10 +55,15 @@ profile ID is a one-way derived identifier; the raw account hash is not stored.
 
 ## Activity and action contract
 
-Each Lua coroutine owns an activity descriptor. `gc.activity(name)` changes it
-for subsequent awaits and `gc.phase(name, { activity = name })` changes it at a
-state-machine transition. Every await captures an immutable activity context,
-so the standalone script and REPL cannot leak behavior state into one another.
+Each Lua coroutine owns two separate descriptors. `gc.activity(name)` is the
+framework-level global state: a task-agnostic category such as `travel`,
+`combat`, or `banking` that drives default behavior policy. `gc.state(name)` is
+the script's own state-machine position, such as `fight_black_demon`; it is
+shown beside the global state but does not change behavior by itself.
+`gc.phase(name, { activity = name })` changes script state and performs the
+profile's heavier major-transition evaluation. Every await captures an
+immutable activity context, so the standalone script and REPL cannot leak
+behavior state into one another.
 One interaction can override the descriptor without changing later actions by
 putting `activity = "banking"` beside its `action` in the `gc.await` request.
 

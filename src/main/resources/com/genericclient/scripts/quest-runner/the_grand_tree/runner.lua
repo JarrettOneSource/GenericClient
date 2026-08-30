@@ -18,8 +18,8 @@ local function under_attack()
   return false
 end
 
-local function terminal(status, state, receipt)
-  local safety_preserved = under_attack()
+local function terminal(status, state, receipt, preserve_safety)
+  local safety_preserved = under_attack() or preserve_safety == true
   if not safety_preserved then
     gc.await { action = { type = "safety.clear" }, breaks = false }
     gc.await { action = { type = "mouse.offscreen" }, breaks = false }
@@ -39,6 +39,7 @@ local function run(input)
   gc.await { event = "game.tick" }
   local initial = read()
   local initial_phase = state_module.resolve(initial)
+  gc.state(initial_phase)
   if initial_phase == "complete" then return terminal("complete", initial) end
   if initial_phase == "strict_stats_block" or initial_phase == "inventory_space_block" or
     initial_phase == "unknown_stage" then
@@ -66,11 +67,10 @@ local function run(input)
 
   gc.overlay {
     { label = "Quest", value = config.label },
-    { label = "Phase", value = initial_phase },
   }
-  local receipt = quest.execute(initial_phase)
+  local receipt = quest.execute(initial_phase, input)
   if not receipt or receipt.status ~= "complete" then
-    return terminal("action_failed", read(), receipt)
+    return terminal("action_failed", read(), receipt, initial_phase == "fight_black_demon")
   end
   for _ = 1, 60 do
     gc.await { event = "game.tick" }
@@ -83,7 +83,7 @@ local function run(input)
       return terminal(phase, state, receipt)
     end
   end
-  return terminal("phase_timeout", read(), receipt)
+  return terminal("phase_timeout", read(), receipt, initial_phase == "fight_black_demon")
 end
 
 return { run = run }

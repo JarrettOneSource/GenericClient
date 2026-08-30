@@ -17,8 +17,10 @@ import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
 import net.runelite.api.Player;
+import net.runelite.api.ScriptID;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 
@@ -35,6 +37,7 @@ final class GenericClientNpcInput
 	private static final long CAMERA_SETTLE_TIMEOUT_MILLIS = 3_000L;
 	private static final long SCENE_RETRY_MILLIS = 600L;
 	private static final int MAX_SCENE_RETRIES = 2;
+	private static final int OUTER_CAMERA_ZOOM = -400;
 
 	private final Client client;
 	private final ClientThread clientThread;
@@ -134,8 +137,44 @@ final class GenericClientNpcInput
 		GenericClientMenuInput.TargetResolver resolver = () -> resolveNpc(
 			name, id, action, within, requestedSelection);
 		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
-			retryWithCamera(
-				resolver, receipt, name, id, within, activityContext, 0, 0));
+		{
+			if (!isCameraRetryable(receipt.get("result")))
+			{
+				return retryWithCamera(
+					resolver, receipt, name, id, within, activityContext, 0, 0);
+			}
+			return prepareZoom().thenCompose(zoom -> retryWithCamera(
+					resolver, receipt, name, id, within, activityContext, 0, 0)
+				.whenComplete((ignored, error) -> restoreZoom(zoom)));
+		});
+	}
+
+	private CompletableFuture<CameraZoom> prepareZoom()
+	{
+		CompletableFuture<CameraZoom> result = new CompletableFuture<>();
+		clientThread.invoke(() ->
+		{
+			CameraZoom previous = new CameraZoom(
+				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL),
+				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_BIG),
+				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL_MIN),
+				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_BIG_MIN));
+			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL_MIN, OUTER_CAMERA_ZOOM);
+			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_BIG_MIN, OUTER_CAMERA_ZOOM);
+			client.runScript(ScriptID.CAMERA_DO_ZOOM, OUTER_CAMERA_ZOOM, OUTER_CAMERA_ZOOM);
+			result.complete(previous);
+		});
+		return result;
+	}
+
+	private void restoreZoom(CameraZoom previous)
+	{
+		clientThread.invoke(() ->
+		{
+			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL_MIN, previous.smallMinimum);
+			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_BIG_MIN, previous.bigMinimum);
+			client.runScript(ScriptID.CAMERA_DO_ZOOM, previous.small, previous.big);
+		});
 	}
 
 	private CompletableFuture<Map<String, Object>> retryWithCamera(
@@ -499,6 +538,22 @@ final class GenericClientNpcInput
 		if (within < 1 || within > 32)
 		{
 			throw new IllegalArgumentException("NPC interaction radius must be between 1 and 32 tiles");
+		}
+	}
+
+	private static final class CameraZoom
+	{
+		private final int small;
+		private final int big;
+		private final int smallMinimum;
+		private final int bigMinimum;
+
+		private CameraZoom(int small, int big, int smallMinimum, int bigMinimum)
+		{
+			this.small = small;
+			this.big = big;
+			this.smallMinimum = smallMinimum;
+			this.bigMinimum = bigMinimum;
 		}
 	}
 

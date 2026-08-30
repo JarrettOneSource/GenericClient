@@ -83,10 +83,9 @@ local read_state = shared_state.read
 local function resolve(state) return state_modules[state.quest].resolve(state) end
 
 local function overlay(quest, phase)
+  gc.state(phase)
   gc.overlay {
     { label = "Quest", value = quest_labels[quest] },
-    { label = "Phase", value = phase:gsub("_", " ") },
-    { label = "State", value = "Observed" },
   }
 end
 

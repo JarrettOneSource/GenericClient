@@ -36,6 +36,26 @@ public class GenericClientBankInputTest
 		assertEquals(new Rectangle(350, 263, 48, 19), clipped);
 	}
 
+	@Test
+	public void bankItemScrollMovesAClippedLastRowAboveTheControls()
+	{
+		assertEquals(18, GenericClientBankInput.scrollYForItem(
+			new Rectangle(350, 263, 48, 36),
+			new Rectangle(21, 41, 478, 244),
+			0,
+			40));
+	}
+
+	@Test
+	public void bankItemScrollLeavesAVisibleRowAlone()
+	{
+		assertEquals(12, GenericClientBankInput.scrollYForItem(
+			new Rectangle(350, 180, 48, 36),
+			new Rectangle(21, 41, 478, 244),
+			12,
+			40));
+	}
+
 	private static MenuEntry menuEntry(int itemId, int slot, int widgetId, String option)
 	{
 		return (MenuEntry) Proxy.newProxyInstance(

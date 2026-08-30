@@ -41,9 +41,9 @@ local safety_required = {
 }
 
 local function overlay(phase)
+  gc.state(phase)
   gc.overlay {
     { label = "Quest", value = config.label },
-    { label = "Phase", value = phase:gsub("_", " ") },
   }
 end
 

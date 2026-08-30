@@ -21,22 +21,28 @@ local function reach_narnode()
   gc.activity("travel")
   local current = gc.read("player").world
   local route
-  if distance(current, config.points.king_narnode) <= 20 and current.y < 3492 then
-    route = { config.points.grand_tree_door, config.points.king_narnode }
-  elseif distance(current, config.points.king_narnode) <= 20 then
-    route = { config.points.king_narnode }
-  elseif distance(current, config.points.grand_tree_entrance) <= 24 then
-    route = { config.points.grand_tree_entrance, config.points.king_narnode }
-  else
+  if distance(current, config.points.king_narnode) > 60 then
     route = {
       config.points.grand_tree_south,
       config.points.grand_tree_entrance,
+      config.points.grand_tree_door,
       config.points.king_narnode,
     }
+  elseif current.y < config.points.grand_tree_entrance.y then
+    route = {
+      config.points.grand_tree_entrance,
+      config.points.grand_tree_door,
+      config.points.king_narnode,
+    }
+  elseif current.y < config.points.grand_tree_door.y then
+    route = { config.points.grand_tree_door, config.points.king_narnode }
+  else
+    route = { config.points.king_narnode }
   end
   for _, waypoint in ipairs(route) do
     local radius = waypoint == config.points.king_narnode and 2 or
-      waypoint == config.points.grand_tree_door and 1 or 4
+      waypoint == config.points.grand_tree_door and 1 or
+      waypoint == config.points.grand_tree_entrance and 0 or 4
     if distance(gc.read("player").world, waypoint) > radius then
       local receipt = walk(waypoint, radius)
       if receipt.status ~= "arrived" then
@@ -93,7 +99,9 @@ local function return_to_narnode()
   if interactions.npc(config.npcs.king_narnode, 20, true) then return true end
   gc.activity("travel")
   local player = gc.read("player").world
-  if distance(player, config.points.king_narnode) > 120 then
+  if distance(player, config.points.king_narnode) > 120 and
+    distance(player, config.points.castle_wars_exit) > 30 and
+    distance(player, config.points.stronghold_gate_outside) > 80 then
     if not travel.has_dueling_ring() then
       return nil, { status = "narnode_return_transport_required", player = gc.read("player") }
     end
@@ -103,9 +111,21 @@ local function return_to_narnode()
     end
   end
   if gc.read("player").world.y < 3384 then
-    for _, waypoint in ipairs(config.return_route) do
-      if distance(gc.read("player").world, waypoint) > 4 then
-        local receipt = walk(waypoint, 4)
+    local current = gc.read("player").world
+    local start_index = 1
+    local nearest_distance = distance(current, config.return_route[1])
+    for index = 2, #config.return_route do
+      local candidate = distance(current, config.return_route[index])
+      if candidate < nearest_distance then
+        nearest_distance = candidate
+        start_index = index
+      end
+    end
+    for index = start_index, #config.return_route do
+      local waypoint = config.return_route[index]
+      local radius = index == #config.return_route and 1 or 4
+      if distance(gc.read("player").world, waypoint) > radius then
+        local receipt = walk(waypoint, radius)
         if receipt.status ~= "arrived" then
           return nil, { status = "narnode_return_failed", waypoint = waypoint, receipt = receipt }
         end
@@ -113,7 +133,13 @@ local function return_to_narnode()
     end
     if gc.read("player").world.y < 3384 then
       local stage = gc.read("vars", { varps = { config.varp } }).varps[config.varp]
-      if stage >= 90 then
+      if stage == 90 then
+        if distance(gc.read("player").world, config.points.stronghold_gate_outside) > 1 then
+          local staged = walk(config.points.stronghold_gate_outside, 1)
+          if staged.status ~= "arrived" then
+            return nil, { status = "femi_approach_failed", receipt = staged }
+          end
+        end
         local entered = interactions.enter_stronghold_with_femi()
         if entered.status ~= "complete" then return nil, entered end
       else
@@ -127,12 +153,11 @@ local function return_to_narnode()
   return reach_narnode()
 end
 
-local function reach_glough()
-  if interactions.npc(config.npcs.glough, 16, true) then return true end
+local function reach_glough_house()
   gc.activity("travel")
   local player = gc.read("player").world
   if player.plane == 0 then
-    if player.y >= 3492 then
+    if player.x >= 2437 and player.x <= 2493 and player.y >= 3492 and player.y <= 3511 then
       local inside = walk(config.points.grand_tree_inside_door, 1)
       if inside.status ~= "arrived" then
         return nil, { status = "grand_tree_inside_door_failed", receipt = inside }
@@ -151,6 +176,17 @@ local function reach_glough()
   elseif player.plane ~= 1 or distance(player, config.points.glough_room) > 20 then
     return nil, { status = "glough_house_resume_location_unknown", player = player }
   end
+  player = gc.read("player").world
+  if player.plane == 1 and distance(player, config.points.glough_room) <= 20 then
+    return true
+  end
+  return nil, { status = "glough_house_entry_unverified", player = player }
+end
+
+local function reach_glough()
+  if interactions.npc(config.npcs.glough, 16, true) then return true end
+  local reached, failure = reach_glough_house()
+  if not reached then return nil, failure end
   if not interactions.npc(config.npcs.glough, 16, true) then
     local approached = walk(config.points.glough_room, 2)
     if approached.status ~= "arrived" then
@@ -165,8 +201,23 @@ local function reach_glough()
   }
 end
 
+local function reach_glough_for_invasion_plans()
+  local player = gc.read("player").world
+  if player.plane == 1 and distance(player, config.points.anita_upstairs) <= 12 then
+    local descended = interactions.descend_anita_stairs()
+    if descended.status ~= "complete" then return nil, descended end
+  elseif player.plane == 1 and distance(player, config.points.glough_room) <= 20 then
+    return true
+  elseif player.plane ~= 0 then
+    return nil, { status = "invasion_plans_resume_location_unknown", player = player }
+  end
+  return reach_glough()
+end
+
 local function return_after_glough()
   if interactions.npc(config.npcs.king_narnode, 20, true) then return true end
+  local drained = interactions.drain_continue_dialogue()
+  if drained.status ~= "complete" then return nil, drained end
   gc.activity("travel")
   local player = gc.read("player").world
   if player.plane == 1 and distance(player, config.points.glough_room) <= 20 then
@@ -176,6 +227,36 @@ local function return_after_glough()
     return nil, { status = "post_glough_resume_location_unknown", player = player }
   end
   return reach_narnode()
+end
+
+local function return_invasion_plans_to_narnode()
+  return return_after_glough()
+end
+
+local function reach_watchtower()
+  local player = gc.read("player").world
+  if player.y >= 9800 or player.x >= 10000 then return true end
+  if player.plane == 2 and distance(player, config.points.glough_watchtower) <= 16 then
+    return true
+  end
+  if player.plane == 0 and distance(player, config.points.glough_room) > 120 then
+    local returned, failure = return_to_narnode()
+    if not returned then return nil, failure end
+    player = gc.read("player").world
+  end
+  if player.plane ~= 1 or distance(player, config.points.glough_room) > 20 then
+    local reached, failure = reach_glough_house()
+    if not reached then return nil, failure end
+  end
+  if distance(gc.read("player").world, config.points.watchtower_tree_approach) > 0 then
+    local approached = walk(config.points.watchtower_tree_approach, 0)
+    if approached.status ~= "arrived" then
+      return nil, { status = "watchtower_tree_approach_failed", receipt = approached }
+    end
+  end
+  local climbed = interactions.climb_glough_watchtower()
+  if climbed.status ~= "complete" then return nil, climbed end
+  return true
 end
 
 local function reach_charlie()
@@ -274,4 +355,7 @@ return {
   reach_shipyard_foreman = reach_shipyard_foreman,
   return_lumber_order_to_charlie = return_lumber_order_to_charlie,
   reach_anita = reach_anita,
+  reach_glough_for_invasion_plans = reach_glough_for_invasion_plans,
+  return_invasion_plans_to_narnode = return_invasion_plans_to_narnode,
+  reach_watchtower = reach_watchtower,
 }

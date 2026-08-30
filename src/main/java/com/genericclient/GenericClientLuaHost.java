@@ -1101,6 +1101,7 @@ final class GenericClientLuaHost implements AutoCloseable
 		GenericClientLuaScript currentSession = session;
 		GenericClientLuaScript currentRepl = repl;
 		value.put("activity", currentSession == null ? "idle" : currentSession.getActivity());
+		value.put("script_state", getScriptState());
 		value.put("repl_activity", currentRepl == null ? null : currentRepl.getActivity());
 		value.put("script_status", status);
 		value.put("run_id", run.getRunId() < 0L ? null : run.getRunId());
@@ -1160,6 +1161,12 @@ final class GenericClientLuaHost implements AutoCloseable
 	{
 		GenericClientLuaScript currentSession = session;
 		return currentSession == null ? "idle" : currentSession.getActivity();
+	}
+
+	String getScriptState()
+	{
+		ActiveRun run = activeRun;
+		return run == null ? "idle" : run.script.getScriptState();
 	}
 
 	RunState getRunState()

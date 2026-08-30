@@ -126,6 +126,11 @@ final class GenericClientLuaScript implements AutoCloseable
 		return currentActivity.getValue();
 	}
 
+	String getScriptState()
+	{
+		return currentPhase == null ? "starting" : currentPhase;
+	}
+
 	String queueAction(String actionId)
 	{
 		if (finished)
@@ -332,6 +337,8 @@ final class GenericClientLuaScript implements AutoCloseable
 		lua.setGlobal("__gc_next_action");
 		lua.push((JFunction) this::activity);
 		lua.setGlobal("__gc_activity");
+		lua.push((JFunction) this::scriptState);
+		lua.setGlobal("__gc_state");
 		lua.push((JFunction) this::budgetHook);
 		lua.setGlobal("__gc_budget_hook");
 
@@ -349,6 +356,7 @@ final class GenericClientLuaScript implements AutoCloseable
 			"local host_overlay = __gc_overlay\n" +
 			"local host_next_action = __gc_next_action\n" +
 			"local host_activity = __gc_activity\n" +
+			"local host_state = __gc_state\n" +
 			"local host_yield = coroutine.yield\n" +
 			"gc = {}\n" +
 			"gc.read = host_read\n" +
@@ -356,6 +364,7 @@ final class GenericClientLuaScript implements AutoCloseable
 			"gc.overlay = host_overlay\n" +
 			"gc.next_action = host_next_action\n" +
 			"gc.activity = host_activity\n" +
+			"gc.state = host_state\n" +
 			"gc.await = function(request)\n" +
 			"  local response = host_yield({ protocol = 'gc.await.v1', request = request })\n" +
 			"  if response and response.host_error then error(response.host_error, 2) end\n" +
@@ -382,6 +391,7 @@ final class GenericClientLuaScript implements AutoCloseable
 			"__gc_overlay = nil\n" +
 			"__gc_next_action = nil\n" +
 			"__gc_activity = nil\n" +
+			"__gc_state = nil\n" +
 			"__gc_budget_hook = nil");
 
 	}
@@ -396,6 +406,30 @@ final class GenericClientLuaScript implements AutoCloseable
 				currentActivity = GenericClientActivityContext.Activity.fromName(name);
 			}
 			state.push(currentActivity.getValue());
+			return 1;
+		}
+		catch (RuntimeException exception)
+		{
+			state.push(exception.getMessage());
+			return -1;
+		}
+	}
+
+	private int scriptState(Lua state)
+	{
+		try
+		{
+			if (state.getTop() >= 1 && !state.isNil(1))
+			{
+				String name = state.toString(1);
+				if (name == null || !name.trim().matches("[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}"))
+				{
+					throw new IllegalArgumentException(
+						"Script state must be 1-64 letters, numbers, dots, underscores, or hyphens");
+				}
+				currentPhase = name.trim();
+			}
+			state.push(getScriptState());
 			return 1;
 		}
 		catch (RuntimeException exception)

@@ -1,7 +1,9 @@
 local interactions = gc.require("grand_tree_interactions")
 local navigation = gc.require("grand_tree_navigation")
+local combat = gc.require("grand_tree_combat")
+local completion = gc.require("grand_tree_completion")
 
-local function execute(phase)
+local function execute(phase, input)
   if phase == "start_quest" then
     local reached, failure = navigation.reach_narnode()
     if not reached then return failure end
@@ -65,6 +67,42 @@ local function execute(phase)
     local reached, failure = navigation.reach_anita()
     if not reached then return failure end
     return interactions.talk_anita()
+  end
+  if phase == "find_invasion_plans" then
+    local reached, failure = navigation.reach_glough_for_invasion_plans()
+    if not reached then return failure end
+    return interactions.obtain_invasion_plans()
+  end
+  if phase == "return_invasion_plans" then
+    local reached, failure = navigation.return_invasion_plans_to_narnode()
+    if not reached then return failure end
+    return interactions.return_invasion_plans_to_narnode()
+  end
+  if phase == "place_tuzo_twigs" then
+    local reached, failure = navigation.reach_watchtower()
+    if not reached then return failure end
+    return interactions.place_tuzo_twigs()
+  end
+  if phase == "prepare_black_demon" then
+    return combat.prepare(input and input.restock)
+  end
+  if phase == "fight_black_demon" then
+    for _ = 1, 2 do
+      local reached, failure = navigation.reach_watchtower()
+      if not reached then return failure end
+      local result = combat.fight()
+      if result.status ~= "reset" then return result end
+    end
+    return { status = "black_demon_encounter_reset_exhausted" }
+  end
+  if phase == "talk_king_after_demon" then
+    return completion.talk_to_king_after_demon()
+  end
+  if phase == "find_daconia_rock" then
+    return completion.find_daconia_rock()
+  end
+  if phase == "return_daconia_rock" then
+    return completion.return_daconia_rock()
   end
   return { status = "rejected", result = "grand_tree_phase_not_implemented:" .. tostring(phase) }
 end

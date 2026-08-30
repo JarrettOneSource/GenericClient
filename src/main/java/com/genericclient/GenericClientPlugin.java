@@ -381,7 +381,8 @@ public final class GenericClientPlugin extends Plugin
 		screenshot = new GenericClientScreenshot(drawManager, executor);
 		scriptOverlay = new GenericClientScriptOverlay(
 			luaHost::getActiveScriptView,
-			luaHost::getActivity);
+			luaHost::getActivity,
+			luaHost::getScriptState);
 		controlServer = new GenericClientControlServer(
 			config.controlPort(),
 			luaHost,

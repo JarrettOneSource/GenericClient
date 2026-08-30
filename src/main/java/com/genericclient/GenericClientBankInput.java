@@ -167,7 +167,8 @@ final class GenericClientBankInput implements AutoCloseable
 		Requirement requirement,
 		GenericClientActivityContext activityContext)
 	{
-		return clientRead(() -> itemQuantity(InventoryID.BANK, requirement.itemId)).thenCompose(bankQuantity ->
+		return ensureBankItemVisible(requirement.itemId).thenCompose(ignored ->
+			clientRead(() -> itemQuantity(InventoryID.BANK, requirement.itemId))).thenCompose(bankQuantity ->
 		{
 			String action;
 			if (requirement.quantity == 1 || requirement.quantity == 5 || requirement.quantity == 10)
@@ -193,6 +194,96 @@ final class GenericClientBankInput implements AutoCloseable
 			}
 			return withdrawExact(requirement, activityContext);
 		});
+	}
+
+	private CompletableFuture<Void> ensureBankItemVisible(int itemId)
+	{
+		return clientRead(() ->
+		{
+			Widget bankItems = visibleWidget(InterfaceID.Bankmain.ITEMS);
+			if (bankItems == null)
+			{
+				return false;
+			}
+			Widget[] children = bankItems.getDynamicChildren();
+			if (children == null || children.length == 0)
+			{
+				children = bankItems.getChildren();
+			}
+			if (children == null)
+			{
+				return false;
+			}
+			for (Widget item : children)
+			{
+				if (item == null || item.isHidden() || item.getItemId() != itemId)
+				{
+					continue;
+				}
+				Rectangle container = bankItems.getBounds();
+				Rectangle itemBounds = item.getBounds();
+				if (container == null || itemBounds == null)
+				{
+					return false;
+				}
+				int bottom = Math.min(container.y + container.height, bankControlsTop());
+				Rectangle viewport = new Rectangle(
+					container.x,
+					container.y,
+					container.width,
+					Math.max(0, bottom - container.y));
+				int current = bankItems.getScrollY();
+				int maximum = Math.max(0, bankItems.getScrollHeight() - bankItems.getHeight());
+				int requested = scrollYForItem(itemBounds, viewport, current, maximum);
+				if (requested == current)
+				{
+					return false;
+				}
+				bankItems.setScrollY(requested);
+				client.setVarcIntValue(VarClientID.BANK_SCROLLPOS, requested);
+				bankItems.revalidateScroll();
+				reporter.accept("BANK_ITEM_SCROLLED id=" + itemId +
+					" from=" + current + " to=" + requested);
+				return true;
+			}
+			return false;
+		}).thenCompose(scrolled ->
+		{
+			if (!Boolean.TRUE.equals(scrolled))
+			{
+				return CompletableFuture.completedFuture(null);
+			}
+			CompletableFuture<Void> settled = new CompletableFuture<>();
+			ScheduledFuture<?> future = executor.schedule(
+				() -> settled.complete(null),
+				INPUT_SETTLE_MILLIS,
+				TimeUnit.MILLISECONDS);
+			pending.add(future);
+			return settled;
+		});
+	}
+
+	static int scrollYForItem(
+		Rectangle itemBounds,
+		Rectangle viewport,
+		int currentScroll,
+		int maximumScroll)
+	{
+		if (itemBounds == null || viewport == null)
+		{
+			return currentScroll;
+		}
+		int requested = currentScroll;
+		if (itemBounds.y < viewport.y)
+		{
+			requested -= viewport.y - itemBounds.y + 4;
+		}
+		else if (itemBounds.y + itemBounds.height > viewport.y + viewport.height)
+		{
+			requested += itemBounds.y + itemBounds.height -
+				(viewport.y + viewport.height) + 4;
+		}
+		return Math.max(0, Math.min(maximumScroll, requested));
 	}
 
 	private CompletableFuture<Map<String, Object>> withdrawExact(

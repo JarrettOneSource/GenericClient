@@ -235,7 +235,7 @@ proof survived a logout-length break, a Mime interruption, exact mid-course
 resume, and stopped after the threshold-crossing obstacle. The Mime event
 unlocked Lean and produced a registered standalone solver.
 
-The Grand Tree is now in progress at varp 100. Quest Runner opened the Grand
+The Grand Tree is complete. Quest Runner opened the Grand
 Tree door, handled the low-combat quest warning, reached Hazelmere from Castle
 Wars through both Yanille gates and the island bridges, used emergency food
 under jungle-spider pressure, translated Hazelmere's report for King Narnode,
@@ -245,8 +245,12 @@ dialogue, took Captain Errdo's glider to Karamja, entered the shipyard with the
 passphrase, and answered the foreman's questions. Item 787 and varp 90 verify
 the lumber-order checkpoint. On the return route it solved Molly for three noted
 uncut diamonds, used Femi to bypass the locked Stronghold gate, and returned the
-order to Charlie. It then visited Anita and obtained Glough's key; the current
-safe stop is her upstairs room before the invasion-plans chest.
+order to Charlie, obtained Glough's key and the invasion plans, returned them
+to King Narnode, placed the TUZO twigs, and prepared only the missing combat
+supplies. The runner safespotted the Black Demon with Fire Strike, briefed the
+king, found the Daconia rock by searching the live roots, and completed the
+quest. The verified rewards produced Attack 44 at 55,867 XP, Agility 31 at
+15,788 XP, and Magic 33 at 19,729 XP.
 
 Sources:
 
@@ -286,6 +290,6 @@ Reference surfaces used for this envelope:
 
 ## Next evidence gate
 
-Continue The Grand Tree from the varp-100 invasion-plans checkpoint. Restock food only when
-its next live phase requires it, before the eventual combat section. Continue enforcing exact
-Attack, Defence, and Prayer caps and the 5,000,000-coin reserve.
+Begin Monkey Madness I in its own modular quest folder. Preserve the deliberate
+reward-training choice, exact Attack and Defence caps, and the 5,000,000-coin
+reserve.

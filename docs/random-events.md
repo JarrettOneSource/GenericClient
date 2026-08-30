@@ -185,3 +185,11 @@ automatic random-event dialogue, and treats either the pass or fail message
 plus NPC departure as the completion receipt. A successful security check can
 leave its lamp in inventory for the account planner; a failed check is still a
 fully processed event.
+
+## Rick Turpentine evidence
+
+On 2026-08-30 GenericClient interrupted The Grand Tree return route for Rick
+Turpentine NPC `375`, auto-opened his dialogue, observed the exact reward receipt
+`Your reward is: 1 x Uncut sapphire.`, and resumed the retained quest inputs.
+The bundled solver drains his Continue dialogue and requires that reward message
+plus NPC departure before returning `COMPLETED`.

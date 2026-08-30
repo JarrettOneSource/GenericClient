@@ -511,6 +511,7 @@ gc.read(subject, query)
 gc.await(request)
 gc.log(level, event, fields)
 gc.activity(name) -- omit name to read the current descriptor
+gc.state(name) -- task-specific script state; omit name to read it
 gc.phase(name, options)
 gc.overlay(rows)
 gc.next_action()

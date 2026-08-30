@@ -4,12 +4,14 @@ local witch_config = gc.require("witch_config")
 local waterfall_config = gc.require("waterfall_config")
 local tree_gnome_config = gc.require("tree_gnome_config")
 local fight_arena_config = gc.require("fight_arena_config")
+local grand_tree_config = gc.require("grand_tree_config")
 
 local configs = {
   witchs_house = witch_config,
   waterfall = waterfall_config,
   tree_gnome_village = tree_gnome_config,
   fight_arena = fight_arena_config,
+  the_grand_tree = grand_tree_config,
 }
 
 local ge = { x = 3165, y = 3491, plane = 0 }

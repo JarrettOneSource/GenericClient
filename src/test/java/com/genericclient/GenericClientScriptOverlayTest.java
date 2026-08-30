@@ -20,6 +20,7 @@ public class GenericClientScriptOverlayTest
 	{
 		GenericClientScriptOverlay overlay = new GenericClientScriptOverlay(
 			GenericClientActiveScript::none,
+			() -> "idle",
 			() -> "idle");
 		BufferedImage image = new BufferedImage(240, 100, BufferedImage.TYPE_INT_ARGB);
 		Graphics2D graphics = image.createGraphics();
@@ -27,7 +28,7 @@ public class GenericClientScriptOverlayTest
 		{
 			Dimension size = overlay.render(graphics);
 			assertNotNull(size);
-			assertEquals(25, size.height);
+			assertEquals(39, size.height);
 		}
 		finally
 		{
@@ -47,7 +48,8 @@ public class GenericClientScriptOverlayTest
 				Collections.emptyList(), Collections.emptyMap(), Collections.emptyList(), rows));
 		GenericClientScriptOverlay overlay = new GenericClientScriptOverlay(
 			script::get,
-			() -> "travel");
+			() -> "travel",
+			() -> "walking_to_varrock");
 		BufferedImage image = new BufferedImage(260, 100, BufferedImage.TYPE_INT_ARGB);
 		Graphics2D graphics = image.createGraphics();
 		Dimension size;
@@ -61,8 +63,8 @@ public class GenericClientScriptOverlayTest
 		}
 
 		assertNotNull(size);
-		assertEquals(53, size.height);
-		assertTrue(size.width >= 112);
+		assertEquals(67, size.height);
+		assertTrue(size.width >= 176);
 		assertTrue(coloredPixels(image) > 500);
 		assertEquals("1:05", GenericClientScriptOverlay.formatRuntime(65_000L));
 	}

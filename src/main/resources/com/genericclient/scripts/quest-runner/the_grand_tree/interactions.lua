@@ -63,6 +63,26 @@ local function finish_dialogue(predicate, choices, since_tick)
   return nil, { status = "grand_tree_dialogue_timeout", dialogue = gc.read("dialogue") }
 end
 
+local function drain_continue_dialogue()
+  for _ = 1, 20 do
+    local dialogue = gc.read("dialogue")
+    if dialogue.type == "continue" then
+      local receipt = gc.await {
+        action = { type = "dialogue.continue" },
+        breaks = false,
+        timeout = { game_ticks = 20 },
+      }
+      if receipt.status ~= "dispatched" then return receipt end
+      gc.await { event = "game.tick" }
+    elseif dialogue.type == "choice" then
+      return { status = "unexpected_grand_tree_dialogue", dialogue = dialogue }
+    else
+      return { status = "complete", result = "continue_dialogue_drained" }
+    end
+  end
+  return { status = "dialogue_drain_timeout", dialogue = gc.read("dialogue") }
+end
+
 local function talk_narnode()
   local started_tick = gc.read("runtime").game_tick
   local clicked = { status = "dispatched", result = "resumed_open_dialogue" }
@@ -756,6 +776,198 @@ local function talk_anita()
   return { status = "complete", result = "glough_key_obtained", receipt = talked }
 end
 
+local function descend_anita_stairs()
+  if gc.read("player").world.plane == 0 then
+    return { status = "complete", result = "anita_stairs_already_descended" }
+  end
+  local stairs = object(config.objects.anita_stairs_down, "Climb-down", 12)
+  if not stairs then
+    return { status = "anita_descent_not_observed", objects = gc.read("objects", { within = 12, limit = 40 }) }
+  end
+  local descended = gc.await {
+    action = {
+      type = "object.interact",
+      id = stairs.id,
+      action = "Climb-down",
+      world = stairs.world,
+      within = 12,
+    },
+    breaks = true,
+    timeout = { game_ticks = 30 },
+  }
+  if descended.status ~= "dispatched" then return descended end
+  for _ = 1, 30 do
+    gc.await { event = "game.tick" }
+    if gc.read("player").world.plane == 0 then
+      return { status = "complete", result = "anita_stairs_descended", receipt = descended }
+    end
+  end
+  return { status = "anita_descent_unverified", receipt = descended }
+end
+
+local function obtain_invasion_plans()
+  if has_inventory_item(config.items.invasion_plans) then
+    return { status = "complete", result = "invasion_plans_already_owned" }
+  end
+  if gc.read("dialogue").type == "continue" then
+    local continued = gc.await {
+      action = { type = "dialogue.continue" },
+      breaks = false,
+      timeout = { game_ticks = 20 },
+    }
+    if continued.status ~= "dispatched" then return continued end
+    gc.await { event = "game.tick" }
+  end
+  local chest = object(config.objects.invasion_chest_closed, "Open", 12)
+  local open_chest = object(config.objects.invasion_chest_open, "Search", 12)
+  if chest then
+    local opened = gc.await {
+      action = {
+        type = "item.use_on_object",
+        item_id = config.items.glough_key,
+        object_id = chest.id,
+        world = chest.world,
+        within = 12,
+      },
+      breaks = true,
+      timeout = { game_ticks = 30 },
+    }
+    if opened.status ~= "dispatched" then return opened end
+    for _ = 1, 20 do
+      gc.await { event = "game.tick" }
+      if has_inventory_item(config.items.invasion_plans) then
+        return { status = "complete", result = "invasion_plans_obtained", receipt = opened }
+      end
+      open_chest = object(config.objects.invasion_chest_open, "Search", 12)
+      if open_chest then break end
+    end
+  end
+  if not open_chest then
+    return { status = "invasion_chest_not_observed", objects = gc.read("objects", { within = 12, limit = 50 }) }
+  end
+  local searched = gc.await {
+    action = {
+      type = "object.interact",
+      id = open_chest.id,
+      action = "Search",
+      world = open_chest.world,
+      within = 12,
+    },
+    breaks = true,
+    timeout = { game_ticks = 30 },
+  }
+  if searched.status ~= "dispatched" then return searched end
+  for _ = 1, 30 do
+    gc.await { event = "game.tick" }
+    if has_inventory_item(config.items.invasion_plans) then
+      return { status = "complete", result = "invasion_plans_obtained", receipt = searched }
+    end
+  end
+  return { status = "invasion_plans_unverified", receipt = searched }
+end
+
+local function return_invasion_plans_to_narnode()
+  local target = npc(config.npcs.king_narnode, 20, true)
+  if not target then return { status = "king_narnode_not_reachable_with_plans" } end
+  local started_tick = gc.read("runtime").game_tick
+  local talked = gc.await {
+    action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 20 },
+    breaks = false,
+    timeout = { game_ticks = 40 },
+  }
+  if talked.status ~= "dispatched" then return talked end
+  local finished, failure = finish_dialogue(
+    function()
+      local vars = gc.read("vars", { varps = { config.varp } })
+      return vars.varps[config.varp] >= 120
+    end,
+    {},
+    started_tick)
+  if not finished then return failure end
+  return { status = "complete", result = "invasion_plans_returned", receipt = talked }
+end
+
+local function climb_glough_watchtower()
+  if gc.read("player").world.plane == 2 then
+    return { status = "complete", result = "watchtower_already_reached" }
+  end
+  local tree = object(config.objects.climb_watchtower, "Climb-up", 12)
+  if not tree then
+    return { status = "watchtower_tree_not_observed", objects = gc.read("objects", { within = 12, limit = 50 }) }
+  end
+  local climbed = gc.await {
+    action = {
+      type = "object.interact",
+      id = tree.id,
+      action = "Climb-up",
+      world = tree.world,
+      within = 12,
+    },
+    breaks = true,
+    timeout = { game_ticks = 30 },
+  }
+  if climbed.status ~= "dispatched" then return climbed end
+  for _ = 1, 30 do
+    gc.await { event = "game.tick" }
+    if gc.read("player").world.plane == 2 then
+      return { status = "complete", result = "watchtower_reached", receipt = climbed }
+    end
+  end
+  return { status = "watchtower_climb_unverified", receipt = climbed }
+end
+
+local TUZO = {
+  { letter = "T", item = config.items.twig_t, object = config.objects.pillar_t },
+  { letter = "U", item = config.items.twig_u, object = config.objects.pillar_u },
+  { letter = "Z", item = config.items.twig_z, object = config.objects.pillar_z },
+  { letter = "O", item = config.items.twig_o, object = config.objects.pillar_o },
+}
+
+local function place_tuzo_twigs()
+  local receipts = {}
+  for _, step in ipairs(TUZO) do
+    if has_inventory_item(step.item) then
+      local pillar = object(step.object, nil, 16)
+      if not pillar then
+        return {
+          status = "tuzo_pillar_not_observed",
+          letter = step.letter,
+          objects = gc.read("objects", { within = 16, limit = 60 }),
+        }
+      end
+      local used = gc.await {
+        action = {
+          type = "item.use_on_object",
+          item_id = step.item,
+          object_id = pillar.id,
+          world = pillar.world,
+          within = 16,
+        },
+        breaks = true,
+        timeout = { game_ticks = 30 },
+      }
+      if used.status ~= "dispatched" then return used end
+      receipts[#receipts + 1] = { letter = step.letter, receipt = used }
+      local consumed = false
+      for _ = 1, 20 do
+        gc.await { event = "game.tick" }
+        if not has_inventory_item(step.item) then consumed = true break end
+      end
+      if not consumed then
+        return { status = "tuzo_twig_not_consumed", letter = step.letter, receipt = used }
+      end
+    end
+  end
+  for _ = 1, 30 do
+    local vars = gc.read("vars", { varps = { config.varp } })
+    if vars.varps[config.varp] >= 130 then
+      return { status = "complete", result = "tuzo_twigs_placed", receipts = receipts }
+    end
+    gc.await { event = "game.tick" }
+  end
+  return { status = "tuzo_completion_unverified", receipts = receipts }
+end
+
 return {
   npc = npc,
   talk_narnode = talk_narnode,
@@ -779,4 +991,10 @@ return {
   enter_stronghold_with_femi = enter_stronghold_with_femi,
   climb_anita_stairs = climb_anita_stairs,
   talk_anita = talk_anita,
+  descend_anita_stairs = descend_anita_stairs,
+  obtain_invasion_plans = obtain_invasion_plans,
+  return_invasion_plans_to_narnode = return_invasion_plans_to_narnode,
+  drain_continue_dialogue = drain_continue_dialogue,
+  climb_glough_watchtower = climb_glough_watchtower,
+  place_tuzo_twigs = place_tuzo_twigs,
 }

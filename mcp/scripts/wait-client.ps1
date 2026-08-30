@@ -88,13 +88,7 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
             $observedRun = $true
         }
 
-        $phase = ""
-        foreach ($row in @($active.overlay)) {
-            if ($row.label -eq "Phase") {
-                $phase = [string]$row.value
-                break
-            }
-        }
+        $phase = [string]$status.lua.script_state
 
         $state = [ordered]@{
             game = [string]$status.game_state

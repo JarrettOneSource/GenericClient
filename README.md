@@ -69,6 +69,8 @@ The bundled Mime solver remembers the last performed animation before each
 answer panel and clicks the matching emote until the reward is verified.
 The Molly solver maps her live appearance ID to the matching suspect, follows
 that suspect with the crane, and requires both capture and reward messages.
+Rick Turpentine's solver accepts his restitution gift and verifies the reward
+message before the interrupted script resumes.
 The lifecycle and solver template are in
 [`docs/random-events.md`](docs/random-events.md).
 
@@ -114,11 +116,11 @@ states. Its first member-first method is the basic Gnome Stronghold course,
 including segmented travel, Femi's entrance dialogue, mid-course resume,
 level-up handling, and a compact XP/hour/ETA overlay.
 `quest-runner.lua` reduces live quest state into resumable phases. Witch's
-House, Waterfall Quest, Tree Gnome Village, and Fight Arena are isolated in
-their own folders and live-proven through normalized completion. The Grand Tree
-has its own folder and is live-proven through Hazelmere, the translated report,
-Glough's journal, the prison-cell transition, and the Karamja shipyard interview.
-The current live stop is varp 100 with Glough's key obtained from Anita.
+House, Waterfall Quest, Tree Gnome Village, Fight Arena, and The Grand Tree are
+isolated in their own folders and live-proven through normalized completion.
+The Grand Tree proof includes the invasion plans, TUZO watchtower, just-in-time
+combat loadout, Black Demon safespot, post-fight King handoff, Daconia root
+search, and final reward dialogue.
 
 The current scripting interface intentionally contains only:
 
@@ -127,6 +129,7 @@ gc.read(subject, query)
 gc.await(request)
 gc.log(level, event, fields)
 gc.activity(name)
+gc.state(name)
 gc.phase(name, options)
 gc.overlay(rows)
 gc.next_action()

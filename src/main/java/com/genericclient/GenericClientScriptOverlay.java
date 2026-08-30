@@ -25,13 +25,16 @@ final class GenericClientScriptOverlay extends Overlay
 
 	private final Supplier<GenericClientActiveScript> scriptSupplier;
 	private final Supplier<String> activitySupplier;
+	private final Supplier<String> scriptStateSupplier;
 
 	GenericClientScriptOverlay(
 		Supplier<GenericClientActiveScript> scriptSupplier,
-		Supplier<String> activitySupplier)
+		Supplier<String> activitySupplier,
+		Supplier<String> scriptStateSupplier)
 	{
 		this.scriptSupplier = scriptSupplier;
 		this.activitySupplier = activitySupplier;
+		this.scriptStateSupplier = scriptStateSupplier;
 		setPosition(OverlayPosition.TOP_LEFT);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
 		setPriority(PRIORITY_HIGH);
@@ -43,23 +46,27 @@ final class GenericClientScriptOverlay extends Overlay
 		GenericClientActiveScript script = scriptSupplier.get();
 		boolean running = script != null && script.isRunning();
 		String title = running ? compact(script.getName(), 24) : "GenericClient";
-		String activity = displayActivity(activitySupplier.get());
-		String meta = running
-			? activity + " · " + formatRuntime(script.getRuntimeMillis())
-			: activity;
+		String activity = displayDescriptor(activitySupplier.get());
+		String scriptState = running
+			? compact(displayDescriptor(scriptStateSupplier.get()), 28)
+			: "Idle";
+		String meta = running ? formatRuntime(script.getRuntimeMillis()) : "";
 		List<GenericClientOverlayRow> rows = running
 			? script.getOverlayRows()
 			: java.util.Collections.emptyList();
 		FontMetrics titleMetrics = graphics.getFontMetrics(TITLE);
 		FontMetrics bodyMetrics = graphics.getFontMetrics(BODY);
-		int width = titleMetrics.stringWidth(title) + bodyMetrics.stringWidth(meta) + 44;
+		int width = titleMetrics.stringWidth(title) + bodyMetrics.stringWidth(meta) + 32;
+		width = Math.max(width,
+			bodyMetrics.stringWidth("Global") + bodyMetrics.stringWidth(activity) +
+			bodyMetrics.stringWidth("Script") + bodyMetrics.stringWidth(scriptState) + 42);
 		for (GenericClientOverlayRow row : rows)
 		{
 			width = Math.max(width,
 				bodyMetrics.stringWidth(row.getLabel()) + bodyMetrics.stringWidth(row.getValue()) + 28);
 		}
-		width = Math.max(112, width);
-		int height = 25 + rows.size() * 14;
+		width = Math.max(176, width);
+		int height = 39 + rows.size() * 14;
 
 		Graphics2D copy = (Graphics2D) graphics.create();
 		try
@@ -76,10 +83,25 @@ final class GenericClientScriptOverlay extends Overlay
 			copy.setColor(TEXT);
 			copy.drawString(title, 21, 17);
 			copy.setFont(BODY);
-			copy.setColor(MUTED);
-			copy.drawString(meta, width - bodyMetrics.stringWidth(meta) - 9, 17);
+			if (!meta.isEmpty())
+			{
+				copy.setColor(MUTED);
+				copy.drawString(meta, width - bodyMetrics.stringWidth(meta) - 9, 17);
+			}
 
-			int baseline = 33;
+			int globalValueX = 9 + bodyMetrics.stringWidth("Global") + 5;
+			copy.setColor(MUTED);
+			copy.drawString("Global", 9, 32);
+			copy.setColor(TEXT);
+			copy.drawString(activity, globalValueX, 32);
+			int scriptValueWidth = bodyMetrics.stringWidth(scriptState);
+			int scriptLabelX = width - 14 - scriptValueWidth - bodyMetrics.stringWidth("Script");
+			copy.setColor(MUTED);
+			copy.drawString("Script", scriptLabelX, 32);
+			copy.setColor(TEXT);
+			copy.drawString(scriptState, scriptLabelX + bodyMetrics.stringWidth("Script") + 5, 32);
+
+			int baseline = 47;
 			for (GenericClientOverlayRow row : rows)
 			{
 				copy.setColor(MUTED);
@@ -119,9 +141,12 @@ final class GenericClientScriptOverlay extends Overlay
 		return value.length() <= maximum ? value : value.substring(0, maximum - 1) + "…";
 	}
 
-	private static String displayActivity(String activity)
+	private static String displayDescriptor(String descriptor)
 	{
-		String value = activity == null || activity.trim().isEmpty() ? "idle" : activity.trim();
+		String value = descriptor == null || descriptor.trim().isEmpty()
+			? "idle"
+			: descriptor.trim().replace('_', ' ').replace('-', ' ').replace('.', ' ')
+				.replaceAll("\\s+", " ");
 		return Character.toUpperCase(value.charAt(0)) + value.substring(1);
 	}
 }

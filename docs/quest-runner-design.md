@@ -1,8 +1,7 @@
 # Quest Runner design
 
-Status: four modular quest definitions are live-proven end to end: Witch's
-House, Waterfall Quest, Tree Gnome Village, and Fight Arena. The Grand Tree is
-live-proven through its post-lumber-order checkpoint at varp 100.
+Status: five modular quest definitions are live-proven end to end: Witch's
+House, Waterfall Quest, Tree Gnome Village, Fight Arena, and The Grand Tree.
 
 ## Decision
 
@@ -18,6 +17,9 @@ The existing scripting interface remains the seam:
 gc.read(subject, query)
 gc.await(request)
 gc.log(level, event, fields)
+gc.activity(name)
+gc.state(name)
+gc.phase(name, options)
 gc.overlay(rows)
 gc.next_action()
 ```
@@ -211,9 +213,11 @@ preservation, repeated same-varp location reduction, and post-break semantic
 target reacquisition. Shipyard proof adds a dialogue-gated object transition,
 an in-yard walk, resumable NPC dialogue, and item-plus-varp completion evidence.
 The return route now handles the quest-locked Stronghold gate through Femi and
-reaches Charlie without consuming another transport charge after a resume. Its
-current stable stop is varp 100 with Glough's key verified in Anita's upstairs
-room, before the invasion-plans chest.
+reaches Charlie without consuming another transport charge after a resume. The
+completion proof adds large-model staging, bank scrolling, just-in-time GE
+restocking, cutscene coordinate stabilization, a camera-zoom NPC retry, the
+Black Demon safespot, post-fight cave traversal, root search, and normalized
+quest completion.
 
 Quest-specific evidence and exact phase tables live in
 [`witchs-house-quest-runner.md`](witchs-house-quest-runner.md) and
