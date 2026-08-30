@@ -143,6 +143,50 @@ local function fly_to_gandius()
   return { status = "complete", result = "gandius_reached", receipt = selected }
 end
 
+local function travel_to_gnome_stronghold()
+  if in_zone(gc.read("player").world, config.zones.grand_tree) then
+    return { status = "complete", result = "grand_tree_already_reached" }
+  end
+  local tree = object(config.objects.spirit_tree, "Travel", 14)
+  if not tree then
+    return {
+      status = "monkey_madness_spirit_tree_not_observed",
+      player = gc.read("player"),
+      objects = gc.read("objects", { within = 16, limit = 40 }),
+    }
+  end
+  gc.activity("travel")
+  local opened = gc.await {
+    action = {
+      type = "object.interact",
+      id = tree.id,
+      action = "Travel",
+      world = tree.world,
+      within = 14,
+    },
+    breaks = true,
+    timeout = { game_ticks = 40 },
+  }
+  if opened.status ~= "dispatched" then return opened end
+  gc.await { event = "game.tick" }
+  local selected = gc.await {
+    action = { type = "ui.key", key = "2" },
+    breaks = true,
+    timeout = { game_ticks = 20 },
+  }
+  if selected.status ~= "dispatched" then return selected end
+  if not wait_for(function()
+    return in_zone(gc.read("player").world, config.zones.grand_tree)
+  end, 40) then
+    return {
+      status = "monkey_madness_spirit_tree_arrival_unverified",
+      receipt = selected,
+      player = gc.read("player"),
+    }
+  end
+  return { status = "complete", result = "grand_tree_reached", receipt = selected }
+end
+
 local function leave_shipyard()
   if not in_zone(gc.read("player").world, config.zones.shipyard) then
     return { status = "complete", result = "already_outside_shipyard" }
@@ -399,6 +443,7 @@ return {
   npc = npc,
   walk = walk,
   reach_narnode = reach_narnode,
+  travel_to_gnome_stronghold = travel_to_gnome_stronghold,
   fly_to_grand_tree = fly_to_grand_tree,
   leave_shipyard = leave_shipyard,
   descend_to_ground = descend_to_ground,

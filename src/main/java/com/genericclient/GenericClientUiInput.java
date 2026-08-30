@@ -57,6 +57,30 @@ final class GenericClientUiInput
 				})));
 	}
 
+	CompletableFuture<Map<String, Object>> key(
+		String key,
+		GenericClientActivityContext activityContext)
+	{
+		if (key == null || key.length() != 1 || key.charAt(0) < 32 || key.charAt(0) > 126)
+		{
+			throw new IllegalArgumentException("ui.key requires one printable ASCII character");
+		}
+		return behavior.beforeAction(activityContext).thenCompose(before ->
+			keyboard.type(key).thenCompose(keyboardReceipt ->
+				behavior.afterAction(activityContext).thenApply(after ->
+				{
+					Map<String, Object> receipt = new LinkedHashMap<>();
+					receipt.put("status", "dispatched");
+					receipt.put("result", "key_dispatched");
+					receipt.put("key", key);
+					receipt.put("keyboard", keyboardReceipt);
+					receipt.put("behavior_before", before);
+					receipt.put("behavior_after", after);
+					receipt.put("click_count", 0L);
+					return receipt;
+				})));
+	}
+
 	private GenericClientMenuInput.Resolution resolve(int widgetId, Integer widgetIndex)
 	{
 		if (client.getGameState() != GameState.LOGGED_IN)

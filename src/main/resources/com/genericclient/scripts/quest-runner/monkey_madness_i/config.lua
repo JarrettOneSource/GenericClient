@@ -32,6 +32,7 @@ return {
     gandius_pilot = { 10479, 10468 },
   },
   objects = {
+    spirit_tree = 1295,
     grand_tree_ladder_bottom = 4458,
     grand_tree_ladder_first = 56233,
     grand_tree_ladder_second = 56232,

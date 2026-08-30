@@ -201,6 +201,15 @@ return gc.await {
 }
 ```
 
+Numbered game menus can be selected without moving the operating-system cursor:
+
+```lua
+return gc.await {
+  action = { type = "ui.key", key = "2" },
+  breaks = true,
+}
+```
+
 The standard 5x5 sliding-puzzle adapter returns the normalized board, blank
 position, dynamic widget ID, and a legal move sequence:
 

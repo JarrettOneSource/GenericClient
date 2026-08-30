@@ -925,6 +925,7 @@ final class GenericClientLuaScript implements AutoCloseable
 			"combat.set_autocast".equals(type) ||
 			"ui.close".equals(type) ||
 			"ui.click".equals(type) ||
+			"ui.key".equals(type) ||
 			"safety.configure".equals(type) ||
 			"safety.clear".equals(type);
 	}

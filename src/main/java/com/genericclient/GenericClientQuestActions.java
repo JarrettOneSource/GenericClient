@@ -124,6 +124,8 @@ final class GenericClientQuestActions
 					requiredInt(action, "widget_id", type),
 					optionalInt(action, "widget_index", type),
 					activityContext);
+			case "ui.key":
+				return uiInput.key(requiredText(action, "key", type), activityContext);
 			case "safety.configure":
 				return emergencyController.configure(
 					requiredPositiveInt(action, "minimum_hitpoints", type),
