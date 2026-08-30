@@ -411,12 +411,43 @@ gc.await {
 }
 ```
 
+Remote areas that cannot be escaped by walking can use an exact carried item
+and its dialogue destination. Emergency dialogue choices bypass ordinary
+reading pace and all discretionary behavior:
+
+```lua
+gc.await {
+  action = {
+    type = "safety.configure",
+    minimum_hitpoints = 4,
+    consumables = {
+      { id = 379, action = "Eat", heal_amount = 12 },
+    },
+    continue_after_consumable = true,
+    allow_overheal = true,
+    escape = {
+      type = "inventory_dialogue",
+      item_id = 2564,
+      action = "Rub",
+      choice = "Castle Wars Arena",
+      x = 2440,
+      y = 3089,
+      plane = 0,
+      within = 10,
+    },
+  },
+  breaks = false,
+}
+```
+
 Each approved consumable declares its exact heal amount. By default,
 GenericClient ends any active break and eats as soon as a food's complete heal
 fits, without stopping the script. Below 30% max HP it forces a food even when
 that low-max-HP case must overheal. If no approved food can be used at that
 forced-heal point or the hard HP floor, it stops the script and uses the
-optional escape. Set `continue_after_consumable=false` for an encounter that
+optional escape. A configured escape now starts on any failed approved-food
+dispatch, before sustained damage can carry the player down to the hard floor.
+Set `continue_after_consumable=false` for an encounter that
 must stop after a threshold heal. `allow_overheal=true` remains available for
 an encounter-specific hard floor above the automatic 30% rule. Use
 `safety.clear` when a script no longer wants the guard armed.

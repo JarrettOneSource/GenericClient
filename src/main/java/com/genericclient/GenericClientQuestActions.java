@@ -140,7 +140,7 @@ final class GenericClientQuestActions
 		}
 	}
 
-	private static GenericClientEmergencyController.Escape emergencyEscape(
+	static GenericClientEmergencyController.Escape emergencyEscape(
 		Map<String, Object> action)
 	{
 		Object raw = action.get("escape");
@@ -150,9 +150,10 @@ final class GenericClientQuestActions
 		}
 		if (!(raw instanceof Map))
 		{
-			throw new IllegalArgumentException("safety.configure escape must be a coordinate table");
+			throw new IllegalArgumentException("safety.configure escape must be a table");
 		}
 		Map<?, ?> value = (Map<?, ?>) raw;
+		String type = optionalText(value.get("type"));
 		int x = requiredInt(value, "x", "safety.configure escape");
 		int y = requiredInt(value, "y", "safety.configure escape");
 		int plane = requiredInt(value, "plane", "safety.configure escape");
@@ -166,8 +167,21 @@ final class GenericClientQuestActions
 		{
 			throw new IllegalArgumentException("safety.configure escape is outside coordinate bounds");
 		}
-		return new GenericClientEmergencyController.Escape(
-			new WorldPoint(x, y, plane), within);
+		WorldPoint destination = new WorldPoint(x, y, plane);
+		if (type == null || "walk".equalsIgnoreCase(type))
+		{
+			return new GenericClientEmergencyController.Escape(destination, within);
+		}
+		if ("inventory_dialogue".equalsIgnoreCase(type))
+		{
+			return GenericClientEmergencyController.Escape.inventoryDialogue(
+				requiredInt(value, "item_id", "safety.configure escape"),
+				requiredText(value, "action", "safety.configure escape"),
+				requiredText(value, "choice", "safety.configure escape"),
+				destination,
+				within);
+		}
+		throw new IllegalArgumentException("Unsupported safety escape type: " + type);
 	}
 
 	private static List<GenericClientEmergencyController.Consumable> emergencyConsumables(

@@ -181,6 +181,51 @@ public class GenericClientEmergencyControllerTest
 	}
 
 	@Test
+	public void missingFoodEscapesBeforeTheHardFloor()
+	{
+		AtomicInteger stops = new AtomicInteger();
+		AtomicInteger escapes = new AtomicInteger();
+		GenericClientEmergencyController controller = new GenericClientEmergencyController(
+			(itemId, action) -> CompletableFuture.completedFuture(rejected()),
+			escape ->
+			{
+				escapes.incrementAndGet();
+				return CompletableFuture.completedFuture(escapeStarted());
+			},
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason ->
+			{
+				assertEquals("emergency_consumable_unavailable", reason);
+				stops.incrementAndGet();
+				return CompletableFuture.completedFuture(null);
+			},
+			message -> { });
+		controller.configure(
+			4,
+			Collections.singletonList(
+				new GenericClientEmergencyController.Consumable(379, "Eat", 12)),
+			GenericClientEmergencyController.Escape.inventoryDialogue(
+				2564,
+				"Rub",
+				"Castle Wars Arena",
+				new net.runelite.api.coords.WorldPoint(2440, 3089, 0),
+				10),
+			true,
+			true);
+
+		controller.publishGameTick(snapshotWithHitpoints(14, 28));
+
+		assertEquals(1, stops.get());
+		assertEquals(1, escapes.get());
+		assertEquals("emergency_escape_complete", controller.status().get("last_event"));
+		@SuppressWarnings("unchecked")
+		Map<String, Object> escape = (Map<String, Object>) controller.status().get("escape");
+		assertEquals("inventory_dialogue", escape.get("type"));
+		assertEquals(2564L, escape.get("item_id"));
+		assertEquals("Castle Wars Arena", escape.get("choice"));
+	}
+
+	@Test
 	public void remainsRecoveringUntilEscapeCompletes()
 	{
 		CompletableFuture<Map<String, Object>> escape = new CompletableFuture<>();
@@ -500,13 +545,18 @@ public class GenericClientEmergencyControllerTest
 
 	private static GenericClientSnapshot snapshotWithHitpoints(int hitpoints)
 	{
+		return snapshotWithHitpoints(hitpoints, 10);
+	}
+
+	private static GenericClientSnapshot snapshotWithHitpoints(int hitpoints, int maximumHitpoints)
+	{
 		return new GenericClientSnapshot(
 			1,
 			"LOGGED_IN",
 			231,
 			new GenericClientSnapshot.PlayerSnapshot(
 				"Player", 3200, 3200, 0, 0, -1, null,
-				hitpoints, 10, 10_000, false, null),
+				hitpoints, maximumHitpoints, 10_000, false, null),
 			Collections.emptyList());
 	}
 

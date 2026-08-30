@@ -190,11 +190,16 @@ final class GenericClientEmergencyController
 				tryConsumable(current, 0, allowOverhealNow ? null : missingHitpoints))
 			.thenCompose(food ->
 			{
-				if (wasAccepted(food) || !fallbackRequired)
+				if (wasAccepted(food))
 				{
 					return endBreakAction.get()
 						.handle((result, error) -> null)
 						.thenCompose(ignored -> inputControl.resume("emergency_consumable"))
+						.handle((ignored, error) -> food);
+				}
+				if (current.escape == null && !fallbackRequired)
+				{
+					return inputControl.resume("emergency_consumable")
 						.handle((ignored, error) -> food);
 				}
 				return stopAction.apply("emergency_consumable_unavailable")
@@ -247,12 +252,18 @@ final class GenericClientEmergencyController
 		}
 		lastEvent = "escaping";
 		reporter.accept("EMERGENCY_ESCAPE_STARTED destination=" +
-			current.escape.getDestination());
+			current.escape.describe());
 		return escapeAction.escape(current.escape).thenApply(escapeReceipt ->
 		{
 			if (!wasAccepted(escapeReceipt))
 			{
-				Map<String, Object> result = new LinkedHashMap<>(food);
+				Map<String, Object> result = new LinkedHashMap<>();
+				result.put("status", "rejected");
+				result.put("result", escapeReceipt == null
+					? "emergency_escape_failed"
+					: String.valueOf(escapeReceipt.get("result")));
+				result.put("click_count", 0L);
+				result.put("food", food);
 				result.put("escape", escapeReceipt);
 				return result;
 			}
@@ -363,10 +374,25 @@ final class GenericClientEmergencyController
 
 	static final class Escape
 	{
+		private final EscapeType type;
 		private final WorldPoint destination;
 		private final int within;
+		private final Integer itemId;
+		private final String itemAction;
+		private final String dialogueChoice;
 
 		Escape(WorldPoint destination, int within)
+		{
+			this(EscapeType.WALK, destination, within, null, null, null);
+		}
+
+		private Escape(
+			EscapeType type,
+			WorldPoint destination,
+			int within,
+			Integer itemId,
+			String itemAction,
+			String dialogueChoice)
 		{
 			if (destination == null)
 			{
@@ -377,8 +403,45 @@ final class GenericClientEmergencyController
 				throw new IllegalArgumentException(
 					"Emergency escape radius must be between 0 and 10");
 			}
+			this.type = type;
 			this.destination = destination;
 			this.within = within;
+			this.itemId = itemId;
+			this.itemAction = itemAction;
+			this.dialogueChoice = dialogueChoice;
+		}
+
+		static Escape inventoryDialogue(
+			int itemId,
+			String itemAction,
+			String dialogueChoice,
+			WorldPoint destination,
+			int within)
+		{
+			if (itemId < 0)
+			{
+				throw new IllegalArgumentException("Emergency escape item id cannot be negative");
+			}
+			if (itemAction == null || itemAction.trim().isEmpty())
+			{
+				throw new IllegalArgumentException("Emergency escape item action is required");
+			}
+			if (dialogueChoice == null || dialogueChoice.trim().isEmpty())
+			{
+				throw new IllegalArgumentException("Emergency escape dialogue choice is required");
+			}
+			return new Escape(
+				EscapeType.INVENTORY_DIALOGUE,
+				destination,
+				within,
+				itemId,
+				itemAction.trim(),
+				dialogueChoice.trim());
+		}
+
+		EscapeType getType()
+		{
+			return type;
 		}
 
 		WorldPoint getDestination()
@@ -391,15 +454,50 @@ final class GenericClientEmergencyController
 			return within;
 		}
 
+		int getItemId()
+		{
+			return itemId == null ? -1 : itemId;
+		}
+
+		String getItemAction()
+		{
+			return itemAction;
+		}
+
+		String getDialogueChoice()
+		{
+			return dialogueChoice;
+		}
+
+		String describe()
+		{
+			return type == EscapeType.WALK
+				? destination.toString()
+				: "item:" + itemId + " choice:" + dialogueChoice;
+		}
+
 		Map<String, Object> toMap()
 		{
 			Map<String, Object> value = new LinkedHashMap<>();
+			value.put("type", type.name().toLowerCase(java.util.Locale.ROOT));
 			value.put("x", (long) destination.getX());
 			value.put("y", (long) destination.getY());
 			value.put("plane", (long) destination.getPlane());
 			value.put("within", (long) within);
+			if (type == EscapeType.INVENTORY_DIALOGUE)
+			{
+				value.put("item_id", (long) itemId);
+				value.put("action", itemAction);
+				value.put("choice", dialogueChoice);
+			}
 			return value;
 		}
+	}
+
+	enum EscapeType
+	{
+		WALK,
+		INVENTORY_DIALOGUE
 	}
 
 	static final class Consumable

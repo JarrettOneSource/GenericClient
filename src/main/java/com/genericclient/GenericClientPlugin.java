@@ -230,10 +230,21 @@ public final class GenericClientPlugin extends Plugin
 			client, clientThread, executor, menuInput);
 		dialogueInput = new GenericClientDialogueInput(
 			client, menuInput, behaviorController, this::publishResult);
+		walker = new GenericClientWalker(
+			gameInput, objectInput, runInput, collisionMap, this::publishResult);
+		GenericClientEmergencyEscapeInput emergencyEscapeInput =
+			new GenericClientEmergencyEscapeInput(
+				client,
+				clientThread,
+				executor,
+				inventoryInput,
+				dialogueInput,
+				walker,
+				this::publishResult);
 		emergencyController = new GenericClientEmergencyController(
 			(itemId, action) -> inventoryInput.interact(
 				itemId, null, action, GenericClientActivityContext.none()),
-			this::startEmergencyEscape,
+			emergencyEscapeInput::escape,
 			behaviorController::endActiveBreak,
 			new GenericClientEmergencyController.InputControl()
 			{
@@ -293,8 +304,6 @@ public final class GenericClientPlugin extends Plugin
 			() -> gameInput.isRunning() || menuInput.isRunning() || combatInput.isRunning() ||
 				syntheticKeyboard.isTyping() ||
 				syntheticMouse.isMoving());
-		walker = new GenericClientWalker(
-			gameInput, objectInput, runInput, collisionMap, this::publishResult);
 		luaHost = new GenericClientLuaHost(
 			net.runelite.client.RuneLite.RUNELITE_DIR.toPath().resolve("genericclient").resolve("scripts"),
 			gameInput::walkToRandomTile,
@@ -1099,26 +1108,6 @@ public final class GenericClientPlugin extends Plugin
 			activeWalker.resumeActiveInput(reason);
 		}
 		return java.util.concurrent.CompletableFuture.completedFuture(null);
-	}
-
-	private java.util.concurrent.CompletableFuture<Map<String, Object>> startEmergencyEscape(
-		GenericClientEmergencyController.Escape escape)
-	{
-		GenericClientWalker activeWalker = walker;
-		if (activeWalker == null)
-		{
-			Map<String, Object> receipt = new LinkedHashMap<>();
-			receipt.put("status", "rejected");
-			receipt.put("result", "walker_unavailable");
-			receipt.put("click_count", 0L);
-			return java.util.concurrent.CompletableFuture.completedFuture(receipt);
-		}
-		java.util.concurrent.CompletableFuture<Map<String, Object>> walk = activeWalker.walkTo(
-			escape.getDestination(), escape.getWithin(), 300, GenericClientActivityContext.none());
-		walk.whenComplete((receipt, error) -> publishResult(error == null
-			? "EMERGENCY_ESCAPE_COMPLETED status=" + receipt.get("status")
-			: "EMERGENCY_ESCAPE_FAILED message=" + error.getMessage()));
-		return walk;
 	}
 
 	private String accountNote()

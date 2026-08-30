@@ -70,6 +70,42 @@ final class GenericClientDialogueInput
 			() -> pacing(visibleChoiceText()).toPreInteraction());
 	}
 
+	CompletableFuture<Map<String, Object>> chooseImmediate(
+		String text,
+		GenericClientActivityContext activityContext)
+	{
+		if (text == null || text.trim().isEmpty())
+		{
+			throw new IllegalArgumentException("Dialogue choice text cannot be empty");
+		}
+		String exactText = text.trim();
+		return menuInput.interactDirect(() -> resolveChoice(exactText), activityContext);
+	}
+
+	String matchingVisibleChoice(String text)
+	{
+		if (text == null)
+		{
+			return null;
+		}
+		String wanted = withoutTrailingPeriod(text);
+		for (Widget option : visibleOptions())
+		{
+			String visible = cleanText(option.getText());
+			if (wanted.equals(withoutTrailingPeriod(visible)))
+			{
+				return visible;
+			}
+		}
+		return null;
+	}
+
+	private static String withoutTrailingPeriod(String text)
+	{
+		String value = cleanText(text);
+		return value.endsWith(".") ? value.substring(0, value.length() - 1).trim() : value;
+	}
+
 	private Pacing pacing(String text)
 	{
 		int readingPercent = behavior.dialogueReadingPercent();

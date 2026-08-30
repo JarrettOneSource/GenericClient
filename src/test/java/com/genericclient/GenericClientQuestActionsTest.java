@@ -49,6 +49,33 @@ public class GenericClientQuestActionsTest
 		assertEquals(0, GenericClientQuestActions.bankRequirements(action).size());
 	}
 
+	@Test
+	public void parsesInventoryDialogueEmergencyEscape()
+	{
+		Map<String, Object> escape = new LinkedHashMap<>();
+		escape.put("type", "inventory_dialogue");
+		escape.put("item_id", 2564.0);
+		escape.put("action", "Rub");
+		escape.put("choice", "Castle Wars Arena");
+		escape.put("x", 2440.0);
+		escape.put("y", 3089.0);
+		escape.put("plane", 0.0);
+		escape.put("within", 10.0);
+		Map<String, Object> action = new LinkedHashMap<>();
+		action.put("escape", escape);
+
+		GenericClientEmergencyController.Escape parsed =
+			GenericClientQuestActions.emergencyEscape(action);
+
+		assertEquals(GenericClientEmergencyController.EscapeType.INVENTORY_DIALOGUE,
+			parsed.getType());
+		assertEquals(2564, parsed.getItemId());
+		assertEquals("Rub", parsed.getItemAction());
+		assertEquals("Castle Wars Arena", parsed.getDialogueChoice());
+		assertEquals(2440, parsed.getDestination().getX());
+		assertEquals(10, parsed.getWithin());
+	}
+
 	private static Map<String, Object> item(int id, int quantity)
 	{
 		Map<String, Object> item = new LinkedHashMap<>();
