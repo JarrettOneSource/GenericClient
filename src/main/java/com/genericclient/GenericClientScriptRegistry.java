@@ -85,6 +85,7 @@ final class GenericClientScriptRegistry
 		"quest-runner/monkey_madness_i/interactions.lua",
 		"quest-runner/monkey_madness_i/navigation.lua",
 		"quest-runner/monkey_madness_i/puzzle.lua",
+		"quest-runner/monkey_madness_i/preparation.lua",
 		"quest-runner/monkey_madness_i/quest.lua",
 		"quest-runner/monkey_madness_i/runner.lua",
 		"quest-runner/monkey_madness_i/state.lua",

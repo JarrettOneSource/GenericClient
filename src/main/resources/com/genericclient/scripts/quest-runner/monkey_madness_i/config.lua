@@ -43,6 +43,35 @@ return {
     royal_seal = 4004,
     narnodes_orders = 4005,
   },
+  ape_atoll_loadout = {
+    {
+      id = 379,
+      name = "Lobster",
+      quantity = 20,
+      maximum_unit_price = 1000,
+    },
+    {
+      id = 2448,
+      name = "Superantipoison(4)",
+      quantity = 1,
+      alternative_ids = { 181, 183, 185 },
+      maximum_unit_price = 10000,
+    },
+    {
+      id = 12625,
+      name = "Stamina potion(4)",
+      quantity = 1,
+      alternative_ids = { 12627, 12629, 12631 },
+      maximum_unit_price = 20000,
+    },
+    {
+      id = 2552,
+      name = "Ring of dueling(8)",
+      quantity = 1,
+      alternative_ids = { 2554, 2556, 2558, 2560, 2562, 2564, 2566 },
+      purchase = false,
+    },
+  },
   interfaces = {
     chapter_message = 225,
   },

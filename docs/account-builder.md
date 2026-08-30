@@ -294,8 +294,11 @@ Monkey Madness I is in progress through the reinitialisation sequence. Live
 receipts verify Narnode `7`, Caranock `3`, and Daero `7`; the shipyard report,
 Narnode's orders, hangar transfer, 153-move sliding puzzle, and post-puzzle Daero
 confirmation are complete. The account is paused in the post-puzzle hangar
-before speaking to Waydar.
+before speaking to Waydar. The JIT Ape Atoll loadout staged 20 lobsters,
+superantipoison(4), stamina potion(4), and a ring of dueling(2); safety consumed
+one lobster during route validation, leaving 19 carried. Exact cash after the
+6,553-coin purchase is 14,118,486.
 
-Before the Ape Atoll travel phase, prepare only its next required hostile-area
-loadout. Preserve the deliberate reward-training choice, exact Attack and
-Defence caps, and the 5,000,000-coin reserve.
+Keep lobster safety armed during the Ape Atoll travel phase. Preserve the
+deliberate reward-training choice, exact Attack and Defence caps, and the
+5,000,000-coin reserve.

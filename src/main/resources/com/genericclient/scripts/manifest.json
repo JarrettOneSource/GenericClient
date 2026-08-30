@@ -123,6 +123,7 @@
           "monkey_madness_interactions": "quest-runner/monkey_madness_i/interactions.lua",
           "monkey_madness_navigation": "quest-runner/monkey_madness_i/navigation.lua",
           "monkey_madness_puzzle": "quest-runner/monkey_madness_i/puzzle.lua",
+          "monkey_madness_preparation": "quest-runner/monkey_madness_i/preparation.lua",
           "monkey_madness_quest": "quest-runner/monkey_madness_i/quest.lua",
           "monkey_madness_runner": "quest-runner/monkey_madness_i/runner.lua",
           "monkey_madness_state": "quest-runner/monkey_madness_i/state.lua",

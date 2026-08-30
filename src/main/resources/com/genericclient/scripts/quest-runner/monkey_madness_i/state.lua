@@ -1,4 +1,5 @@
 local config = gc.require("monkey_madness_config")
+local shared = gc.require("shared_state")
 
 local function resolve(state)
   if state.quests.monkey_madness_i and state.quests.monkey_madness_i.state == "finished" then
@@ -12,7 +13,12 @@ local function resolve(state)
     if state.varbits[config.varbits.daero] < 5 then return "enter_hangar" end
     if state.varbits[config.varbits.daero] < 6 then return "solve_reinitialization" end
     if state.varbits[config.varbits.daero] < 7 then return "confirm_reinitialization" end
-    if state.varbits[config.varbits.lumdo] < 2 then return "reach_ape_atoll" end
+    if state.varbits[config.varbits.lumdo] < 2 then
+      if not shared.matches_carried_loadout(state, config.ape_atoll_loadout) then
+        return "ape_atoll_loadout_required"
+      end
+      return "reach_ape_atoll"
+    end
     return "find_garkor"
   end
   if state.varp == 3 then return "infiltrate_ape_atoll" end

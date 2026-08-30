@@ -5,6 +5,7 @@ local waterfall_config = gc.require("waterfall_config")
 local tree_gnome_config = gc.require("tree_gnome_config")
 local fight_arena_config = gc.require("fight_arena_config")
 local grand_tree_config = gc.require("grand_tree_config")
+local monkey_madness_config = gc.require("monkey_madness_config")
 
 local configs = {
   witchs_house = witch_config,
@@ -12,6 +13,7 @@ local configs = {
   tree_gnome_village = tree_gnome_config,
   fight_arena = fight_arena_config,
   the_grand_tree = grand_tree_config,
+  monkey_madness_i = monkey_madness_config,
 }
 
 local ge = { x = 3165, y = 3491, plane = 0 }
@@ -27,6 +29,7 @@ local bank_objects = {
   { id = 4483, action = "Use" },
 }
 local games_necklace_ids = { 3853, 3855, 3857, 3859, 3861, 3863, 3865, 3867 }
+local dueling_ring_ids = { 2552, 2554, 2556, 2558, 2560, 2562, 2564, 2566 }
 
 local function overlay(quest, phase)
   gc.overlay {
@@ -51,6 +54,12 @@ local function ensure_at_ge(quest)
   if travel.has_necklace() then
     overlay(quest, "teleport_to_burthorpe")
     local teleported = travel.teleport_to_burthorpe(true)
+    if teleported.status ~= "complete" then
+      return nil, { status = "ge_transport_failed", receipt = teleported }
+    end
+  elseif travel.has_dueling_ring() then
+    overlay(quest, "teleport_emirs_arena")
+    local teleported = travel.teleport_to_emirs_arena(true)
     if teleported.status ~= "complete" then
       return nil, { status = "ge_transport_failed", receipt = teleported }
     end
@@ -81,20 +90,55 @@ local function available_games_necklace(state)
   return nil
 end
 
-local function stage_ge_trip(state, missing, quest)
+local function available_dueling_ring(state)
+  for _, id in ipairs(dueling_ring_ids) do
+    if state_api.total_owned(state, id) > 0 then return id end
+  end
+  return nil
+end
+
+local function stage_ge_trip(state, missing, quest, loadout)
   local necklace = available_games_necklace(state)
-  if not necklace then return false end
+  local ring = available_dueling_ring(state)
+  local transport = necklace or ring
+  if not transport then return false end
   local coins, spend_error = maximum_spend(missing)
   if not coins then return nil, spend_error end
 
   local items = {}
+  local staged = {}
+  local function add_item(id, quantity)
+    if quantity <= 0 then return end
+    if staged[id] then
+      staged[id].quantity = math.max(staged[id].quantity, quantity)
+      return
+    end
+    local item = { id = id, quantity = quantity }
+    staged[id] = item
+    items[#items + 1] = item
+  end
   for _, item in ipairs(state.inventory.items or {}) do
     if item.tradeable == false then
-      items[#items + 1] = { id = item.id, quantity = item.quantity }
+      add_item(item.id, item.quantity)
     end
   end
-  items[#items + 1] = { id = necklace, quantity = 1 }
-  items[#items + 1] = { id = 995, quantity = coins }
+  add_item(transport, 1)
+  add_item(995, coins)
+  for _, requirement in ipairs(loadout) do
+    local selected_id = requirement.id
+    local owned = state_api.total_owned(state, selected_id)
+    if owned == 0 then
+      for _, alternative_id in ipairs(requirement.alternative_ids or {}) do
+        local alternative_owned = state_api.total_owned(state, alternative_id)
+        if alternative_owned > 0 then
+          selected_id = alternative_id
+          owned = alternative_owned
+          break
+        end
+      end
+    end
+    add_item(selected_id, math.min(requirement.quantity, owned))
+  end
   overlay(quest, "prepare_ge_transport")
   local staged = gc.await {
     action = {
@@ -274,7 +318,7 @@ local function prepare_items(quest, restock, loadout, exact)
       return nil, { status = "supplies_missing", items = missing }
     end
     if state_api.distance(gc.read("player").world, ge) > 8 then
-      local staged, stage_error = stage_ge_trip(state, missing, quest)
+      local staged, stage_error = stage_ge_trip(state, missing, quest, loadout)
       if staged == nil then return nil, stage_error end
       if not staged then
         gc.await {

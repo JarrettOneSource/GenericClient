@@ -1,8 +1,9 @@
 local navigation = gc.require("monkey_madness_navigation")
 local interactions = gc.require("monkey_madness_interactions")
 local puzzle = gc.require("monkey_madness_puzzle")
+local preparation = gc.require("monkey_madness_preparation")
 
-local function execute(phase)
+local function execute(phase, input)
   if phase == "start_quest" then
     local target, failure = navigation.reach_narnode()
     if not target then return failure end
@@ -41,6 +42,11 @@ local function execute(phase)
     local target, failure = navigation.reach_post_puzzle_daero()
     if not target then return failure end
     return interactions.confirm_reinitialization(target)
+  end
+  if phase == "ape_atoll_loadout_required" then
+    local prepared, failure = preparation.prepare(input and input.restock or "bank_only")
+    if not prepared then return failure end
+    return { status = "complete", result = "ape_atoll_loadout_prepared" }
   end
   return { status = "rejected", result = "monkey_madness_phase_not_implemented:" .. tostring(phase) }
 end

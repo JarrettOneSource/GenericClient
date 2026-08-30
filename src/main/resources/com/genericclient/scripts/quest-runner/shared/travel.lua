@@ -136,10 +136,36 @@ local function teleport_to_castle_wars(breaks)
     breaks)
 end
 
+local function teleport_to_ferox_enclave(breaks)
+  return teleport(
+    dueling_ring_ids,
+    "ring_of_dueling",
+    "Ferox Enclave",
+    function(world)
+      return world.x >= 3120 and world.x <= 3165 and world.y >= 3600 and world.y <= 3650
+    end,
+    "ferox_enclave_teleport_verified",
+    breaks)
+end
+
+local function teleport_to_emirs_arena(breaks)
+  return teleport(
+    dueling_ring_ids,
+    "ring_of_dueling",
+    "Emir's Arena",
+    function(world)
+      return world.x >= 3290 and world.x <= 3340 and world.y >= 3210 and world.y <= 3260
+    end,
+    "emirs_arena_teleport_verified",
+    breaks)
+end
+
 return {
   has_necklace = function() return has_item(games_necklace_ids) end,
   has_dueling_ring = function() return has_item(dueling_ring_ids) end,
   teleport_to_burthorpe = teleport_to_burthorpe,
   teleport_to_barbarian_outpost = teleport_to_barbarian_outpost,
   teleport_to_castle_wars = teleport_to_castle_wars,
+  teleport_to_ferox_enclave = teleport_to_ferox_enclave,
+  teleport_to_emirs_arena = teleport_to_emirs_arena,
 }

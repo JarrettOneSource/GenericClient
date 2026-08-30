@@ -20,7 +20,7 @@ local function terminal(status, state, receipt)
   }
 end
 
-local function run()
+local function run(input)
   gc.await { event = "game.tick" }
   local initial = read()
   local initial_phase = state_module.resolve(initial)
@@ -29,7 +29,7 @@ local function run()
   if initial_phase == "complete" or initial_phase == "unknown_stage" then
     return terminal(initial_phase, initial)
   end
-  local receipt = quest.execute(initial_phase)
+  local receipt = quest.execute(initial_phase, input)
   if not receipt or receipt.status ~= "complete" then
     return terminal("action_failed", read(), receipt)
   end
