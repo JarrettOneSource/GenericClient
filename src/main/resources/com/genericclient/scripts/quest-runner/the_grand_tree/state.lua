@@ -43,7 +43,16 @@ local function resolve(state)
     if state.player.world.plane == 3 then return "narnode_escape_checkpoint" end
     return "unknown_stage"
   end
-  if state.varp > 70 then return "narnode_escape_checkpoint" end
+  if state.varp == 80 then
+    if state.player.world.plane == 3 then return "escape_by_glider" end
+    if state.player.world.plane == 0 and state.player.world.x >= 2900 and
+      state.player.world.x <= 3010 and state.player.world.y >= 2950 and
+      state.player.world.y <= 3070 then
+      return "shipyard_checkpoint"
+    end
+    return "unknown_stage"
+  end
+  if state.varp > 80 then return "shipyard_checkpoint" end
   return "unknown_stage"
 end
 

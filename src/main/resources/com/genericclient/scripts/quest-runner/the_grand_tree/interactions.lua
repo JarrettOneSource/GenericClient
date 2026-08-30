@@ -546,6 +546,28 @@ local function talk_charlie_from_cell()
   return { status = "complete", result = "charlie_cell_dialogue_verified", receipt = clicked }
 end
 
+local function take_glider_to_karamja()
+  local target = npc(config.npcs.captain_errdo, 12, true)
+  if not target then return { status = "captain_errdo_not_reachable" } end
+  local started_tick = gc.read("runtime").game_tick
+  local clicked = gc.await {
+    action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 12 },
+    breaks = true,
+    timeout = { game_ticks = 40 },
+  }
+  if clicked.status ~= "dispatched" then return clicked end
+  local finished, failure = finish_dialogue(
+    function()
+      local world = gc.read("player").world
+      return world.plane == 0 and world.x >= 2900 and world.x <= 3010 and
+        world.y >= 2950 and world.y <= 3070
+    end,
+    { "Take me to Karamja please!" },
+    started_tick)
+  if not finished then return failure end
+  return { status = "complete", result = "karamja_glider_verified", receipt = clicked }
+end
+
 return {
   npc = npc,
   talk_narnode = talk_narnode,
@@ -562,4 +584,5 @@ return {
   search_glough_cupboard = search_glough_cupboard,
   talk_glough_again = talk_glough_again,
   talk_charlie_from_cell = talk_charlie_from_cell,
+  take_glider_to_karamja = take_glider_to_karamja,
 }

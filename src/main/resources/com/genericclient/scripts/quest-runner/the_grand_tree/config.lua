@@ -34,6 +34,7 @@ return {
     hazelmere = { 1422, 13610 },
     glough = { 2061, 1424 },
     charlie = { 1428, 122 },
+    captain_errdo = { 10467 },
   },
   objects = {
     hazelmere_ladder = 16683,

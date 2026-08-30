@@ -45,6 +45,9 @@ local function execute(phase)
   if phase == "talk_charlie_cell" then
     return interactions.talk_charlie_from_cell()
   end
+  if phase == "escape_by_glider" then
+    return interactions.take_glider_to_karamja()
+  end
   return { status = "rejected", result = "grand_tree_phase_not_implemented:" .. tostring(phase) }
 end
 

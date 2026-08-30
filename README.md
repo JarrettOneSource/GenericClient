@@ -116,8 +116,8 @@ House, Waterfall Quest, Tree Gnome Village, and Fight Arena are isolated in
 their own folders and live-proven through normalized completion. The Grand Tree
 has its own folder and is live-proven through Hazelmere, the translated report,
 Glough's journal, and the prison-cell transition at quest varp 80.
-The current live stop is outside Charlie's cell, ready to speak with Narnode
-before the glider escape.
+The current live stop is safely outside the Karamja shipyard gate after the
+glider escape.
 
 The current scripting interface intentionally contains only:
 

@@ -2,7 +2,7 @@
 
 Status: four modular quest definitions are live-proven end to end: Witch's
 House, Waterfall Quest, Tree Gnome Village, and Fight Arena. The Grand Tree is
-live-proven through its post-cell Narnode/glider checkpoint at varp 80.
+live-proven through its Karamja shipyard-gate checkpoint at varp 80.
 
 ## Decision
 
@@ -208,8 +208,8 @@ The Grand Tree added live evidence for resumable open dialogue, low-combat quest
 confirmation, static-map door staging, Castle Wars return routing, repeated
 translation choices, same-ID ladder approaches, hostile-floor safety
 preservation, repeated same-varp location reduction, and post-break semantic
-target reacquisition. Its current stable stop is varp 80 immediately outside
-Charlie's cell.
+target reacquisition. Its current stable stop is varp 80 safely outside the
+Karamja shipyard gate.
 
 Quest-specific evidence and exact phase tables live in
 [`witchs-house-quest-runner.md`](witchs-house-quest-runner.md) and

@@ -64,6 +64,8 @@ public class GenericClientScriptRegistryTest
 			.contains("glough_confrontation_verified"));
 		assertTrue(registry.readExecutableSource("quest-runner")
 			.contains("charlie_cell_dialogue_verified"));
+		assertTrue(registry.readExecutableSource("quest-runner")
+			.contains("karamja_glider_verified"));
 		assertTrue(Files.isRegularFile(
 			temporaryFolder.getRoot().toPath().resolve("scripts/quest-runner/tree_gnome_village/state.lua")));
 		assertTrue(Files.isRegularFile(
