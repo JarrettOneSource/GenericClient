@@ -38,11 +38,12 @@ local function resolve(state)
   end
   if state.varp == 60 then return "confront_glough" end
   if state.varp == 70 then
-    if in_cell(state.player.world) then return "cell_checkpoint" end
     if in_glough_house(state.player.world) then return "confront_glough" end
+    if in_cell(state.player.world) then return "talk_charlie_cell" end
+    if state.player.world.plane == 3 then return "narnode_escape_checkpoint" end
     return "unknown_stage"
   end
-  if state.varp > 70 then return "cell_checkpoint" end
+  if state.varp > 70 then return "narnode_escape_checkpoint" end
   return "unknown_stage"
 end
 

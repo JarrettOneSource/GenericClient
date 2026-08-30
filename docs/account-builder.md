@@ -235,12 +235,13 @@ proof survived a logout-length break, a Mime interruption, exact mid-course
 resume, and stopped after the threshold-crossing obstacle. The Mime event
 unlocked Lean and produced a registered standalone solver.
 
-The Grand Tree is now in progress at varp 70. Quest Runner opened the Grand
+The Grand Tree is now in progress at varp 80. Quest Runner opened the Grand
 Tree door, handled the low-combat quest warning, reached Hazelmere from Castle
 Wars through both Yanille gates and the island bridges, used emergency food
 under jungle-spider pressure, translated Hazelmere's report for King Narnode,
 warned Glough, questioned Charlie, obtained Glough's journal, confronted Glough,
-and stopped after the guard moved the player into Charlie's cell.
+the guard moved the player into Charlie's cell, and completed Charlie's cell
+dialogue. The current stop is outside the cell before speaking with Narnode.
 
 Sources:
 
@@ -280,6 +281,6 @@ Reference surfaces used for this envelope:
 
 ## Next evidence gate
 
-Continue The Grand Tree from the varp-70 cell checkpoint. Restock food only when
+Continue The Grand Tree from the varp-80 Narnode/glider checkpoint. Restock food only when
 its next live phase requires it, before the eventual combat section. Continue enforcing exact
 Attack, Defence, and Prayer caps and the 5,000,000-coin reserve.

@@ -522,6 +522,30 @@ local function talk_glough_again()
   return { status = "complete", result = "glough_confrontation_verified", receipt = clicked }
 end
 
+local function talk_charlie_from_cell()
+  local started_tick = gc.read("runtime").game_tick
+  local clicked = { status = "dispatched", result = "resumed_open_dialogue" }
+  if not gc.read("dialogue").open then
+    local target = npc(config.npcs.charlie, 10, true)
+    if not target then return { status = "charlie_not_reachable_from_cell" } end
+    clicked = gc.await {
+      action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 10 },
+      breaks = false,
+      timeout = { game_ticks = 40 },
+    }
+    if clicked.status ~= "dispatched" then return clicked end
+  end
+  local finished, failure = finish_dialogue(
+    function()
+      local world = gc.read("player").world
+      return not (world.plane == 3 and world.x == 2464 and world.y == 3496)
+    end,
+    {},
+    started_tick)
+  if not finished then return failure end
+  return { status = "complete", result = "charlie_cell_dialogue_verified", receipt = clicked }
+end
+
 return {
   npc = npc,
   talk_narnode = talk_narnode,
@@ -537,4 +561,5 @@ return {
   descend_grand_tree_bottom = descend_grand_tree_bottom,
   search_glough_cupboard = search_glough_cupboard,
   talk_glough_again = talk_glough_again,
+  talk_charlie_from_cell = talk_charlie_from_cell,
 }

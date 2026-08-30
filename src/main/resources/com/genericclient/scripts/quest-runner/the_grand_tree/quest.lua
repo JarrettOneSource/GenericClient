@@ -42,6 +42,9 @@ local function execute(phase)
     if not reached then return failure end
     return interactions.talk_glough_again()
   end
+  if phase == "talk_charlie_cell" then
+    return interactions.talk_charlie_from_cell()
+  end
   return { status = "rejected", result = "grand_tree_phase_not_implemented:" .. tostring(phase) }
 end
 
