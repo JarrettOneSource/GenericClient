@@ -23,7 +23,7 @@ public class GenericClientScriptRegistryTest
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(
 			temporaryFolder.newFolder("scripts").toPath());
 
-		assertEquals(14, registry.list().size());
+		assertEquals(15, registry.list().size());
 		assertEquals("Account Auditor", registry.get("account-auditor").getName());
 		assertEquals("AIO Agility Trainer", registry.get("aio-agility").getName());
 		assertTrue(registry.readExecutableSource("aio-agility").contains("agility_xp_unverified"));
@@ -143,7 +143,7 @@ public class GenericClientScriptRegistryTest
 
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
 
-		assertEquals(15, registry.list().size());
+		assertEquals(16, registry.list().size());
 		assertEquals("Custom", registry.get("custom").getName());
 		assertTrue(registry.readExecutableSource("quest-runner")
 			.contains("local approach = walk(pillar.world, 3, 120)"));

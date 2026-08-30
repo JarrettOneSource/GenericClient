@@ -290,14 +290,19 @@ Reference surfaces used for this envelope:
 
 ## Current evidence gate
 
-Monkey Madness I is in progress through the reinitialisation sequence. Live
-receipts verify Narnode `7`, Caranock `3`, and Daero `7`; the shipyard report,
-Narnode's orders, hangar transfer, 153-move sliding puzzle, and post-puzzle Daero
-confirmation are complete. The account is paused in the post-puzzle hangar
-before speaking to Waydar. The JIT Ape Atoll loadout staged 20 lobsters,
-superantipoison(4), stamina potion(4), and a ring of dueling(2); safety consumed
-one lobster during route validation, leaving 19 carried. Exact cash after the
-6,553-coin purchase is 14,118,486.
+Monkey Madness I is in progress on Ape Atoll. Live receipts verify Narnode `7`,
+Caranock `3`, Daero `7`, and Lumdo `3`; the shipyard report, Narnode's orders,
+hangar transfer, 153-move sliding puzzle, post-puzzle flight, Crash Island
+intervention, and landing at `(2802, 2707, 0)` are complete. A failed first
+crossing proved that food alone was not a sufficient recovery plan. The shared
+safety guard now carries an exact ring escape, and a forced acceptance test
+verified the full Rub, `Castle Wars Arena.`, and arrival receipt.
+
+The current JIT loadout is 20 lobsters, superantipoison(4), stamina potion(4),
+and a fresh ring of dueling(8). Exact cash after replacing only the lost
+supplies is 14,115,605. An Evil Bob interruption during the hangar route was
+completed through the observed ScapeRune fish cycle and raised Fishing from
+level 1 to level 7 before Monkey Madness resumed.
 
 Keep lobster safety armed during the Ape Atoll travel phase. Preserve the
 deliberate reward-training choice, exact Attack and Defence caps, and the

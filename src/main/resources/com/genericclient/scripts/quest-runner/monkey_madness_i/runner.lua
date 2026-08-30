@@ -8,7 +8,6 @@ local function read()
 end
 
 local function terminal(status, state, receipt)
-  gc.await { action = { type = "safety.clear" }, breaks = false }
   gc.await { action = { type = "mouse.offscreen" }, breaks = false }
   return {
     status = status,

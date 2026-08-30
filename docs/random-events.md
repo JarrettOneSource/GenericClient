@@ -193,3 +193,24 @@ Turpentine NPC `375`, auto-opened his dialogue, observed the exact reward receip
 `Your reward is: 1 x Uncut sapphire.`, and resumed the retained quest inputs.
 The bundled solver drains his Continue dialogue and requires that reward message
 plus NPC departure before returning `COMPLETED`.
+
+## Evil Bob evidence
+
+On 2026-08-30 GenericClient interrupted the Monkey Madness hangar route for
+surface Evil Bob NPC `390`, auto-opened his invitation, and retained Quest
+Runner. Live inspection on ScapeRune identified island Evil Bob `391`, servant
+`393`, small net `6209`, fishing spots `23114`, uncooking pot `23113`, and exit
+portal `23115`. The successful south-shore attempt produced cooked fish `6202`;
+the pot changed it to raw fish `6200`, feeding it produced the `catnap` chat
+receipt, and the portal returned the account to the hangar. The event reward
+raised Fishing from level 1 to level 7 and the retained quest resumed.
+
+The bundled `evil-bob` solver owns surface NPC `390`. Its island module accepts
+the exact observed invitation, obtains the event net, asks the servant before
+each attempt, and tries one representative object from each of the four observed
+shore groups. Wrong fish `6206` is destroyed and the servant is consulted again,
+so the solver does not depend on camera orientation or screen coordinates. It
+then requires the `6202` to `6200` inventory transition, the catnap message, and
+a verified departure from ScapeRune. The complete interaction sequence is
+live-proven; automatic execution of the registered solver remains pending the
+next Evil Bob occurrence.

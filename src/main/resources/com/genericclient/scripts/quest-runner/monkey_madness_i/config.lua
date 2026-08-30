@@ -13,6 +13,7 @@ return {
   points = {
     grand_tree_entrance = { x = 2466, y = 3482, plane = 0 },
     grand_tree_door = { x = 2466, y = 3491, plane = 0 },
+    grand_tree_ladder_staging = { x = 2466, y = 3493, plane = 0 },
     king_narnode = { x = 2465, y = 3496, plane = 0 },
     daero = { x = 2482, y = 3486, plane = 1 },
     gandius_glider = { x = 2970, y = 2972, plane = 0 },
@@ -23,6 +24,7 @@ return {
     hangar_daero = { x = 2392, y = 9889, plane = 0 },
     reinitialization_panel = { x = 2394, y = 9883, plane = 0 },
     post_puzzle_daero = { x = 2648, y = 4513, plane = 0 },
+    ge_spirit_tree = { x = 3184, y = 3509, plane = 0 },
   },
   npcs = {
     king_narnode = { 8019, 8020, 1423 },
@@ -30,9 +32,12 @@ return {
     caranock = { 1460 },
     captain_errdo = { 6091, 10467 },
     gandius_pilot = { 10479, 10468 },
+    waydar = { 1446, 6675 },
+    lumdo = { 1453 },
   },
   objects = {
     spirit_tree = 1295,
+    grand_tree_doors = { 1967, 1968 },
     grand_tree_ladder_bottom = 4458,
     grand_tree_ladder_first = 56233,
     grand_tree_ladder_second = 56232,
@@ -70,7 +75,7 @@ return {
       name = "Ring of dueling(8)",
       quantity = 1,
       alternative_ids = { 2554, 2556, 2558, 2560, 2562, 2564, 2566 },
-      purchase = false,
+      maximum_unit_price = 10000,
     },
   },
   interfaces = {
@@ -82,9 +87,12 @@ return {
   },
   zones = {
     grand_tree = { x1 = 2420, x2 = 2505, y1 = 3460, y2 = 3525 },
+    stronghold_transport = { x1 = 2440, x2 = 2480, y1 = 3435, y2 = 3460, plane = 0 },
     gandius = { x1 = 2900, x2 = 3010, y1 = 2940, y2 = 3070, plane = 0 },
     shipyard = { x1 = 2945, x2 = 3000, y1 = 3016, y2 = 3060, plane = 0 },
     hangar = { x1 = 2360, x2 = 2420, y1 = 9860, y2 = 9910, plane = 0 },
     post_puzzle_hangar = { x1 = 2620, x2 = 2680, y1 = 4480, y2 = 4540, plane = 0 },
+    crash_island = { x1 = 2883, x2 = 2941, y1 = 2693, y2 = 2747, plane = 0 },
+    ape_atoll_south = { x1 = 2687, x2 = 2820, y1 = 2687, y2 = 2765, plane = 0 },
   },
 }

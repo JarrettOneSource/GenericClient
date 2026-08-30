@@ -2,6 +2,7 @@ local navigation = gc.require("monkey_madness_navigation")
 local interactions = gc.require("monkey_madness_interactions")
 local puzzle = gc.require("monkey_madness_puzzle")
 local preparation = gc.require("monkey_madness_preparation")
+local ape_atoll = gc.require("monkey_madness_ape_atoll")
 
 local function execute(phase, input)
   if phase == "start_quest" then
@@ -47,6 +48,9 @@ local function execute(phase, input)
     local prepared, failure = preparation.prepare(input and input.restock or "bank_only")
     if not prepared then return failure end
     return { status = "complete", result = "ape_atoll_loadout_prepared" }
+  end
+  if phase == "reach_ape_atoll" then
+    return ape_atoll.execute()
   end
   return { status = "rejected", result = "monkey_madness_phase_not_implemented:" .. tostring(phase) }
 end

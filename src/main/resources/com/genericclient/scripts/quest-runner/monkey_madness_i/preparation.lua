@@ -3,6 +3,48 @@ local preparation = gc.require("shared_preparation")
 local travel = gc.require("shared_travel")
 
 local ge = { x = 3165, y = 3491, plane = 0 }
+local dueling_ring_ids = { 2552, 2554, 2556, 2558, 2560, 2562, 2564, 2566 }
+
+local function current_ring_id()
+  local inventory = gc.read("inventory")
+  for _, id in ipairs(dueling_ring_ids) do
+    for _, item in ipairs(inventory.items or {}) do
+      if item.id == id and item.quantity > 0 then return id end
+    end
+  end
+  return nil
+end
+
+local function arm_safety()
+  local ring = current_ring_id()
+  if not ring then
+    return nil, { status = "monkey_madness_escape_ring_not_carried" }
+  end
+  local receipt = gc.await {
+    action = {
+      type = "safety.configure",
+      minimum_hitpoints = 4,
+      consumables = { { id = 379, action = "Eat", heal_amount = 12 } },
+      continue_after_consumable = true,
+      allow_overheal = true,
+      escape = {
+        type = "inventory_dialogue",
+        item_id = ring,
+        action = "Rub",
+        choice = "Castle Wars Arena",
+        x = 2440,
+        y = 3089,
+        plane = 0,
+        within = 10,
+      },
+    },
+    breaks = false,
+  }
+  if receipt.status ~= "complete" then
+    return nil, { status = "monkey_madness_safety_failed", receipt = receipt }
+  end
+  return true, receipt
+end
 
 local function at_castle_wars(world)
   return world and world.plane == 0 and
@@ -39,20 +81,13 @@ local function reach_ge_from_ferox()
 end
 
 local function prepare(restock)
-  local safety = gc.await {
-    action = {
-      type = "safety.configure",
-      minimum_hitpoints = 4,
-      consumables = { { id = 379, action = "Eat", heal_amount = 12 } },
-      continue_after_consumable = true,
-      allow_overheal = true,
-    },
-    breaks = false,
-  }
-  if safety.status ~= "complete" then
-    return nil, { status = "monkey_madness_preparation_safety_failed", receipt = safety }
-  end
   local world = gc.read("player").world
+  if current_ring_id() then
+    local armed, safety_error = arm_safety()
+    if not armed then return nil, safety_error end
+  elseif not at_castle_wars(world) and not at_ge(world) and not at_ferox(world) then
+    return nil, { status = "monkey_madness_escape_ring_not_carried" }
+  end
   if at_ferox(world) then
     local reached, failure = reach_ge_from_ferox()
     if not reached then return nil, failure end
@@ -66,11 +101,18 @@ local function prepare(restock)
       return nil, { status = "monkey_madness_bank_teleport_failed", receipt = teleported }
     end
   end
-  return preparation.prepare_items(
+  local prepared, failure = preparation.prepare_items(
     config.id,
     restock,
     config.ape_atoll_loadout,
     true)
+  if not prepared then return nil, failure end
+  local rearmed, rearm_error = arm_safety()
+  if not rearmed then return nil, rearm_error end
+  return true
 end
 
-return { prepare = prepare }
+return {
+  prepare = prepare,
+  arm_safety = arm_safety,
+}

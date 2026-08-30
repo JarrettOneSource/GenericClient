@@ -49,6 +49,47 @@ local function wait_for(predicate, ticks)
   return false
 end
 
+local function enter_grand_tree()
+  local world = gc.read("player").world
+  if world.y >= config.points.grand_tree_ladder_staging.y then
+    return { status = "complete", result = "grand_tree_already_entered" }
+  end
+  local reached_door = walk(config.points.grand_tree_door, 1)
+  if reached_door.status ~= "arrived" then return reached_door end
+  local door
+  for _, id in ipairs(config.objects.grand_tree_doors) do
+    door = object(id, "Open", 8)
+    if door then break end
+  end
+  local opened
+  if door then
+    gc.activity("travel")
+    opened = gc.await {
+      action = {
+        type = "object.interact",
+        id = door.id,
+        action = "Open",
+        world = door.world,
+        within = 8,
+      },
+      breaks = true,
+      timeout = { game_ticks = 40 },
+    }
+    if opened.status ~= "dispatched" then return opened end
+    gc.await { event = "game.tick" }
+  end
+  local crossed = walk(config.points.grand_tree_ladder_staging, 0)
+  if crossed.status ~= "arrived" then
+    return {
+      status = "monkey_madness_grand_tree_entry_failed",
+      opened = opened,
+      crossed = crossed,
+      player = gc.read("player"),
+    }
+  end
+  return { status = "complete", result = "grand_tree_entered", opened = opened }
+end
+
 local function climb_to_top()
   for _ = 1, 4 do
     local world = gc.read("player").world
@@ -144,10 +185,16 @@ local function fly_to_gandius()
 end
 
 local function travel_to_gnome_stronghold()
-  if in_zone(gc.read("player").world, config.zones.grand_tree) then
+  if in_zone(gc.read("player").world, config.zones.grand_tree) or
+    in_zone(gc.read("player").world, config.zones.stronghold_transport) then
     return { status = "complete", result = "grand_tree_already_reached" }
   end
   local tree = object(config.objects.spirit_tree, "Travel", 14)
+  if not tree then
+    local reached = walk(config.points.ge_spirit_tree, 5)
+    if reached.status ~= "arrived" then return reached end
+    tree = object(config.objects.spirit_tree, "Travel", 14)
+  end
   if not tree then
     return {
       status = "monkey_madness_spirit_tree_not_observed",
@@ -176,8 +223,10 @@ local function travel_to_gnome_stronghold()
   }
   if selected.status ~= "dispatched" then return selected end
   if not wait_for(function()
-    return in_zone(gc.read("player").world, config.zones.grand_tree)
-  end, 40) then
+    local world = gc.read("player").world
+    return in_zone(world, config.zones.grand_tree) or
+      in_zone(world, config.zones.stronghold_transport)
+  end, 80) then
     return {
       status = "monkey_madness_spirit_tree_arrival_unverified",
       receipt = selected,
@@ -338,7 +387,8 @@ local function reach_daero()
   local target = npc(config.npcs.daero, 24)
   if target then return target end
   local world = gc.read("player").world
-  if not in_zone(world, config.zones.grand_tree) then
+  if not in_zone(world, config.zones.grand_tree) and
+    not in_zone(world, config.zones.stronghold_transport) then
     return nil, { status = "monkey_madness_daero_resume_location_unknown", player = world }
   end
   if world.plane > 1 then
@@ -347,6 +397,14 @@ local function reach_daero()
     world = gc.read("player").world
   end
   if world.plane == 0 then
+    if world.y < config.points.grand_tree_entrance.y then
+      local entered = walk(config.points.grand_tree_entrance, 0)
+      if entered.status ~= "arrived" then return nil, entered end
+      world = gc.read("player").world
+    end
+    local entered = enter_grand_tree()
+    if entered.status ~= "complete" then return nil, entered end
+    world = gc.read("player").world
     local ladder = object(config.objects.grand_tree_ladder_bottom, "Climb-up", 14)
     if not ladder then
       return nil, {
