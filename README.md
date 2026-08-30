@@ -115,9 +115,8 @@ level-up handling, and a compact XP/hour/ETA overlay.
 House, Waterfall Quest, Tree Gnome Village, and Fight Arena are isolated in
 their own folders and live-proven through normalized completion. The Grand Tree
 has its own folder and is live-proven through Hazelmere, the translated report,
-Glough's journal, and the prison-cell transition at quest varp 80.
-The current live stop is safely outside the Karamja shipyard gate after the
-glider escape.
+Glough's journal, the prison-cell transition, and the Karamja shipyard interview.
+The current live stop is varp 90 with the lumber order verified.
 
 The current scripting interface intentionally contains only:
 

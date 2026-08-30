@@ -16,6 +16,11 @@ local function in_cell(world)
   return world and world.plane == 3 and world.x == 2464 and world.y == 3496
 end
 
+local function in_shipyard(world)
+  return world and world.plane == 0 and world.x >= 2945 and world.x <= 3007 and
+    world.y >= 3015 and world.y <= 3070
+end
+
 local function resolve(state)
   if state.quests.the_grand_tree and state.quests.the_grand_tree.state == "finished" then
     return "complete"
@@ -48,11 +53,12 @@ local function resolve(state)
     if state.player.world.plane == 0 and state.player.world.x >= 2900 and
       state.player.world.x <= 3010 and state.player.world.y >= 2950 and
       state.player.world.y <= 3070 then
-      return "shipyard_checkpoint"
+      if in_shipyard(state.player.world) then return "talk_foreman" end
+      return "enter_shipyard"
     end
     return "unknown_stage"
   end
-  if state.varp > 80 then return "shipyard_checkpoint" end
+  if state.varp >= 90 then return "lumber_order_checkpoint" end
   return "unknown_stage"
 end
 

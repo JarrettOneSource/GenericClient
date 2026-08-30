@@ -235,14 +235,15 @@ proof survived a logout-length break, a Mime interruption, exact mid-course
 resume, and stopped after the threshold-crossing obstacle. The Mime event
 unlocked Lean and produced a registered standalone solver.
 
-The Grand Tree is now in progress at varp 80. Quest Runner opened the Grand
+The Grand Tree is now in progress at varp 90. Quest Runner opened the Grand
 Tree door, handled the low-combat quest warning, reached Hazelmere from Castle
 Wars through both Yanille gates and the island bridges, used emergency food
 under jungle-spider pressure, translated Hazelmere's report for King Narnode,
 warned Glough, questioned Charlie, obtained Glough's journal, confronted Glough,
 the guard moved the player into Charlie's cell, completed Charlie's cell
-dialogue, and took Captain Errdo's glider to Karamja. The current safe stop is
-outside the shipyard gate at `(2941, 3041, 0)`.
+dialogue, took Captain Errdo's glider to Karamja, entered the shipyard with the
+passphrase, and answered the foreman's questions. Item 787 and varp 90 verify
+the lumber-order checkpoint; the account is safely idle in the shipyard office.
 
 Sources:
 
@@ -282,6 +283,6 @@ Reference surfaces used for this envelope:
 
 ## Next evidence gate
 
-Continue The Grand Tree from the varp-80 shipyard-gate checkpoint. Restock food only when
+Continue The Grand Tree from the varp-90 lumber-order checkpoint. Restock food only when
 its next live phase requires it, before the eventual combat section. Continue enforcing exact
 Attack, Defence, and Prayer caps and the 5,000,000-coin reserve.

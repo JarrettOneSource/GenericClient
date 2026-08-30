@@ -18,6 +18,7 @@ return {
     glough_upstairs = { x = 2476, y = 3463, plane = 1 },
     glough_room = { x = 2483, y = 3463, plane = 1 },
     grand_tree_top = { x = 2466, y = 3495, plane = 3 },
+    shipyard_foreman = { x = 3000, y = 3044, plane = 0 },
   },
   return_route = {
     { x = 2505, y = 3190, plane = 0 },
@@ -35,6 +36,7 @@ return {
     glough = { 2061, 1424 },
     charlie = { 1428, 122 },
     captain_errdo = { 10467 },
+    shipyard_foreman = { 1429 },
   },
   objects = {
     hazelmere_ladder = 16683,
@@ -44,8 +46,11 @@ return {
     grand_tree_ladder_top = 56229,
     glough_cupboard_closed = 2434,
     glough_cupboard_open = 2435,
+    shipyard_gate_left = 2438,
+    shipyard_gate_right = 2439,
   },
   items = {
     glough_journal = 785,
+    lumber_order = 787,
   },
 }

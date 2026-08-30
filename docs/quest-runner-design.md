@@ -2,7 +2,7 @@
 
 Status: four modular quest definitions are live-proven end to end: Witch's
 House, Waterfall Quest, Tree Gnome Village, and Fight Arena. The Grand Tree is
-live-proven through its Karamja shipyard-gate checkpoint at varp 80.
+live-proven through its lumber-order checkpoint at varp 90.
 
 ## Decision
 
@@ -208,8 +208,9 @@ The Grand Tree added live evidence for resumable open dialogue, low-combat quest
 confirmation, static-map door staging, Castle Wars return routing, repeated
 translation choices, same-ID ladder approaches, hostile-floor safety
 preservation, repeated same-varp location reduction, and post-break semantic
-target reacquisition. Its current stable stop is varp 80 safely outside the
-Karamja shipyard gate.
+target reacquisition. Shipyard proof adds a dialogue-gated object transition,
+an in-yard walk, resumable NPC dialogue, and item-plus-varp completion evidence.
+Its current stable stop is varp 90 with the lumber order verified.
 
 Quest-specific evidence and exact phase tables live in
 [`witchs-house-quest-runner.md`](witchs-house-quest-runner.md) and

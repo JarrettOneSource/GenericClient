@@ -35,7 +35,7 @@ local function finish_dialogue(predicate, choices, since_tick)
     gc.await { event = "game.tick" }
     for _, message in ipairs(gc.read("messages", { since_tick = since_tick, limit = 10 })) do
       if string.find(string.lower(message.text or ""), "can't reach that", 1, true) then
-        return nil, { status = "king_narnode_unreachable", message = message }
+        return nil, { status = "grand_tree_target_unreachable", message = message }
       end
     end
     progressed = progressed or predicate()
@@ -568,6 +568,77 @@ local function take_glider_to_karamja()
   return { status = "complete", result = "karamja_glider_verified", receipt = clicked }
 end
 
+local function in_shipyard()
+  local world = gc.read("player").world
+  return world.plane == 0 and world.x >= 2945 and world.x <= 3007 and
+    world.y >= 3015 and world.y <= 3070
+end
+
+local function enter_shipyard()
+  if in_shipyard() then
+    return { status = "complete", result = "shipyard_already_entered" }
+  end
+  local gate = object(config.objects.shipyard_gate_left, "Open", 12) or
+    object(config.objects.shipyard_gate_right, "Open", 12)
+  if not gate then
+    return {
+      status = "shipyard_gate_not_observed",
+      objects = gc.read("objects", { within = 12, limit = 40 }),
+    }
+  end
+  local started_tick = gc.read("runtime").game_tick
+  local clicked = gc.await {
+    action = {
+      type = "object.interact",
+      id = gate.id,
+      action = "Open",
+      world = gate.world,
+      within = 12,
+    },
+    breaks = true,
+    timeout = { game_ticks = 40 },
+  }
+  if clicked.status ~= "dispatched" then return clicked end
+  local finished, failure = finish_dialogue(
+    in_shipyard,
+    { "Glough sent me.", "Ka.", "Lu.", "Min." },
+    started_tick)
+  if not finished then return failure end
+  return { status = "complete", result = "shipyard_entry_verified", receipt = clicked }
+end
+
+local function talk_shipyard_foreman()
+  if has_inventory_item(config.items.lumber_order) then
+    return { status = "complete", result = "lumber_order_already_owned" }
+  end
+  local started_tick = gc.read("runtime").game_tick
+  local clicked = { status = "dispatched", result = "resumed_open_dialogue" }
+  if not gc.read("dialogue").open then
+    local target = npc(config.npcs.shipyard_foreman, 20, true)
+    if not target then
+      return {
+        status = "shipyard_foreman_not_reachable",
+        nearby = gc.read("npcs", { within = 20, limit = 30 }),
+      }
+    end
+    clicked = gc.await {
+      action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 20 },
+      breaks = false,
+      timeout = { game_ticks = 40 },
+    }
+    if clicked.status ~= "dispatched" then return clicked end
+  end
+  local finished, failure = finish_dialogue(
+    function()
+      local vars = gc.read("vars", { varps = { config.varp } })
+      return vars.varps[config.varp] >= 90 or has_inventory_item(config.items.lumber_order)
+    end,
+    { "Sadly his wife is no longer with us!", "He loves worm holes.", "Anita." },
+    started_tick)
+  if not finished then return failure end
+  return { status = "complete", result = "lumber_order_obtained", receipt = clicked }
+end
+
 return {
   npc = npc,
   talk_narnode = talk_narnode,
@@ -585,4 +656,6 @@ return {
   talk_glough_again = talk_glough_again,
   talk_charlie_from_cell = talk_charlie_from_cell,
   take_glider_to_karamja = take_glider_to_karamja,
+  enter_shipyard = enter_shipyard,
+  talk_shipyard_foreman = talk_shipyard_foreman,
 }

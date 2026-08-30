@@ -44,8 +44,8 @@ local function run(input)
     initial_phase == "unknown_stage" then
     return terminal(initial_phase, initial)
   end
-  if initial_phase == "shipyard_checkpoint" then
-    return terminal("shipyard_checkpoint", initial)
+  if initial_phase == "lumber_order_checkpoint" then
+    return terminal("lumber_order_checkpoint", initial)
   end
 
   local safety = gc.await {
@@ -66,7 +66,7 @@ local function run(input)
 
   gc.overlay {
     { label = "Quest", value = config.label },
-    { label = "Phase", value = "Start quest" },
+    { label = "Phase", value = initial_phase },
   }
   local receipt = quest.execute(initial_phase)
   if not receipt or receipt.status ~= "complete" then
@@ -77,8 +77,8 @@ local function run(input)
     local state = read()
     local phase = state_module.resolve(state)
     if phase ~= initial_phase then
-      if phase == "shipyard_checkpoint" then
-        return terminal("shipyard_checkpoint", state, receipt)
+      if phase == "lumber_order_checkpoint" then
+        return terminal("lumber_order_checkpoint", state, receipt)
       end
       return terminal(phase, state, receipt)
     end

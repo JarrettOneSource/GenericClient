@@ -48,6 +48,14 @@ local function execute(phase)
   if phase == "escape_by_glider" then
     return interactions.take_glider_to_karamja()
   end
+  if phase == "enter_shipyard" then
+    return interactions.enter_shipyard()
+  end
+  if phase == "talk_foreman" then
+    local reached, failure = navigation.reach_shipyard_foreman()
+    if not reached then return failure end
+    return interactions.talk_shipyard_foreman()
+  end
   return { status = "rejected", result = "grand_tree_phase_not_implemented:" .. tostring(phase) }
 end
 

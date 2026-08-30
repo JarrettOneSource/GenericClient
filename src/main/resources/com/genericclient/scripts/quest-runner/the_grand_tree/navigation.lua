@@ -199,6 +199,26 @@ local function return_to_glough_for_journal()
   return reach_glough()
 end
 
+local function reach_shipyard_foreman()
+  if interactions.npc(config.npcs.shipyard_foreman, 20, true) then return true end
+  local player = gc.read("player").world
+  if player.plane ~= 0 or player.x < 2945 or player.x > 3007 or
+    player.y < 3015 or player.y > 3070 then
+    return nil, { status = "shipyard_not_entered", player = player }
+  end
+  gc.activity("travel")
+  local reached = walk(config.points.shipyard_foreman, 3)
+  if reached.status ~= "arrived" then
+    return nil, { status = "shipyard_foreman_travel_failed", receipt = reached }
+  end
+  if interactions.npc(config.npcs.shipyard_foreman, 20, true) then return true end
+  return nil, {
+    status = "shipyard_foreman_not_observed_after_travel",
+    player = gc.read("player"),
+    nearby = gc.read("npcs", { within = 20, limit = 30 }),
+  }
+end
+
 return {
   reach_narnode = reach_narnode,
   reach_hazelmere = reach_hazelmere,
@@ -207,4 +227,5 @@ return {
   return_after_glough = return_after_glough,
   reach_charlie = reach_charlie,
   return_to_glough_for_journal = return_to_glough_for_journal,
+  reach_shipyard_foreman = reach_shipyard_foreman,
 }
