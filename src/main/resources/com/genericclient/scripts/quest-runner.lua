@@ -11,14 +11,19 @@ local witch_completion = gc.require("witch_completion")
 local waterfall_config = gc.require("waterfall_config")
 local waterfall_state = gc.require("waterfall_state")
 local waterfall_quest = gc.require("waterfall_quest")
+local tree_gnome_config = gc.require("tree_gnome_config")
+local tree_gnome_state = gc.require("tree_gnome_state")
+local tree_gnome_runner = gc.require("tree_gnome_runner")
 
 local quest_labels = {
   witchs_house = witch_config.label,
   waterfall = waterfall_config.label,
+  tree_gnome_village = tree_gnome_config.label,
 }
 local state_modules = {
   witchs_house = witch_state,
   waterfall = waterfall_state,
+  tree_gnome_village = tree_gnome_state,
 }
 local waterfall_checkpoints = {
   accept = 1,
@@ -110,6 +115,7 @@ return {
       choices = {
         { value = "witchs_house", label = "Witch's House" },
         { value = "waterfall", label = "Waterfall Quest" },
+        { value = "tree_gnome_village", label = "Tree Gnome Village" },
       },
     },
     {
@@ -140,6 +146,10 @@ return {
 
   run = function(input)
     assert(quest_labels[input.quest], "Unknown quest")
+    gc.activity("questing")
+    if input.quest == "tree_gnome_village" then
+      return tree_gnome_runner.run(input)
+    end
     gc.await { event = "game.tick" }
 
     local initial = read_state(input.quest)

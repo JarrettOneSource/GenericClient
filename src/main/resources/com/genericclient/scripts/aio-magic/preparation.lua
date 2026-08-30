@@ -38,13 +38,18 @@ local function open_bank()
   local function click_bank()
     return gc.await {
       action = { type = "npc.interact", name = "Banker", action = "Bank", within = 10 },
+      activity = "banking",
       breaks = true,
       timeout = { game_ticks = 30 },
     }
   end
   local receipt = click_bank()
   if receipt.status ~= "dispatched" then
-    gc.await { action = { type = "ui.close" }, breaks = true }
+    gc.await {
+      action = { type = "ui.close" },
+      activity = "banking",
+      breaks = true,
+    }
     wait_ticks(2)
     receipt = click_bank()
   end
@@ -107,6 +112,7 @@ local function acquire_missing(missing, target)
       action = "Exchange",
       within = 10,
     },
+    activity = "trading",
     breaks = true,
     timeout = { game_ticks = 30 },
   }
@@ -134,7 +140,11 @@ local function acquire_missing(missing, target)
     end
   end
 
-  gc.await { action = { type = "ui.close" }, breaks = true }
+  gc.await {
+    action = { type = "ui.close" },
+    activity = "trading",
+    breaks = true,
+  }
   wait_ticks(2)
   return true
 end

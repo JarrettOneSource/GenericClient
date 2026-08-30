@@ -1,5 +1,6 @@
 package com.genericclient;
 
+import com.google.gson.annotations.SerializedName;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -9,7 +10,12 @@ final class GenericClientBehaviorOverrides
 	static final String SCHEMA = "genericclient_behavior_overrides.v1";
 
 	private String schema = SCHEMA;
-	private double shortReleaseProbability;
+	@SerializedName(
+		value = "micro_break_probability",
+		alternate = {"shortReleaseProbability", "short_release_probability"})
+	private double microBreakProbability;
+	@SerializedName("cursor_release_probability")
+	private Double cursorReleaseProbability;
 	private double shortBodyMedianSeconds;
 	private double shortTailProbability;
 	private double longCadenceMinutes;
@@ -26,7 +32,8 @@ final class GenericClientBehaviorOverrides
 	}
 
 	GenericClientBehaviorOverrides(
-		double shortReleaseProbability,
+		double microBreakProbability,
+		double cursorReleaseProbability,
 		double shortBodyMedianSeconds,
 		double shortTailProbability,
 		double longCadenceMinutes,
@@ -38,7 +45,8 @@ final class GenericClientBehaviorOverrides
 		int mouseMoveDurationMillis,
 		int typingWordsPerMinute)
 	{
-		this.shortReleaseProbability = shortReleaseProbability;
+		this.microBreakProbability = microBreakProbability;
+		this.cursorReleaseProbability = cursorReleaseProbability;
 		this.shortBodyMedianSeconds = shortBodyMedianSeconds;
 		this.shortTailProbability = shortTailProbability;
 		this.longCadenceMinutes = longCadenceMinutes;
@@ -55,7 +63,8 @@ final class GenericClientBehaviorOverrides
 	static GenericClientBehaviorOverrides fromProfile(GenericClientBehaviorProfile profile)
 	{
 		return new GenericClientBehaviorOverrides(
-			profile.getShortReleaseProbability(),
+			profile.getMicroBreakProbability(),
+			profile.getCursorReleaseProbability(),
 			profile.getShortBodyMedianSeconds(),
 			profile.getShortTailProbability(),
 			profile.getLongCadenceMinutes(),
@@ -74,7 +83,11 @@ final class GenericClientBehaviorOverrides
 		{
 			throw new IllegalArgumentException("Unsupported behavior override schema");
 		}
-		requireRange(shortReleaseProbability, 0.0, 1.0, "Micro chance");
+		requireRange(microBreakProbability, 0.0, 1.0, "Micro chance");
+		if (cursorReleaseProbability != null)
+		{
+			requireRange(cursorReleaseProbability, 0.0, 1.0, "Cursor release chance");
+		}
 		requireRange(shortBodyMedianSeconds, 1.0, 119.0, "Typical micro duration");
 		requireRange(shortTailProbability, 0.0, 1.0, "Long micro chance");
 		requireRange(longCadenceMinutes, 20.0, 1_440.0, "Long-break interval");
@@ -107,9 +120,16 @@ final class GenericClientBehaviorOverrides
 		}
 	}
 
-	double getShortReleaseProbability()
+	double getMicroBreakProbability()
 	{
-		return shortReleaseProbability;
+		return microBreakProbability;
+	}
+
+	double getCursorReleaseProbability()
+	{
+		return cursorReleaseProbability == null
+			? microBreakProbability
+			: cursorReleaseProbability;
 	}
 
 	double getShortBodyMedianSeconds()
@@ -166,7 +186,8 @@ final class GenericClientBehaviorOverrides
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
 		value.put("schema", schema);
-		value.put("short_release_probability", shortReleaseProbability);
+		value.put("micro_break_probability", microBreakProbability);
+		value.put("cursor_release_probability", getCursorReleaseProbability());
 		value.put("short_body_median_seconds", shortBodyMedianSeconds);
 		value.put("short_tail_probability", shortTailProbability);
 		value.put("long_cadence_minutes", longCadenceMinutes);

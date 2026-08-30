@@ -54,7 +54,7 @@ final class GenericClientAutocastInput
 		this.reporter = reporter;
 	}
 
-	CompletableFuture<Map<String, Object>> set(String spellName, boolean breaksEnabled)
+	CompletableFuture<Map<String, Object>> set(String spellName, GenericClientActivityContext activityContext)
 	{
 		GenericClientSpellInput.Spell spell = GenericClientSpellInput.Spell.fromName(spellName);
 		if (!spell.isAutocastable())
@@ -65,7 +65,7 @@ final class GenericClientAutocastInput
 
 		List<Map<String, Object>> steps = new ArrayList<>();
 		reporter.accept("AUTOCAST_SELECTING spell=" + spell.getName());
-		return ensureCombatTab(breaksEnabled, steps).thenCompose(tabReady ->
+		return ensureCombatTab(activityContext, steps).thenCompose(tabReady ->
 		{
 			if (!tabReady)
 			{
@@ -78,7 +78,7 @@ final class GenericClientAutocastInput
 					return CompletableFuture.completedFuture(
 						receipt("unchanged", "autocast_already_selected", spell, steps));
 				}
-				return click(this::resolveAutocastButton, breaksEnabled, steps).thenCompose(opened ->
+				return click(this::resolveAutocastButton, activityContext, steps).thenCompose(opened ->
 				{
 					if (!opened)
 					{
@@ -93,7 +93,7 @@ final class GenericClientAutocastInput
 							}
 							return click(
 								() -> resolveAutocastSpell(spell),
-								breaksEnabled,
+								activityContext,
 								steps).thenCompose(selected ->
 							{
 								if (!selected)
@@ -121,23 +121,23 @@ final class GenericClientAutocastInput
 	}
 
 	private CompletableFuture<Boolean> ensureCombatTab(
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		List<Map<String, Object>> steps)
 	{
 		return clientRead(() -> visibleWidget(InterfaceID.CombatInterface.AUTOCAST_NORMAL) != null)
 			.thenCompose(visible -> visible
 				? CompletableFuture.completedFuture(true)
-				: click(this::resolveCombatTab, breaksEnabled, steps).thenCompose(clicked -> clicked
+				: click(this::resolveCombatTab, activityContext, steps).thenCompose(clicked -> clicked
 					? waitFor(() -> visibleWidget(InterfaceID.CombatInterface.AUTOCAST_NORMAL) != null)
 					: CompletableFuture.completedFuture(false)));
 	}
 
 	private CompletableFuture<Boolean> click(
 		GenericClientMenuInput.TargetResolver resolver,
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		List<Map<String, Object>> steps)
 	{
-		return menuInput.interactDirect(resolver, breaksEnabled).thenCompose(step ->
+		return menuInput.interactDirect(resolver, activityContext).thenCompose(step ->
 		{
 			steps.add(step);
 			if (!"dispatched".equals(step.get("status")))

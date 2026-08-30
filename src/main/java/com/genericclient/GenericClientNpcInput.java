@@ -58,9 +58,9 @@ final class GenericClientNpcInput
 		String name,
 		String action,
 		int within,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		return interact(null, name, action, within, breaksEnabled);
+		return interact(null, name, action, within, activityContext);
 	}
 
 	CompletableFuture<Map<String, Object>> interact(
@@ -68,7 +68,7 @@ final class GenericClientNpcInput
 		String name,
 		String action,
 		int within,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		if (id != null && id < 0)
 		{
@@ -82,7 +82,7 @@ final class GenericClientNpcInput
 		String cleanAction = requireText(action, "NPC action");
 		validateRadius(within);
 		return interactWithCamera(
-			cleanName, id, cleanAction, within, null, breaksEnabled);
+			cleanName, id, cleanAction, within, null, activityContext);
 	}
 
 	CompletableFuture<Map<String, Object>> useSelectedItemOnNpc(
@@ -91,7 +91,7 @@ final class GenericClientNpcInput
 		int within,
 		int itemId,
 		String itemName,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		validateRadius(within);
 		return interactWithCamera(
@@ -100,7 +100,7 @@ final class GenericClientNpcInput
 			"Use",
 			within,
 			SelectedWidget.item(itemId, itemName),
-			breaksEnabled);
+			activityContext);
 	}
 
 	CompletableFuture<Map<String, Object>> castSelectedSpellOnNpc(
@@ -109,7 +109,7 @@ final class GenericClientNpcInput
 		int within,
 		int spellWidgetId,
 		String spellName,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		validateRadius(within);
 		return interactWithCamera(
@@ -118,7 +118,7 @@ final class GenericClientNpcInput
 			"Cast",
 			within,
 			SelectedWidget.spell(spellWidgetId, spellName),
-			breaksEnabled);
+			activityContext);
 	}
 
 	private CompletableFuture<Map<String, Object>> interactWithCamera(
@@ -127,13 +127,13 @@ final class GenericClientNpcInput
 		String action,
 		int within,
 		SelectedWidget requestedSelection,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		GenericClientMenuInput.TargetResolver resolver = () -> resolveNpc(
 			name, id, action, within, requestedSelection);
-		return menuInput.interact(resolver, breaksEnabled).thenCompose(receipt ->
+		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
 			retryWithCamera(
-				resolver, receipt, name, id, within, breaksEnabled, 0));
+				resolver, receipt, name, id, within, activityContext, 0));
 	}
 
 	private CompletableFuture<Map<String, Object>> retryWithCamera(
@@ -142,7 +142,7 @@ final class GenericClientNpcInput
 		String name,
 		Integer id,
 		int within,
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		int cameraAttempt)
 	{
 		if (!isCameraRetryable(receipt.get("result")) ||
@@ -156,9 +156,9 @@ final class GenericClientNpcInput
 			{
 				return CompletableFuture.completedFuture(receipt);
 			}
-			return menuInput.interact(resolver, breaksEnabled)
+			return menuInput.interact(resolver, activityContext)
 				.thenCompose(next -> retryWithCamera(
-					resolver, next, name, id, within, breaksEnabled, cameraAttempt + 1));
+					resolver, next, name, id, within, activityContext, cameraAttempt + 1));
 		});
 	}
 

@@ -228,7 +228,8 @@ public final class GenericClientPlugin extends Plugin
 			client, clientThread, executor, menuInput);
 		dialogueInput = new GenericClientDialogueInput(client, menuInput);
 		emergencyController = new GenericClientEmergencyController(
-			(itemId, action) -> inventoryInput.interact(itemId, null, action, false),
+			(itemId, action) -> inventoryInput.interact(
+				itemId, null, action, GenericClientActivityContext.none()),
 			this::startEmergencyEscape,
 			behaviorController::endActiveBreak,
 			this::stopForEmergency,
@@ -850,7 +851,7 @@ public final class GenericClientPlugin extends Plugin
 			@Override
 			public void walkToRandomTile()
 			{
-				gameInput.walkToRandomTile(false);
+				gameInput.walkToRandomTile(GenericClientActivityContext.none());
 			}
 
 			@Override
@@ -1044,7 +1045,7 @@ public final class GenericClientPlugin extends Plugin
 			return java.util.concurrent.CompletableFuture.completedFuture(receipt);
 		}
 		java.util.concurrent.CompletableFuture<Map<String, Object>> walk = activeWalker.walkTo(
-			escape.getDestination(), escape.getWithin(), 300, false);
+			escape.getDestination(), escape.getWithin(), 300, GenericClientActivityContext.none());
 		walk.whenComplete((receipt, error) -> publishResult(error == null
 			? "EMERGENCY_ESCAPE_COMPLETED status=" + receipt.get("status")
 			: "EMERGENCY_ESCAPE_FAILED message=" + error.getMessage()));

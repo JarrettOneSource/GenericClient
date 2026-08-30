@@ -34,6 +34,13 @@
       "random_events": [5426]
     },
     {
+      "id": "count-check",
+      "name": "Count Check",
+      "description": "Complete Count Check's account-security check from observed dialogue.",
+      "file": "count-check.lua",
+      "random_events": [12551, 12552]
+    },
+    {
       "id": "pinball",
       "name": "Pinball",
       "description": "Play Flippa's pinball game from the live target and score state.",
@@ -49,6 +56,13 @@
           "shared_preparation": "quest-runner/shared/preparation.lua",
           "shared_state": "quest-runner/shared/state.lua",
           "shared_travel": "quest-runner/shared/travel.lua",
+          "tree_gnome_combat": "quest-runner/tree_gnome_village/combat.lua",
+          "tree_gnome_config": "quest-runner/tree_gnome_village/config.lua",
+          "tree_gnome_interactions": "quest-runner/tree_gnome_village/interactions.lua",
+          "tree_gnome_navigation": "quest-runner/tree_gnome_village/navigation.lua",
+          "tree_gnome_quest": "quest-runner/tree_gnome_village/quest.lua",
+          "tree_gnome_runner": "quest-runner/tree_gnome_village/runner.lua",
+          "tree_gnome_state": "quest-runner/tree_gnome_village/state.lua",
           "witch_combat": "quest-runner/witchs_house/combat.lua",
           "witch_completion": "quest-runner/witchs_house/completion.lua",
           "witch_config": "quest-runner/witchs_house/config.lua",

@@ -133,6 +133,7 @@ return {
       return { status = "training_travel_failed", receipt = travel_error }
     end
     gc.phase("magic." .. method_id .. ".arrived")
+    gc.activity("combat")
 
     local stop_requested = false
     local configured_spell = nil

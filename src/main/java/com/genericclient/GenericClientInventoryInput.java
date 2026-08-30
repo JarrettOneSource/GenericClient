@@ -51,7 +51,7 @@ final class GenericClientInventoryInput
 		int itemId,
 		Integer requestedSlot,
 		String action,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		if (itemId < 0)
 		{
@@ -65,17 +65,17 @@ final class GenericClientInventoryInput
 		CompletableFuture<Boolean> inventoryVisible = new CompletableFuture<>();
 		clientThread.invoke(() -> inventoryVisible.complete(visibleInventory() != null));
 		return inventoryVisible.thenCompose(visible -> visible
-			? interactVisible(itemId, requestedSlot, cleanAction, breaksEnabled)
-			: openInventoryThenInteract(itemId, requestedSlot, cleanAction, breaksEnabled));
+			? interactVisible(itemId, requestedSlot, cleanAction, activityContext)
+			: openInventoryThenInteract(itemId, requestedSlot, cleanAction, activityContext));
 	}
 
 	private CompletableFuture<Map<String, Object>> openInventoryThenInteract(
 		int itemId,
 		Integer requestedSlot,
 		String action,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		return menuInput.interactDirect(this::resolveInventoryTab, breaksEnabled).thenCompose(tabReceipt ->
+		return menuInput.interactDirect(this::resolveInventoryTab, activityContext).thenCompose(tabReceipt ->
 		{
 			if (!wasDispatched(tabReceipt))
 			{
@@ -86,10 +86,10 @@ final class GenericClientInventoryInput
 				if (!visible)
 				{
 					return retryInventoryThenInteract(
-						itemId, requestedSlot, action, breaksEnabled).thenApply(retry ->
+						itemId, requestedSlot, action, activityContext).thenApply(retry ->
 							compositeReceipt("open_inventory_then_item", tabReceipt, retry));
 				}
-				return interactVisible(itemId, requestedSlot, action, breaksEnabled)
+				return interactVisible(itemId, requestedSlot, action, activityContext)
 					.thenApply(itemReceipt -> compositeReceipt(
 						"open_inventory_then_item", tabReceipt, itemReceipt));
 			});
@@ -100,9 +100,9 @@ final class GenericClientInventoryInput
 		int itemId,
 		Integer requestedSlot,
 		String action,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		return menuInput.interactDirect(this::resolveInventoryTab, breaksEnabled).thenCompose(tabReceipt ->
+		return menuInput.interactDirect(this::resolveInventoryTab, activityContext).thenCompose(tabReceipt ->
 		{
 			if (!wasDispatched(tabReceipt))
 			{
@@ -117,7 +117,7 @@ final class GenericClientInventoryInput
 						tabReceipt,
 						rejected("inventory_did_not_open")));
 				}
-				return interactVisible(itemId, requestedSlot, action, breaksEnabled)
+				return interactVisible(itemId, requestedSlot, action, activityContext)
 					.thenApply(itemReceipt -> compositeReceipt(
 						"retry_inventory_then_item", tabReceipt, itemReceipt));
 			});
@@ -154,12 +154,12 @@ final class GenericClientInventoryInput
 		int itemId,
 		Integer requestedSlot,
 		String action,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return waitForItem(itemId, requestedSlot, action).thenCompose(ignored ->
 			menuInput.interact(
 				() -> resolveItem(itemId, requestedSlot, action),
-				breaksEnabled));
+				activityContext));
 	}
 
 	private CompletableFuture<Boolean> waitForItem(
@@ -194,7 +194,11 @@ final class GenericClientInventoryInput
 				receipt.put("click_count", 0L);
 				return CompletableFuture.completedFuture(receipt);
 			}
-			return interact(itemId, requestedSlot, "Use", false).thenCompose(clicked ->
+			return interact(
+				itemId,
+				requestedSlot,
+				"Use",
+				GenericClientActivityContext.none()).thenCompose(clicked ->
 			{
 				if (!"dispatched".equals(clicked.get("status")))
 				{

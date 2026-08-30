@@ -52,6 +52,7 @@ return {
   },
 
   run = function(input)
+    gc.activity("travel")
     local place = places[input.destination]
     assert(place, "Unknown Walker destination: " .. tostring(input.destination))
 

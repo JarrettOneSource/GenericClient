@@ -53,7 +53,7 @@ final class GenericClientQuestActions
 	CompletableFuture<Map<String, Object>> execute(
 		String type,
 		Map<String, Object> action,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		switch (type)
 		{
@@ -63,39 +63,39 @@ final class GenericClientQuestActions
 					requiredText(action, "action", type),
 					optionalWorld(action, type),
 					within(action, type),
-					breaksEnabled);
+					activityContext);
 			case "item.interact":
 				return inventoryInput.interact(
 					requiredInt(action, "id", type),
 					optionalSlot(action, type),
 					requiredText(action, "action", type),
-					breaksEnabled);
+					activityContext);
 			case "equipment.interact":
 				return equipmentInput.interact(
 					requiredInt(action, "id", type),
 					requiredText(action, "action", type),
-					breaksEnabled);
+					activityContext);
 			case "item.use_on_object":
-				return useItemOnObject(action, breaksEnabled);
+				return useItemOnObject(action, activityContext);
 			case "item.use_on_npc":
-				return useItemOnNpc(action, breaksEnabled);
+				return useItemOnNpc(action, activityContext);
 			case "ground_item.take":
 				return groundItemInput.take(
 					requiredInt(action, "id", type),
 					optionalWorld(action, type),
 					within(action, type),
-					breaksEnabled);
+					activityContext);
 			case "dialogue.continue":
-				return dialogueInput.continueDialogue(breaksEnabled);
+				return dialogueInput.continueDialogue(activityContext);
 			case "dialogue.choose":
 				return dialogueInput.choose(
-					requiredText(action, "text", type), breaksEnabled);
+					requiredText(action, "text", type), activityContext);
 			case "bank.loadout":
 				return bankInput.loadout(
 					bankRequirements(action),
 					boundedInt(action, "minimum_free_slots", 0, 28, 0, type),
 					optionalBoolean(action, "close", true, type),
-					breaksEnabled);
+					activityContext);
 			case "ge.buy":
 				return grandExchangeInput.buy(
 					requiredInt(action, "item_id", type),
@@ -107,20 +107,20 @@ final class GenericClientQuestActions
 						"minimum_cash_reserve",
 						GenericClientGrandExchangeInput.HARD_MINIMUM_CASH_RESERVE,
 						type),
-					breaksEnabled);
+					activityContext);
 			case "combat.cast":
 				return spellInput.castOnNpc(
 					requiredText(action, "spell", type),
 					optionalInt(action, "npc_id", type),
 					optionalText(action.get("npc_name")),
 					within(action, type),
-					breaksEnabled);
+					activityContext);
 			case "combat.set_autocast":
-				return autocastInput.set(requiredText(action, "spell", type), breaksEnabled);
+				return autocastInput.set(requiredText(action, "spell", type), activityContext);
 			case "ui.close":
-				return uiInput.closeTopLevel(breaksEnabled);
+				return uiInput.closeTopLevel(activityContext);
 			case "ui.click":
-				return uiInput.click(requiredInt(action, "widget_id", type), breaksEnabled);
+				return uiInput.click(requiredInt(action, "widget_id", type), activityContext);
 			case "safety.configure":
 				return emergencyController.configure(
 					requiredPositiveInt(action, "minimum_hitpoints", type),
@@ -296,14 +296,14 @@ final class GenericClientQuestActions
 
 	private CompletableFuture<Map<String, Object>> useItemOnObject(
 		Map<String, Object> action,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		int itemId = requiredInt(action, "item_id", "item.use_on_object");
 		int objectId = requiredInt(action, "object_id", "item.use_on_object");
 		Integer slot = optionalSlot(action, "item.use_on_object");
 		WorldPoint world = optionalWorld(action, "item.use_on_object");
 		int within = within(action, "item.use_on_object");
-		return inventoryInput.interact(itemId, slot, "Use", breaksEnabled).thenCompose(selection ->
+		return inventoryInput.interact(itemId, slot, "Use", activityContext).thenCompose(selection ->
 		{
 			if (!wasDispatched(selection))
 			{
@@ -317,7 +317,7 @@ final class GenericClientQuestActions
 						"item_used_on_object", selection, rejected("requested_item_not_selected")));
 				}
 				return objectInput.useSelectedItemOnObject(
-					objectId, world, within, itemId, null, breaksEnabled)
+					objectId, world, within, itemId, null, activityContext)
 					.thenCompose(target -> finishSelectedItemAction(
 						"item_used_on_object", itemId, slot, selection, target));
 			});
@@ -326,14 +326,14 @@ final class GenericClientQuestActions
 
 	private CompletableFuture<Map<String, Object>> useItemOnNpc(
 		Map<String, Object> action,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		int itemId = requiredInt(action, "item_id", "item.use_on_npc");
 		int npcId = requiredInt(action, "npc_id", "item.use_on_npc");
 		Integer slot = optionalSlot(action, "item.use_on_npc");
 		String npcName = optionalText(action.get("npc_name"));
 		int within = within(action, "item.use_on_npc");
-		return inventoryInput.interact(itemId, slot, "Use", breaksEnabled).thenCompose(selection ->
+		return inventoryInput.interact(itemId, slot, "Use", activityContext).thenCompose(selection ->
 		{
 			if (!wasDispatched(selection))
 			{
@@ -347,7 +347,7 @@ final class GenericClientQuestActions
 						"item_used_on_npc", selection, rejected("requested_item_not_selected")));
 				}
 				return npcInput.useSelectedItemOnNpc(
-					npcId, npcName, within, itemId, null, breaksEnabled)
+					npcId, npcName, within, itemId, null, activityContext)
 					.thenCompose(target -> finishSelectedItemAction(
 						"item_used_on_npc", itemId, slot, selection, target));
 			});

@@ -18,6 +18,7 @@ final class GenericClientBehaviorState
 	private long breakEndEpochMillis;
 	private long microBreakCount;
 	private long longBreakCount;
+	private long cursorReleaseCount;
 	private boolean suppressNextMicro;
 	private long lastGlobalPhaseActiveMillis = Long.MIN_VALUE;
 	private Map<String, Long> lastPhaseActiveMillis = new LinkedHashMap<>();
@@ -113,6 +114,16 @@ final class GenericClientBehaviorState
 		return longBreakCount;
 	}
 
+	void recordCursorRelease()
+	{
+		cursorReleaseCount++;
+	}
+
+	long getCursorReleaseCount()
+	{
+		return cursorReleaseCount;
+	}
+
 	void suppressNextMicro()
 	{
 		suppressNextMicro = true;
@@ -168,7 +179,8 @@ final class GenericClientBehaviorState
 		}
 		if (totalActiveMillis < 0L || activeMillisSinceLongBreak < 0L ||
 			activeMillisSinceLongBreak > totalActiveMillis ||
-			!Double.isFinite(longHazardBudget) || longHazardBudget <= 0.0)
+			!Double.isFinite(longHazardBudget) || longHazardBudget <= 0.0 ||
+			microBreakCount < 0L || longBreakCount < 0L || cursorReleaseCount < 0L)
 		{
 			throw new IllegalArgumentException("Behavior state has invalid long-break progress");
 		}
@@ -216,6 +228,7 @@ final class GenericClientBehaviorState
 		value.put("break_end_epoch_millis", breakEndEpochMillis);
 		value.put("micro_break_count", microBreakCount);
 		value.put("long_break_count", longBreakCount);
+		value.put("cursor_release_count", cursorReleaseCount);
 		value.put("suppress_next_micro", suppressNextMicro);
 		return value;
 	}

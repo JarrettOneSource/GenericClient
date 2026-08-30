@@ -28,7 +28,8 @@ final class GenericClientBehaviorProfile
 	private static final double REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR = 36.0;
 
 	private final String id;
-	private final double shortReleaseProbability;
+	private final double microBreakProbability;
+	private final double cursorReleaseProbability;
 	private final double shortBodyMedianSeconds;
 	private final double shortTailProbability;
 	private final double longCadenceMinutes;
@@ -49,7 +50,8 @@ final class GenericClientBehaviorProfile
 
 	private GenericClientBehaviorProfile(
 		String id,
-		double shortReleaseProbability,
+		double microBreakProbability,
+		double cursorReleaseProbability,
 		double shortBodyMedianSeconds,
 		double shortTailProbability,
 		double longCadenceMinutes,
@@ -66,7 +68,8 @@ final class GenericClientBehaviorProfile
 		boolean customized)
 	{
 		this.id = id;
-		this.shortReleaseProbability = shortReleaseProbability;
+		this.microBreakProbability = microBreakProbability;
+		this.cursorReleaseProbability = cursorReleaseProbability;
 		this.shortBodyMedianSeconds = shortBodyMedianSeconds;
 		this.shortTailProbability = shortTailProbability;
 		this.longCadenceMinutes = longCadenceMinutes;
@@ -95,6 +98,8 @@ final class GenericClientBehaviorProfile
 
 		double styleZ = inverseNormal(unit(accountHash, "attention.style"));
 		double shortQuantile = correlatedUnit(accountHash, "short.cadence", styleZ, 0.60);
+		double cursorReleaseQuantile = correlatedUnit(
+			accountHash, "cursor.release", styleZ, 0.65);
 		double shortDurationQuantile = correlatedUnit(accountHash, "short.duration", styleZ, 0.30);
 		double longQuantile = correlatedUnit(accountHash, "long.cadence", styleZ, 0.40);
 		double phaseQuantile = correlatedUnit(accountHash, "phase.sensitivity", styleZ, 0.50);
@@ -112,6 +117,7 @@ final class GenericClientBehaviorProfile
 		return new GenericClientBehaviorProfile(
 			profileId(accountHash),
 			interpolate(shortQuantile, SHORT_QUANTILES, SHORT_PROBABILITIES),
+			0.15 + 0.80 * cursorReleaseQuantile,
 			2.0 + 4.0 * shortDurationQuantile,
 			0.01 + 0.03 * shortDurationQuantile,
 			longCadence,
@@ -136,7 +142,8 @@ final class GenericClientBehaviorProfile
 		double phase = overrides.getPhaseShortChances();
 		return new GenericClientBehaviorProfile(
 			id,
-			overrides.getShortReleaseProbability(),
+			overrides.getMicroBreakProbability(),
+			overrides.getCursorReleaseProbability(),
 			overrides.getShortBodyMedianSeconds(),
 			overrides.getShortTailProbability(),
 			cadence,
@@ -162,9 +169,14 @@ final class GenericClientBehaviorProfile
 		return id;
 	}
 
-	double getShortReleaseProbability()
+	double getMicroBreakProbability()
 	{
-		return shortReleaseProbability;
+		return microBreakProbability;
+	}
+
+	double getCursorReleaseProbability()
+	{
+		return cursorReleaseProbability;
 	}
 
 	double getShortBodyMedianSeconds()
@@ -267,7 +279,8 @@ final class GenericClientBehaviorProfile
 		value.put("title", title);
 		value.put("summary", summary);
 		value.put("customized", customized);
-		value.put("short_release_probability", shortReleaseProbability);
+		value.put("micro_break_probability", microBreakProbability);
+		value.put("cursor_release_probability", cursorReleaseProbability);
 		value.put("short_body_median_seconds", shortBodyMedianSeconds);
 		value.put("short_tail_probability", shortTailProbability);
 		value.put("short_duration_bounds_seconds", bounds(1.0, 120.0));
@@ -290,11 +303,11 @@ final class GenericClientBehaviorProfile
 	private String buildTitle()
 	{
 		String shortTitle;
-		if (shortReleaseProbability < 0.15)
+		if (microBreakProbability < 0.15 && cursorReleaseProbability < 0.35)
 		{
 			shortTitle = "Deep focus";
 		}
-		else if (shortReleaseProbability < 0.55)
+		else if (microBreakProbability < 0.55 && cursorReleaseProbability < 0.75)
 		{
 			shortTitle = "Even-keel pacing";
 		}
@@ -312,13 +325,15 @@ final class GenericClientBehaviorProfile
 	private String buildSummary()
 	{
 		return String.format(Locale.ROOT,
-			"Releases client focus after about %.0f%% of composite client interactions. " +
+			"Takes a micro break after about %.0f%% of eligible composite client interactions. " +
+				"Moves the cursor off-screen after about %.0f%% of eligible interactions. " +
 				"Typical forced pauses center near %.1f seconds, with a %.0f%% chance of a 12-120 second tail. " +
 				"Long breaks average about %.0f active minutes apart and center near %.1f minutes; usually %s, " +
 				"with the opposite choice about %.0f%% of the time. Major phases apply %.1f ordinary short-break chances. " +
 				"Recorded mouse paths play over %d milliseconds and text entry averages %d WPM. " +
 				"At %.0f eligible actions per hour, estimated forced downtime is %.0f%%.",
-			shortReleaseProbability * 100.0,
+			microBreakProbability * 100.0,
+			cursorReleaseProbability * 100.0,
 			shortBodyMedianSeconds,
 			shortTailProbability * 100.0,
 			longCadenceMinutes,
@@ -338,11 +353,13 @@ final class GenericClientBehaviorProfile
 		double tailMeanSeconds = 108.0 / Math.log(10.0);
 		double shortMeanSeconds = (1.0 - shortTailProbability) * bodyMeanSeconds +
 			shortTailProbability * tailMeanSeconds;
-		double shortMinutes = REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR * shortReleaseProbability *
+		double shortMinutes = REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR * microBreakProbability *
 			shortMeanSeconds / 60.0;
+		double cursorMinutes = REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR * cursorReleaseProbability *
+			mouseMoveDurationMillis / 60_000.0;
 		double longMeanMinutes = 3.0 + (longMedianMinutes - 3.0) * Math.exp(0.125);
 		double longMinutes = 60.0 / longCadenceMinutes * longMeanMinutes;
-		double forcedMinutes = shortMinutes + longMinutes;
+		double forcedMinutes = shortMinutes + cursorMinutes + longMinutes;
 		return 100.0 * forcedMinutes / (60.0 + forcedMinutes);
 	}
 

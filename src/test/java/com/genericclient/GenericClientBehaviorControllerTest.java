@@ -17,19 +17,25 @@ import org.junit.rules.TemporaryFolder;
 
 public class GenericClientBehaviorControllerTest
 {
+	private static final GenericClientActivityContext TRAVEL = GenericClientActivityContext.of(
+		GenericClientActivityContext.Activity.TRAVEL, true);
+	private static final GenericClientActivityContext COMBAT = GenericClientActivityContext.of(
+		GenericClientActivityContext.Activity.COMBAT, true);
+	private static final GenericClientActivityContext NONE = GenericClientActivityContext.none();
+
 	@Rule
 	public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
 	@Test
-	public void aggressiveProfilePausesAfterAParentActionAndMovesOffscreen() throws Exception
+	public void independentRollsCanReleaseTheCursorAndStartAMicroBreak() throws Exception
 	{
-		long accountHash = findHash(profile -> profile.getShortReleaseProbability() >= 0.85);
-		Fixture fixture = fixture(0.5, 0.0, 0.99);
+		long accountHash = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
+		Fixture fixture = fixture(0.5, 0.0, 0.0, 0.99);
 		try
 		{
 			fixture.controller.activateAccount(accountHash);
 			fixture.controller.setLoggedIn(true);
-			CompletableFuture<Map<String, Object>> pause = fixture.controller.afterAction(true);
+			CompletableFuture<Map<String, Object>> pause = fixture.controller.afterAction(TRAVEL);
 
 			assertFalse(pause.isDone());
 			assertEquals("micro_break", fixture.controller.status().get("state"));
@@ -51,14 +57,79 @@ public class GenericClientBehaviorControllerTest
 	}
 
 	@Test
+	@SuppressWarnings("unchecked")
+	public void cursorCanReleaseWithoutStartingABreak() throws Exception
+	{
+		long accountHash = findHash(profile ->
+			profile.getCursorReleaseProbability() >= 0.50 && profile.getMicroBreakProbability() < 0.50);
+		Fixture fixture = fixture(0.5, 0.0, 0.99);
+		try
+		{
+			fixture.controller.activateAccount(accountHash);
+			Map<String, Object> result = fixture.controller.afterAction(TRAVEL).get();
+
+			assertEquals("no_break", result.get("status"));
+			assertEquals("moved", ((Map<String, Object>) result.get("cursor_release")).get("status"));
+			assertEquals(1, fixture.effects.offscreenEdges.size());
+			assertEquals(0, fixture.timer.activeSize());
+		}
+		finally
+		{
+			fixture.controller.close();
+		}
+	}
+
+	@Test
+	public void microBreakCanStartWithoutReleasingTheCursor() throws Exception
+	{
+		long accountHash = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
+		Fixture fixture = fixture(0.5, 0.99, 0.0, 0.99);
+		try
+		{
+			fixture.controller.activateAccount(accountHash);
+			CompletableFuture<Map<String, Object>> result = fixture.controller.afterAction(TRAVEL);
+
+			assertFalse(result.isDone());
+			assertEquals("micro_break", fixture.controller.status().get("state"));
+			assertEquals(0, fixture.effects.offscreenEdges.size());
+			fixture.timer.runNext();
+			assertEquals("completed", result.get().get("status"));
+		}
+		finally
+		{
+			fixture.controller.close();
+		}
+	}
+
+	@Test
+	public void combatSuppressesBreaksAndCursorRelease() throws Exception
+	{
+		Fixture fixture = fixture(0.5, 0.0, 0.0);
+		try
+		{
+			fixture.controller.activateAccount(42L);
+			assertEquals("bypassed", fixture.controller.beforeAction(COMBAT).get().get("status"));
+			Map<String, Object> result = fixture.controller.afterAction(COMBAT).get();
+
+			assertEquals("bypassed", result.get("status"));
+			assertEquals(0, fixture.effects.offscreenEdges.size());
+			assertEquals(0, fixture.timer.size());
+		}
+		finally
+		{
+			fixture.controller.close();
+		}
+	}
+
+	@Test
 	public void breaksFalseBypassesBothSidesOfAnAction() throws Exception
 	{
 		Fixture fixture = fixture(0.5, 0.0, 0.0);
 		try
 		{
 			fixture.controller.activateAccount(42L);
-			assertEquals("bypassed", fixture.controller.beforeAction(false).get().get("status"));
-			assertEquals("bypassed", fixture.controller.afterAction(false).get().get("status"));
+			assertEquals("bypassed", fixture.controller.beforeAction(NONE).get().get("status"));
+			assertEquals("bypassed", fixture.controller.afterAction(NONE).get().get("status"));
 			assertEquals(0, fixture.effects.offscreenEdges.size());
 			assertEquals(0, fixture.timer.size());
 		}
@@ -71,8 +142,8 @@ public class GenericClientBehaviorControllerTest
 	@Test
 	public void microBreakDoesNotResetLongPressure() throws Exception
 	{
-		long accountHash = findHash(profile -> profile.getShortReleaseProbability() >= 0.85);
-		Fixture fixture = fixture(0.75, 0.0, 0.99);
+		long accountHash = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
+		Fixture fixture = fixture(0.75, 0.99, 0.0, 0.99);
 		try
 		{
 			fixture.controller.activateAccount(accountHash);
@@ -81,7 +152,7 @@ public class GenericClientBehaviorControllerTest
 			long before = ((Number) fixture.controller.status()
 				.get("active_millis_since_long_break")).longValue();
 
-			CompletableFuture<Map<String, Object>> pause = fixture.controller.afterAction(true);
+			CompletableFuture<Map<String, Object>> pause = fixture.controller.afterAction(TRAVEL);
 			fixture.timer.runNext();
 			pause.get();
 
@@ -107,8 +178,8 @@ public class GenericClientBehaviorControllerTest
 			fixture.controller.setLoggedIn(true);
 			advanceActive(fixture, 25 * 60_000L);
 
-			assertEquals("bypassed", fixture.controller.afterAction(false).get().get("status"));
-			CompletableFuture<Map<String, Object>> longBreak = fixture.controller.afterAction(true);
+			assertEquals("bypassed", fixture.controller.afterAction(NONE).get().get("status"));
+			CompletableFuture<Map<String, Object>> longBreak = fixture.controller.afterAction(TRAVEL);
 			assertFalse(longBreak.isDone());
 			assertEquals("long_break", fixture.controller.status().get("state"));
 			assertTrue(fixture.timer.nextDelayMillis() >= 3 * 60_000L);
@@ -120,9 +191,9 @@ public class GenericClientBehaviorControllerTest
 			assertEquals(1L, fixture.controller.status().get("long_break_count"));
 			assertEquals(1, fixture.effects.ensureLoginCalls);
 			assertEquals(1, fixture.effects.logoutCalls);
-			assertEquals(2, fixture.effects.offscreenEdges.size());
+			assertEquals(0, fixture.effects.offscreenEdges.size());
 			assertEquals("suppressed_after_long_break",
-				fixture.controller.afterAction(true).get().get("status"));
+				fixture.controller.afterAction(TRAVEL).get().get("status"));
 			assertEquals(0L, fixture.controller.status().get("micro_break_count"));
 		}
 		finally
@@ -142,7 +213,7 @@ public class GenericClientBehaviorControllerTest
 			fixture.controller.activateAccount(accountHash);
 			fixture.controller.setLoggedIn(true);
 			advanceActive(fixture, 25 * 60_000L);
-			CompletableFuture<Map<String, Object>> action = fixture.controller.afterAction(true);
+			CompletableFuture<Map<String, Object>> action = fixture.controller.afterAction(TRAVEL);
 
 			assertEquals("long_break", fixture.controller.status().get("state"));
 			assertEquals("ended", fixture.controller.endLongBreak().get().get("status"));
@@ -160,13 +231,13 @@ public class GenericClientBehaviorControllerTest
 	@Test
 	public void manualEndDoesNotDismissAMicroBreak() throws Exception
 	{
-		long accountHash = findHash(profile -> profile.getShortReleaseProbability() >= 0.85);
-		Fixture fixture = fixture(0.5, 0.0, 0.99);
+		long accountHash = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
+		Fixture fixture = fixture(0.5, 0.99, 0.0, 0.99);
 		try
 		{
 			fixture.controller.activateAccount(accountHash);
 			fixture.controller.setLoggedIn(true);
-			CompletableFuture<Map<String, Object>> action = fixture.controller.afterAction(true);
+			CompletableFuture<Map<String, Object>> action = fixture.controller.afterAction(TRAVEL);
 
 			assertEquals("not_active", fixture.controller.endLongBreak().get().get("status"));
 			assertEquals("micro_break", fixture.controller.status().get("state"));
@@ -183,13 +254,13 @@ public class GenericClientBehaviorControllerTest
 	@Test
 	public void activeBreakEndDismissesAMicroBreak() throws Exception
 	{
-		long accountHash = findHash(profile -> profile.getShortReleaseProbability() >= 0.85);
-		Fixture fixture = fixture(0.5, 0.0, 0.99);
+		long accountHash = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
+		Fixture fixture = fixture(0.5, 0.99, 0.0, 0.99);
 		try
 		{
 			fixture.controller.activateAccount(accountHash);
 			fixture.controller.setLoggedIn(true);
-			CompletableFuture<Map<String, Object>> action = fixture.controller.afterAction(true);
+			CompletableFuture<Map<String, Object>> action = fixture.controller.afterAction(TRAVEL);
 
 			assertEquals("micro_break", fixture.controller.status().get("state"));
 			assertEquals("ended", fixture.controller.endActiveBreak().get().get("status"));
@@ -224,7 +295,7 @@ public class GenericClientBehaviorControllerTest
 			controller.activateAccount(accountHash);
 			controller.setLoggedIn(true);
 			advanceActive(fixture, 25 * 60_000L);
-			controller.afterAction(true);
+			controller.afterAction(TRAVEL);
 			CompletableFuture<Map<String, Object>> ended = controller.endLongBreak();
 
 			assertFalse(ended.isDone());
@@ -244,20 +315,20 @@ public class GenericClientBehaviorControllerTest
 	public void phaseRollsHeavilyThenHonorsGlobalAndNamedCooldowns() throws Exception
 	{
 		long accountHash = findHash(profile ->
-			profile.getShortReleaseProbability() >= 0.30 && profile.getPhaseShortChances() >= 2.0);
+			profile.getMicroBreakProbability() >= 0.30 && profile.getPhaseShortChances() >= 2.0);
 		Fixture fixture = fixture(0.9, 0.0, 0.99);
 		try
 		{
 			fixture.controller.activateAccount(accountHash);
 			fixture.controller.setLoggedIn(true);
 			CompletableFuture<Map<String, Object>> first =
-				fixture.controller.enterPhase("banking.complete", true);
+				fixture.controller.enterPhase("banking.complete", TRAVEL);
 			assertFalse(first.isDone());
 			fixture.timer.runNext();
 			first.get();
 
 			Map<String, Object> cooldown = fixture.controller
-				.enterPhase("banking.complete", true).get();
+				.enterPhase("banking.complete", TRAVEL).get();
 			assertEquals("phase_cooldown", cooldown.get("status"));
 			assertEquals(1L, fixture.controller.status().get("micro_break_count"));
 		}
@@ -270,7 +341,7 @@ public class GenericClientBehaviorControllerTest
 	@Test
 	public void persistedFutureBreakIsRestoredAndCompleted() throws Exception
 	{
-		long accountHash = findHash(profile -> profile.getShortReleaseProbability() >= 0.85);
+		long accountHash = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
 		Path directory = temporaryFolder.newFolder("restored").toPath();
 		ManualClock clock = new ManualClock();
 		ManualTimer firstTimer = new ManualTimer();
@@ -280,10 +351,10 @@ public class GenericClientBehaviorControllerTest
 			firstEffects,
 			firstTimer,
 			clock,
-			new SequenceRandom(0.5, 0.0, 0.99),
+			new SequenceRandom(0.5, 0.99, 0.0, 0.99),
 			message -> { });
 		first.activateAccount(accountHash);
-		first.afterAction(true);
+		first.afterAction(TRAVEL);
 		assertEquals("micro_break", first.status().get("state"));
 		first.close();
 
@@ -320,6 +391,7 @@ public class GenericClientBehaviorControllerTest
 			Map<String, Object> seeded = (Map<String, Object>) fixture.controller.status().get("profile");
 			fixture.controller.saveOverrides(new GenericClientBehaviorOverrides(
 				0.95,
+				0.85,
 				9.0,
 				0.30,
 				240.0,
@@ -333,14 +405,14 @@ public class GenericClientBehaviorControllerTest
 
 			Map<String, Object> custom = (Map<String, Object>) fixture.controller.status().get("profile");
 			assertTrue((Boolean) custom.get("customized"));
-			assertEquals(0.95, (Double) custom.get("short_release_probability"), 0.0);
+			assertEquals(0.95, (Double) custom.get("micro_break_probability"), 0.0);
 			assertEquals("top", custom.get("idle_edge"));
 			assertEquals(650, fixture.controller.mouseMoveDurationMillis());
 
 			fixture.controller.resetOverrides();
 			Map<String, Object> restored = (Map<String, Object>) fixture.controller.status().get("profile");
 			assertFalse((Boolean) restored.get("customized"));
-			assertEquals(seeded.get("short_release_probability"), restored.get("short_release_probability"));
+			assertEquals(seeded.get("micro_break_probability"), restored.get("micro_break_probability"));
 			assertEquals(seeded.get("idle_edge"), restored.get("idle_edge"));
 			assertEquals(((Long) seeded.get("mouse_move_duration_millis")).intValue(),
 				fixture.controller.mouseMoveDurationMillis());
@@ -358,6 +430,7 @@ public class GenericClientBehaviorControllerTest
 		Path directory = temporaryFolder.newFolder("override-reload").toPath();
 		GenericClientBehaviorOverrides overrides = new GenericClientBehaviorOverrides(
 			0.88,
+			0.72,
 			7.5,
 			0.22,
 			300.0,
@@ -379,7 +452,7 @@ public class GenericClientBehaviorControllerTest
 			second.activateAccount(8080L);
 			Map<String, Object> profile = (Map<String, Object>) second.status().get("profile");
 			assertTrue((Boolean) profile.get("customized"));
-			assertEquals(0.88, (Double) profile.get("short_release_probability"), 0.0);
+			assertEquals(0.88, (Double) profile.get("micro_break_probability"), 0.0);
 			assertEquals(300.0, (Double) profile.get("long_cadence_minutes"), 0.0);
 			assertEquals(375, second.mouseMoveDurationMillis());
 		}

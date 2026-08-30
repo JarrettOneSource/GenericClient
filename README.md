@@ -116,6 +116,7 @@ The current scripting interface intentionally contains only:
 gc.read(subject, query)
 gc.await(request)
 gc.log(level, event, fields)
+gc.activity(name)
 gc.phase(name, options)
 gc.overlay(rows)
 gc.next_action()
@@ -192,10 +193,12 @@ Walking enables run by default when at least 10% energy is available, verifies
 the orb state, and may enable it again after energy drains and recovers. A
 script phase that must conserve energy sets `run = false` on that `walk.to`.
 
-Every composite mouse-movement-and-click interaction rolls the seeded behavior
-profile by default. A multi-click walk therefore rolls after every route click.
-A time-sensitive sequence can bypass both micro and long breaks for all of its
-interactions:
+Every composite mouse-movement-and-click interaction captures an immutable
+activity context. Travel and skilling independently roll for a break and cursor
+release after every route click; combat, banking, trading, and dialogue suppress
+both. `gc.activity("questing")` describes the broad workflow while semantic
+actions select their safe leaf activity. A time-sensitive sequence can bypass
+all discretionary behavior for its interactions:
 
 ```lua
 local result = gc.await {

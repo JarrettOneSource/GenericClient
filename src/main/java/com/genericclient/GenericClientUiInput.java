@@ -28,20 +28,20 @@ final class GenericClientUiInput
 		this.behavior = behavior;
 	}
 
-	CompletableFuture<Map<String, Object>> click(int widgetId, boolean breaksEnabled)
+	CompletableFuture<Map<String, Object>> click(int widgetId, GenericClientActivityContext activityContext)
 	{
 		if (widgetId < 0)
 		{
 			throw new IllegalArgumentException("Widget id cannot be negative");
 		}
-		return menuInput.interactDirect(() -> resolve(widgetId), breaksEnabled);
+		return menuInput.interactDirect(() -> resolve(widgetId), activityContext);
 	}
 
-	CompletableFuture<Map<String, Object>> closeTopLevel(boolean breaksEnabled)
+	CompletableFuture<Map<String, Object>> closeTopLevel(GenericClientActivityContext activityContext)
 	{
-		return behavior.beforeAction(breaksEnabled).thenCompose(before ->
+		return behavior.beforeAction(activityContext).thenCompose(before ->
 			keyboard.pressEscape().thenCompose(keyboardReceipt ->
-				behavior.afterAction(breaksEnabled).thenApply(after ->
+				behavior.afterAction(activityContext).thenApply(after ->
 				{
 					Map<String, Object> receipt = new LinkedHashMap<>();
 					receipt.put("status", "dispatched");

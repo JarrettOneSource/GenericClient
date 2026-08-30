@@ -102,6 +102,7 @@ public class GenericClientBehaviorStoreTest
 		GenericClientBehaviorProfile profile = GenericClientBehaviorProfile.fromAccountHash(77L);
 		GenericClientBehaviorOverrides overrides = new GenericClientBehaviorOverrides(
 			0.8,
+			0.7,
 			8.0,
 			0.2,
 			180.0,
@@ -119,6 +120,36 @@ public class GenericClientBehaviorStoreTest
 
 		store.deleteOverrides(profile.getId());
 		assertNull(store.loadOverrides(profile.getId()));
+	}
+
+	@Test
+	public void loadsLegacyMicroProbabilityAsTheInitialCursorReleaseChance() throws Exception
+	{
+		Path directory = temporaryFolder.newFolder("legacy-overrides").toPath();
+		GenericClientBehaviorStore store = new GenericClientBehaviorStore(directory);
+		GenericClientBehaviorProfile profile = GenericClientBehaviorProfile.fromAccountHash(78L);
+		String legacy = "{\n" +
+			"  \"schema\": \"genericclient_behavior_overrides.v1\",\n" +
+			"  \"shortReleaseProbability\": 0.42,\n" +
+			"  \"shortBodyMedianSeconds\": 5.0,\n" +
+			"  \"shortTailProbability\": 0.03,\n" +
+			"  \"longCadenceMinutes\": 120.0,\n" +
+			"  \"longMedianMinutes\": 15.0,\n" +
+			"  \"phaseShortChances\": 2.0,\n" +
+			"  \"favoredLongBreakMode\": \"AFK\",\n" +
+			"  \"oppositeLongBreakProbability\": 0.1,\n" +
+			"  \"idleEdge\": \"RIGHT\",\n" +
+			"  \"mouseMoveDurationMillis\": 550,\n" +
+			"  \"typingWordsPerMinute\": 70\n" +
+			"}\n";
+		Files.writeString(
+			directory.resolve("overrides-" + profile.getId() + ".json"),
+			legacy,
+			StandardCharsets.UTF_8);
+
+		GenericClientBehaviorOverrides loaded = store.loadOverrides(profile.getId());
+		assertEquals(0.42, loaded.getMicroBreakProbability(), 0.0);
+		assertEquals(0.42, loaded.getCursorReleaseProbability(), 0.0);
 	}
 
 	private static void assertInvalid(GenericClientBehaviorStore store, String profileId) throws Exception

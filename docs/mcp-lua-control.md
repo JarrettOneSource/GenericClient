@@ -390,8 +390,26 @@ return gc.await {
 }
 ```
 
-Each composite client interaction uses the account behavior profile by default.
-A time-sensitive task can bypass both break classes for all of its interactions:
+Each composite client interaction captures the coroutine's activity. Semantic
+actions automatically classify travel, dialogue, combat, banking, and trading;
+scripts can describe a wider state explicitly:
+
+```lua
+gc.activity("skilling")
+```
+
+For a one-action override, put the activity on the await envelope:
+
+```lua
+gc.await {
+  activity = "banking",
+  action = { type = "object.interact", id = 4483, action = "Use" },
+}
+```
+
+Travel and skilling allow independent break and cursor-release rolls. Combat,
+banking, trading, and dialogue allow neither. A time-sensitive task can bypass
+all discretionary behavior for an interaction:
 
 ```lua
 return gc.await {
@@ -404,6 +422,12 @@ Major state transitions can request the profile's heavier evaluation:
 
 ```lua
 return gc.phase("banking.complete")
+```
+
+An activity transition can be atomic with the phase:
+
+```lua
+return gc.phase("route.start", { activity = "travel" })
 ```
 
 `gc.read("behavior")` returns the same structured state exposed by
@@ -472,6 +496,7 @@ that function, scripts use only:
 gc.read(subject, query)
 gc.await(request)
 gc.log(level, event, fields)
+gc.activity(name) -- omit name to read the current descriptor
 gc.phase(name, options)
 gc.overlay(rows)
 gc.next_action()

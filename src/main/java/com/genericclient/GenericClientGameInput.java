@@ -56,6 +56,8 @@ final class GenericClientGameInput implements AutoCloseable
 	private final List<ScheduledFuture<?>> pending = new CopyOnWriteArrayList<>();
 
 	private volatile boolean awaitingMenuResult;
+	private volatile boolean clickFinished;
+	private volatile String observedWalkResult;
 	private volatile WorldPoint targetWorldPoint;
 	private volatile int expectedParam0;
 	private volatile int expectedParam1;
@@ -69,7 +71,6 @@ final class GenericClientGameInput implements AutoCloseable
 	private volatile boolean cameraPrepared;
 	private volatile int cameraTargetYaw;
 	private volatile long cameraTurnDeadlineNanos;
-	private volatile boolean activeBreaksEnabled;
 	private volatile boolean closed;
 
 	GenericClientGameInput(
@@ -88,14 +89,14 @@ final class GenericClientGameInput implements AutoCloseable
 		this.reporter = reporter;
 	}
 
-	CompletableFuture<GenericClientInteractionResult> walkToRandomTile(boolean breaksEnabled)
+	CompletableFuture<GenericClientInteractionResult> walkToRandomTile(GenericClientActivityContext activityContext)
 	{
-		return performWalkInteraction(SelectionMode.RANDOM, Collections.emptyList(), breaksEnabled, 0L);
+		return performWalkInteraction(SelectionMode.RANDOM, Collections.emptyList(), activityContext, 0L);
 	}
 
 	CompletableFuture<GenericClientInteractionResult> walkToFarthest(
 		List<WorldPoint> candidates,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		if (candidates == null || candidates.isEmpty())
 		{
@@ -113,22 +114,22 @@ final class GenericClientGameInput implements AutoCloseable
 		return performWalkInteraction(
 			SelectionMode.ROUTE,
 			Collections.unmodifiableList(copy),
-			breaksEnabled,
+			activityContext,
 			routeRequestSequence.incrementAndGet());
 	}
 
 	private CompletableFuture<GenericClientInteractionResult> performWalkInteraction(
 		SelectionMode mode,
 		List<WorldPoint> candidates,
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		long requestId)
 	{
 		long cancellationId = cancellationSequence.get();
 		return performWithBehavior(
 			behavior,
-			breaksEnabled,
+			activityContext,
 			() -> beginWalkClickUnlessCancelled(
-				mode, candidates, requestId, cancellationId, breaksEnabled)).thenApply(result ->
+				mode, candidates, requestId, cancellationId, activityContext)).thenApply(result ->
 			{
 				reporter.accept("WALK_INTERACTION_COMPLETED target=" + result.getTarget() +
 					" clicked=" + result.isClickDispatched() +
@@ -144,7 +145,7 @@ final class GenericClientGameInput implements AutoCloseable
 		List<WorldPoint> candidates,
 		long requestId,
 		long cancellationId,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		if (closed || cancellationSequence.get() != cancellationId ||
 			(mode == SelectionMode.ROUTE && routeRequestSequence.get() != requestId))
@@ -154,15 +155,15 @@ final class GenericClientGameInput implements AutoCloseable
 				mode == SelectionMode.ROUTE ? "WALK_TILE_CLICK_CANCELLED" : "WALK_CLICK_STOPPED",
 				false));
 		}
-		return beginWalkClick(mode, candidates, breaksEnabled);
+		return beginWalkClick(mode, candidates, activityContext);
 	}
 
 	static CompletableFuture<GenericClientInteractionResult> performWithBehavior(
 		GenericClientBehaviorController behavior,
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		Supplier<CompletableFuture<RawWalkResult>> interaction)
 	{
-		return behavior.beforeAction(breaksEnabled).thenCompose(before ->
+		return behavior.beforeAction(activityContext).thenCompose(before ->
 			interaction.get().thenCompose(raw ->
 			{
 				if (!raw.clickDispatched)
@@ -174,7 +175,7 @@ final class GenericClientGameInput implements AutoCloseable
 						before,
 						Collections.emptyMap()));
 				}
-				return behavior.afterAction(breaksEnabled).thenApply(after ->
+				return behavior.afterAction(activityContext).thenApply(after ->
 					new GenericClientInteractionResult(
 						raw.target,
 						raw.detail,
@@ -187,7 +188,7 @@ final class GenericClientGameInput implements AutoCloseable
 	private CompletableFuture<RawWalkResult> beginWalkClick(
 		SelectionMode mode,
 		List<WorldPoint> candidates,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		CompletableFuture<RawWalkResult> result = new CompletableFuture<>();
 		if (!running.compareAndSet(false, true))
@@ -200,6 +201,8 @@ final class GenericClientGameInput implements AutoCloseable
 
 		activeResult = result;
 		awaitingMenuResult = false;
+		clickFinished = false;
+		observedWalkResult = null;
 		targetWorldPoint = null;
 		targetSurface = null;
 		selectionMode = mode;
@@ -207,7 +210,6 @@ final class GenericClientGameInput implements AutoCloseable
 		targetAttemptsRemaining = MAX_TARGET_ATTEMPTS;
 		clickDispatched = false;
 		cameraPrepared = false;
-		activeBreaksEnabled = breaksEnabled;
 		reporter.accept(mode == SelectionMode.RANDOM
 			? "WALK_CLICK_SELECTING_TILE"
 			: "WALK_ROUTE_SELECTING candidates=" + candidates.size());
@@ -235,7 +237,6 @@ final class GenericClientGameInput implements AutoCloseable
 			return;
 		}
 
-		awaitingMenuResult = false;
 		String result = String.format(
 			"%s surface=%s action=%s option=%s target=%s selectedTile=%s param0=%d param1=%d",
 			selectionMode == SelectionMode.RANDOM ? "WALK_CLICK_EXECUTED" : "WALK_TILE_CLICK_EXECUTED",
@@ -246,7 +247,12 @@ final class GenericClientGameInput implements AutoCloseable
 			targetWorldPoint,
 			event.getParam0(),
 			event.getParam1());
-		finish(result);
+		synchronized (this)
+		{
+			awaitingMenuResult = false;
+			observedWalkResult = result;
+		}
+		finishCanvasClickIfReady();
 	}
 
 	void cancelWalkToTile()
@@ -634,6 +640,8 @@ final class GenericClientGameInput implements AutoCloseable
 	private void dispatchCanvasWalk(Target target, MenuEntry entry, String dispatch)
 	{
 		awaitingMenuResult = true;
+		clickFinished = false;
+		observedWalkResult = null;
 		expectedParam0 = entry.getParam0();
 		expectedParam1 = entry.getParam1();
 		expectedWorldViewId = entry.getWorldViewId();
@@ -651,15 +659,34 @@ final class GenericClientGameInput implements AutoCloseable
 				finish("WALK_CLICK_FAILED reason=synthetic_click message=" + error.getMessage());
 				return;
 			}
+			clickFinished = true;
+			finishCanvasClickIfReady();
 		});
 		schedule(() ->
 		{
-			if (awaitingMenuResult)
+			if (awaitingMenuResult || !clickFinished)
 			{
 				awaitingMenuResult = false;
-				finish("WALK_CLICK_FAILED reason=menu_event_timeout");
+				finish(observedWalkResult == null
+					? "WALK_CLICK_FAILED reason=menu_event_timeout"
+					: "WALK_CLICK_FAILED reason=synthetic_click_timeout");
 			}
 		}, CLICK_RESULT_TIMEOUT_MILLIS);
+	}
+
+	private void finishCanvasClickIfReady()
+	{
+		final String result;
+		synchronized (this)
+		{
+			if (!running.get() || !clickFinished || observedWalkResult == null)
+			{
+				return;
+			}
+			result = observedWalkResult;
+			observedWalkResult = null;
+		}
+		finish(result);
 	}
 
 	private void openContextMenu(Target target, MenuEntry coveredEntry, MenuEntry walkEntry)
@@ -775,6 +802,8 @@ final class GenericClientGameInput implements AutoCloseable
 			return;
 		}
 		awaitingMenuResult = false;
+		clickFinished = false;
+		observedWalkResult = null;
 		cancelPending();
 		reporter.accept(result);
 		CompletableFuture<RawWalkResult> completion = activeResult;

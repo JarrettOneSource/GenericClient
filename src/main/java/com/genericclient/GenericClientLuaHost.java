@@ -649,9 +649,9 @@ final class GenericClientLuaHost implements AutoCloseable
 		return behavior.isPaused();
 	}
 
-	void submitWalkRandom(GenericClientLuaScript script, long requestId, boolean breaksEnabled)
+	void submitWalkRandom(GenericClientLuaScript script, long requestId, GenericClientActivityContext activityContext)
 	{
-		walkRandomAction.walk(breaksEnabled).handle((result, error) ->
+		walkRandomAction.walk(activityContext).handle((result, error) ->
 		{
 			if (error != null)
 			{
@@ -670,10 +670,10 @@ final class GenericClientLuaHost implements AutoCloseable
 		WorldPoint destination,
 		int within,
 		int timeoutTicks,
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		boolean useRun)
 	{
-		walkToAction.walkTo(destination, within, timeoutTicks, breaksEnabled, useRun).handle((receipt, error) ->
+		walkToAction.walkTo(destination, within, timeoutTicks, activityContext, useRun).handle((receipt, error) ->
 		{
 			Map<String, Object> result = receipt == null
 				? new LinkedHashMap<>()
@@ -694,9 +694,9 @@ final class GenericClientLuaHost implements AutoCloseable
 		String name,
 		String action,
 		int within,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		npcInteractAction.interact(id, name, action, within, breaksEnabled).handle((receipt, error) ->
+		npcInteractAction.interact(id, name, action, within, activityContext).handle((receipt, error) ->
 		{
 			Map<String, Object> result = receipt == null
 				? new LinkedHashMap<>()
@@ -715,12 +715,12 @@ final class GenericClientLuaHost implements AutoCloseable
 		long requestId,
 		String type,
 		Map<String, Object> action,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		CompletableFuture<Map<String, Object>> execution;
 		try
 		{
-			execution = questAction.execute(type, action, breaksEnabled);
+			execution = questAction.execute(type, action, activityContext);
 		}
 		catch (RuntimeException exception)
 		{
@@ -748,9 +748,9 @@ final class GenericClientLuaHost implements AutoCloseable
 		GenericClientLuaScript script,
 		long requestId,
 		int styleIndex,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		combatModeAction.setMode(styleIndex, breaksEnabled).handle((receipt, error) ->
+		combatModeAction.setMode(styleIndex, activityContext).handle((receipt, error) ->
 		{
 			Map<String, Object> result = receipt == null
 				? new LinkedHashMap<>()
@@ -768,10 +768,10 @@ final class GenericClientLuaHost implements AutoCloseable
 		GenericClientLuaScript script,
 		long requestId,
 		boolean enabled,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		int mode = enabled ? 5 : 4;
-		combatModeAction.setMode(mode, breaksEnabled).handle((receipt, error) ->
+		combatModeAction.setMode(mode, activityContext).handle((receipt, error) ->
 		{
 			Map<String, Object> result = receipt == null
 				? new LinkedHashMap<>()
@@ -808,9 +808,9 @@ final class GenericClientLuaHost implements AutoCloseable
 		GenericClientLuaScript script,
 		long requestId,
 		String phase,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		behavior.enterPhase(phase, breaksEnabled).whenComplete((receipt, error) ->
+		behavior.enterPhase(phase, activityContext).whenComplete((receipt, error) ->
 			completePhase(script, requestId, phase, receipt, error));
 	}
 
@@ -899,7 +899,7 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	private static NpcInteractAction unsupportedNpcInteractAction()
 	{
-		return (id, name, action, within, breaksEnabled) ->
+		return (id, name, action, within, activityContext) ->
 		{
 			Map<String, Object> receipt = new LinkedHashMap<>();
 			receipt.put("status", "rejected");
@@ -910,7 +910,7 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	private static CombatModeAction unsupportedCombatModeAction()
 	{
-		return (styleIndex, breaksEnabled) ->
+		return (styleIndex, activityContext) ->
 		{
 			Map<String, Object> receipt = new LinkedHashMap<>();
 			receipt.put("status", "rejected");
@@ -921,7 +921,7 @@ final class GenericClientLuaHost implements AutoCloseable
 
 	private static QuestAction unsupportedQuestAction()
 	{
-		return (type, action, breaksEnabled) ->
+		return (type, action, activityContext) ->
 		{
 			Map<String, Object> receipt = new LinkedHashMap<>();
 			receipt.put("status", "rejected");
@@ -1098,6 +1098,10 @@ final class GenericClientLuaHost implements AutoCloseable
 		value.put("active", getActiveScriptView().toMap());
 		value.put("active_script", activeScript);
 		value.put("active_inputs", new LinkedHashMap<>(activeInputs));
+		GenericClientLuaScript currentSession = session;
+		GenericClientLuaScript currentRepl = repl;
+		value.put("activity", currentSession == null ? "idle" : currentSession.getActivity());
+		value.put("repl_activity", currentRepl == null ? null : currentRepl.getActivity());
 		value.put("script_status", status);
 		value.put("run_id", run.getRunId() < 0L ? null : run.getRunId());
 		value.put("run_owner", run.getOwner());
@@ -1489,7 +1493,7 @@ final class GenericClientLuaHost implements AutoCloseable
 	@FunctionalInterface
 	interface WalkRandomAction
 	{
-		CompletableFuture<GenericClientInteractionResult> walk(boolean breaksEnabled);
+		CompletableFuture<GenericClientInteractionResult> walk(GenericClientActivityContext activityContext);
 	}
 
 	@FunctionalInterface
@@ -1505,7 +1509,7 @@ final class GenericClientLuaHost implements AutoCloseable
 			WorldPoint destination,
 			int within,
 			int timeoutTicks,
-			boolean breaksEnabled,
+			GenericClientActivityContext activityContext,
 			boolean useRun);
 	}
 
@@ -1517,13 +1521,13 @@ final class GenericClientLuaHost implements AutoCloseable
 			String name,
 			String action,
 			int within,
-			boolean breaksEnabled);
+			GenericClientActivityContext activityContext);
 	}
 
 	@FunctionalInterface
 	interface CombatModeAction
 	{
-		CompletableFuture<Map<String, Object>> setMode(int mode, boolean breaksEnabled);
+		CompletableFuture<Map<String, Object>> setMode(int mode, GenericClientActivityContext activityContext);
 	}
 
 	@FunctionalInterface
@@ -1532,6 +1536,6 @@ final class GenericClientLuaHost implements AutoCloseable
 		CompletableFuture<Map<String, Object>> execute(
 			String type,
 			Map<String, Object> action,
-			boolean breaksEnabled);
+			GenericClientActivityContext activityContext);
 	}
 }

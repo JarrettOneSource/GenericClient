@@ -38,17 +38,17 @@ final class GenericClientRunInput
 		this.menuInput = menuInput;
 	}
 
-	CompletableFuture<Map<String, Object>> enable(boolean breaksEnabled)
+	CompletableFuture<Map<String, Object>> enable(GenericClientActivityContext activityContext)
 	{
-		return setEnabled(true, breaksEnabled);
+		return setEnabled(true, activityContext);
 	}
 
-	CompletableFuture<Map<String, Object>> setEnabled(boolean expected, boolean breaksEnabled)
+	CompletableFuture<Map<String, Object>> setEnabled(boolean expected, GenericClientActivityContext activityContext)
 	{
 		CompletableFuture<Boolean> enabled = clientRead(this::isEnabled);
 		return enabled.thenCompose(value -> value == expected
 			? CompletableFuture.completedFuture(unchanged(expected))
-			: menuInput.interact(this::resolveRunButton, breaksEnabled).thenCompose(receipt ->
+			: menuInput.interact(this::resolveRunButton, activityContext).thenCompose(receipt ->
 			{
 				if (!"dispatched".equals(receipt.get("status")))
 				{

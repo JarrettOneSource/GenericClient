@@ -54,7 +54,7 @@ final class GenericClientSpellInput
 		Integer npcId,
 		String npcName,
 		int within,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		Spell spell = Spell.fromName(spellName);
 		if (npcId == null && (npcName == null || npcName.trim().isEmpty()))
@@ -78,12 +78,12 @@ final class GenericClientSpellInput
 			if (!state.visible)
 			{
 				return openSpellbookAndCast(
-					spell, npcId, cleanNpcName, within, breaksEnabled);
+					spell, npcId, cleanNpcName, within, activityContext);
 			}
 			List<Map<String, Object>> steps = new ArrayList<>();
 			return state.selected
-				? castSelectedSpell(spell, npcId, cleanNpcName, within, breaksEnabled, steps)
-				: selectAndCast(spell, npcId, cleanNpcName, within, breaksEnabled, steps);
+				? castSelectedSpell(spell, npcId, cleanNpcName, within, activityContext, steps)
+				: selectAndCast(spell, npcId, cleanNpcName, within, activityContext, steps);
 		});
 	}
 
@@ -92,9 +92,9 @@ final class GenericClientSpellInput
 		Integer npcId,
 		String npcName,
 		int within,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		return menuInput.interact(this::resolveMagicTab, breaksEnabled).thenCompose(tabReceipt ->
+		return menuInput.interact(this::resolveMagicTab, activityContext).thenCompose(tabReceipt ->
 		{
 			if (!wasDispatched(tabReceipt))
 			{
@@ -103,7 +103,7 @@ final class GenericClientSpellInput
 			List<Map<String, Object>> steps = new ArrayList<>();
 			steps.add(tabReceipt);
 			return waitForSpellbook(spell).thenCompose(visible -> visible
-				? selectAndCast(spell, npcId, npcName, within, breaksEnabled, steps)
+				? selectAndCast(spell, npcId, npcName, within, activityContext, steps)
 				: CompletableFuture.completedFuture(rejected("spellbook_did_not_open", steps)));
 		});
 	}
@@ -127,10 +127,10 @@ final class GenericClientSpellInput
 		Integer npcId,
 		String npcName,
 		int within,
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		List<Map<String, Object>> steps)
 	{
-		return menuInput.interact(() -> resolveSpell(spell), breaksEnabled).thenCompose(selection ->
+		return menuInput.interact(() -> resolveSpell(spell), activityContext).thenCompose(selection ->
 		{
 			steps.add(selection);
 			if (!wasDispatched(selection))
@@ -146,7 +146,7 @@ final class GenericClientSpellInput
 						rejected("spell_selection_not_applied", steps));
 				}
 				return castSelectedSpell(
-					spell, npcId, npcName, within, breaksEnabled, steps);
+					spell, npcId, npcName, within, activityContext, steps);
 			});
 		});
 	}
@@ -156,7 +156,7 @@ final class GenericClientSpellInput
 		Integer npcId,
 		String npcName,
 		int within,
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		List<Map<String, Object>> steps)
 	{
 		return npcInput.castSelectedSpellOnNpc(
@@ -165,7 +165,7 @@ final class GenericClientSpellInput
 			within,
 			spell.widgetId,
 			spell.name,
-			breaksEnabled).thenApply(cast ->
+			activityContext).thenApply(cast ->
 		{
 			steps.add(cast);
 			return compositeReceipt("spell_cast_on_npc", steps, cast);
@@ -358,7 +358,19 @@ final class GenericClientSpellInput
 			SpriteID.Magicon.EARTH_STRIKE, true),
 		FIRE_STRIKE(
 			"fire_strike", "Fire Strike", InterfaceID.MagicSpellbook.FIRE_STRIKE,
-			SpriteID.Magicon.FIRE_STRIKE, true);
+			SpriteID.Magicon.FIRE_STRIKE, true),
+		WIND_BOLT(
+			"wind_bolt", "Wind Bolt", InterfaceID.MagicSpellbook.WIND_BOLT,
+			SpriteID.Magicon.WIND_BOLT, true),
+		WATER_BOLT(
+			"water_bolt", "Water Bolt", InterfaceID.MagicSpellbook.WATER_BOLT,
+			SpriteID.Magicon.WATER_BOLT, true),
+		EARTH_BOLT(
+			"earth_bolt", "Earth Bolt", InterfaceID.MagicSpellbook.EARTH_BOLT,
+			SpriteID.Magicon.EARTH_BOLT, true),
+		FIRE_BOLT(
+			"fire_bolt", "Fire Bolt", InterfaceID.MagicSpellbook.FIRE_BOLT,
+			SpriteID.Magicon.FIRE_BOLT, true);
 
 		private final String name;
 		private final String label;

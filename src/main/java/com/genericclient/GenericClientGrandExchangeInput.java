@@ -90,7 +90,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		int quantity,
 		int maximumUnitPrice,
 		long minimumCashReserve,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		validateRequest(itemId, itemName, quantity, maximumUnitPrice, minimumCashReserve);
 		CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
@@ -124,7 +124,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 					quantity,
 					maximumUnitPrice,
 					minimumCashReserve,
-					breaksEnabled);
+					activityContext);
 			}
 			return placeOffer(
 				preflight.emptySlot,
@@ -133,7 +133,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				quantity,
 				maximumUnitPrice,
 				minimumCashReserve,
-				breaksEnabled);
+				activityContext);
 		}).whenComplete((receipt, error) ->
 		{
 			Map<String, Object> completed = receipt;
@@ -166,18 +166,18 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		int quantity,
 		int maximumUnitPrice,
 		long minimumCashReserve,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		CompletableFuture<List<Map<String, Object>>> flow =
 			CompletableFuture.completedFuture(new ArrayList<>());
-		flow = append(flow, () -> ensureOfferIndex(breaksEnabled));
-		flow = append(flow, () -> clickBuyOffer(slot, breaksEnabled));
+		flow = append(flow, () -> ensureOfferIndex(activityContext));
+		flow = append(flow, () -> clickBuyOffer(slot, activityContext));
 		flow = append(flow, () -> waitUntil(
 			this::itemSearchVisible, "ge_item_search", VERIFY_ATTEMPTS));
-		flow = append(flow, () -> typeWithBehavior(itemName, false, "ge_item_search_text", breaksEnabled));
+		flow = append(flow, () -> typeWithBehavior(itemName, false, "ge_item_search_text", activityContext));
 		flow = append(flow, () -> waitUntil(
 			() -> findItemSearchResult(itemId) != null, "ge_exact_search_result", VERIFY_ATTEMPTS));
-		flow = append(flow, () -> clickSearchResult(itemId, breaksEnabled));
+		flow = append(flow, () -> clickSearchResult(itemId, activityContext));
 		flow = append(flow, () -> waitUntil(
 			() -> setupContainsItem(itemId), "ge_offer_item", VERIFY_ATTEMPTS));
 		flow = append(flow, () -> clickAndType(
@@ -185,16 +185,16 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 			"Enter quantity",
 			Integer.toString(quantity),
 			"ge_quantity",
-			breaksEnabled));
-		flow = append(flow, () -> ensurePrice(maximumUnitPrice, breaksEnabled));
+			activityContext));
+		flow = append(flow, () -> ensurePrice(maximumUnitPrice, activityContext));
 		flow = append(flow, () -> clickWidgetAction(
 			InterfaceID.GeOffers.SETUP_CONFIRM,
 			"Confirm",
 			null,
 			"confirm_buy_offer",
-			breaksEnabled));
+			activityContext));
 		flow = append(flow, () -> confirmPriceWarningIfPresent(
-			slot, itemId, quantity, maximumUnitPrice, breaksEnabled));
+			slot, itemId, quantity, maximumUnitPrice, activityContext));
 		flow = append(flow, () -> waitUntil(
 			() -> offerMatches(slot, itemId, quantity, maximumUnitPrice),
 			"ge_offer_placed",
@@ -208,7 +208,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				return CompletableFuture.completedFuture(offerReceipt(
 					purchase, steps, slot, itemId, quantity, maximumUnitPrice, minimumCashReserve));
 			}
-			return collect(slot, itemId, quantity, breaksEnabled).thenApply(collection ->
+			return collect(slot, itemId, quantity, activityContext).thenApply(collection ->
 			{
 				steps.add(collection);
 				return offerReceipt(
@@ -222,7 +222,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		int itemId,
 		int quantity,
 		int maximumUnitPrice,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return waitUntil(
 			() -> offerMatches(slot, itemId, quantity, maximumUnitPrice) ||
@@ -245,18 +245,18 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 					receipt.put("click_count", 0L);
 					return CompletableFuture.completedFuture(receipt);
 				}
-				return clickPriceWarning(breaksEnabled);
+				return clickPriceWarning(activityContext);
 			});
 		});
 	}
 
-	private CompletableFuture<Map<String, Object>> clickPriceWarning(boolean breaksEnabled)
+	private CompletableFuture<Map<String, Object>> clickPriceWarning(GenericClientActivityContext activityContext)
 	{
 		return menuInput.interactDirect(() ->
 		{
 			Widget target = priceWarningTarget();
 			return targetForWidget(target, "Yes", null, "confirm_price_warning");
-		}, breaksEnabled);
+		}, activityContext);
 	}
 
 	private Widget priceWarningTarget()
@@ -356,7 +356,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 			bounds.y + bounds.height / 2);
 	}
 
-	private CompletableFuture<Map<String, Object>> ensureOfferIndex(boolean breaksEnabled)
+	private CompletableFuture<Map<String, Object>> ensureOfferIndex(GenericClientActivityContext activityContext)
 	{
 		return clientRead(() -> visibleWidget(InterfaceID.GeOffers.INDEX) != null).thenCompose(visible ->
 		{
@@ -373,7 +373,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				"Back",
 				null,
 				"return_to_offer_index",
-				breaksEnabled).thenCompose(back ->
+				activityContext).thenCompose(back ->
 			{
 				if (!wasAccepted(back))
 				{
@@ -389,7 +389,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 
 	private CompletableFuture<Map<String, Object>> ensurePrice(
 		int maximumUnitPrice,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return clientRead(this::visibleSetupUnitPrice).thenCompose(currentPrice ->
 		{
@@ -407,7 +407,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				"Enter price",
 				Integer.toString(maximumUnitPrice),
 				"ge_price",
-				breaksEnabled).thenCompose(receipt ->
+				activityContext).thenCompose(receipt ->
 			{
 				if (!wasAccepted(receipt))
 				{
@@ -450,13 +450,13 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		int quantity,
 		int maximumUnitPrice,
 		long minimumCashReserve,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return clientRead(() -> offerAt(slot)).thenCompose(existing ->
 		{
 			if (shouldReplaceZeroFill(existing, quantity, maximumUnitPrice))
 			{
-				return cancelUnfilledOffer(slot, breaksEnabled).thenCompose(cancelled ->
+				return cancelUnfilledOffer(slot, activityContext).thenCompose(cancelled ->
 				{
 					if (!wasAccepted(cancelled))
 					{
@@ -469,7 +469,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 						quantity,
 						maximumUnitPrice,
 						minimumCashReserve,
-						breaksEnabled);
+						activityContext);
 				});
 			}
 			if (!matchesRequestedOffer(existing, quantity, maximumUnitPrice))
@@ -487,7 +487,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 						purchase, steps, slot, itemId, quantity, maximumUnitPrice,
 						minimumCashReserve));
 				}
-				return collect(slot, itemId, quantity, breaksEnabled).thenApply(collection ->
+				return collect(slot, itemId, quantity, activityContext).thenApply(collection ->
 				{
 					steps.add(collection);
 					return offerReceipt(
@@ -521,9 +521,9 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 
 	private CompletableFuture<Map<String, Object>> cancelUnfilledOffer(
 		int slot,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		return ensureOfferIndex(breaksEnabled).thenCompose(index ->
+		return ensureOfferIndex(activityContext).thenCompose(index ->
 		{
 			if (!wasAccepted(index))
 			{
@@ -534,7 +534,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				"Abort offer",
 				null,
 				"abort_unfilled_offer",
-				breaksEnabled).thenCompose(aborted ->
+				activityContext).thenCompose(aborted ->
 			{
 				if (!wasAccepted(aborted))
 				{
@@ -553,7 +553,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 					{
 						return CompletableFuture.completedFuture(cancelled);
 					}
-					return collectRefund(slot, breaksEnabled);
+					return collectRefund(slot, activityContext);
 				});
 			});
 		});
@@ -561,10 +561,10 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 
 	private CompletableFuture<Map<String, Object>> collectRefund(
 		int slot,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return clickWidgetAction(
-			OFFER_WIDGETS[slot], "View offer", null, "view_cancelled_offer", breaksEnabled)
+			OFFER_WIDGETS[slot], "View offer", null, "view_cancelled_offer", activityContext)
 			.thenCompose(view ->
 			{
 				if (!wasAccepted(view))
@@ -580,7 +580,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 					{
 						return CompletableFuture.completedFuture(details);
 					}
-					return collectItem(ItemID.COINS, breaksEnabled).thenCompose(collected ->
+					return collectItem(ItemID.COINS, activityContext).thenCompose(collected ->
 					{
 						if (!wasAccepted(collected))
 						{
@@ -599,11 +599,11 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		int slot,
 		int itemId,
 		int quantity,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return clientRead(() -> inventoryQuantity(itemId)).thenCompose(before ->
 			clickWidgetAction(
-				OFFER_WIDGETS[slot], "View offer", null, "view_completed_offer", breaksEnabled)
+				OFFER_WIDGETS[slot], "View offer", null, "view_completed_offer", activityContext)
 				.thenCompose(view ->
 				{
 					if (!wasAccepted(view))
@@ -619,7 +619,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 						{
 							return CompletableFuture.completedFuture(details);
 						}
-						return collectItem(itemId, breaksEnabled).thenCompose(collected ->
+						return collectItem(itemId, activityContext).thenCompose(collected ->
 						{
 							if (!wasAccepted(collected))
 							{
@@ -640,7 +640,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 									{
 										return CompletableFuture.completedFuture(itemCollected);
 									}
-									return collectItem(ItemID.COINS, breaksEnabled).thenCompose(refund ->
+									return collectItem(ItemID.COINS, activityContext).thenCompose(refund ->
 									{
 										if (!wasAccepted(refund))
 										{
@@ -660,7 +660,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 
 	private CompletableFuture<Map<String, Object>> collectItem(
 		int itemId,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return menuInput.interact(() ->
 		{
@@ -715,7 +715,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 			return action == null
 				? GenericClientMenuInput.Resolution.rejected("collect_offer_has_no_inventory_action")
 				: targetForWidget(target, action, itemId, "collect_offer");
-		}, breaksEnabled);
+		}, activityContext);
 	}
 
 	static String collectAction(Widget widget)
@@ -733,14 +733,14 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 
 	private CompletableFuture<Map<String, Object>> clickSearchResult(
 		int itemId,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return menuInput.interact(() ->
 		{
 			Widget widget = findItemSearchResult(itemId);
 			Widget item = findItemSearchResultItem(itemId);
 			return targetForSearchResult(widget, item, itemId);
-		}, breaksEnabled);
+		}, activityContext);
 	}
 
 	private GenericClientMenuInput.Resolution targetForSearchResult(
@@ -783,7 +783,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		String action,
 		Integer itemId,
 		String description,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return menuInput.interact(() ->
 		{
@@ -798,12 +798,12 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				target = root;
 			}
 			return targetForWidget(target, action, itemId, description);
-		}, breaksEnabled);
+		}, activityContext);
 	}
 
 	private CompletableFuture<Map<String, Object>> clickBuyOffer(
 		int slot,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return menuInput.interact(() ->
 		{
@@ -835,7 +835,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				"open_buy_offer",
 				value,
 				entry -> menuMatchesAction(entry, "Buy")));
-		}, breaksEnabled);
+		}, activityContext);
 	}
 
 	static Rectangle buyOfferHitbox(Rectangle slotBounds)
@@ -874,17 +874,17 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		String action,
 		String text,
 		String description,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		Map<String, Object> outerBefore = new LinkedHashMap<>();
-		return behavior.beforeAction(breaksEnabled).thenCompose(before ->
+		return behavior.beforeAction(activityContext).thenCompose(before ->
 		{
 			outerBefore.putAll(before);
 			return menuInput.interact(() ->
 			{
 				Widget target = findByAction(visibleWidget(rootId), action, null);
 				return targetForWidget(target, action, null, description);
-			}, false);
+			}, GenericClientActivityContext.none());
 		}).thenCompose(click ->
 		{
 			if (!wasAccepted(click))
@@ -911,7 +911,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 						{
 							return CompletableFuture.completedFuture(accepted);
 						}
-						return behavior.afterAction(breaksEnabled).thenApply(after ->
+						return behavior.afterAction(activityContext).thenApply(after ->
 						{
 							Map<String, Object> receipt = new LinkedHashMap<>();
 							receipt.put("status", "complete");
@@ -931,11 +931,11 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		String text,
 		boolean submit,
 		String description,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		return behavior.beforeAction(breaksEnabled).thenCompose(before ->
+		return behavior.beforeAction(activityContext).thenCompose(before ->
 			(submit ? keyboard.typeAndEnter(text) : keyboard.type(text)).thenCompose(ignored ->
-				behavior.afterAction(breaksEnabled).thenApply(after ->
+				behavior.afterAction(activityContext).thenApply(after ->
 				{
 					Map<String, Object> receipt = new LinkedHashMap<>();
 					receipt.put("status", "complete");

@@ -2,6 +2,7 @@
 
 return {
   run = function(input)
+    gc.activity("travel")
     gc.overlay {
       { label = "State", value = "Starting" },
       { label = "Attempts", value = "0 / 3" },

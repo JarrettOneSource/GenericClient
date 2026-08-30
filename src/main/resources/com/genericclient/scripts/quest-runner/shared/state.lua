@@ -1,10 +1,12 @@
 local varp_ids = {
   witchs_house = 226,
   waterfall = 65,
+  tree_gnome_village = 111,
 }
 
 local varbit_ids = {
   waterfall = { 9110 },
+  tree_gnome_village = { 598, 599, 600, 601, 602 },
 }
 
 local function distance(a, b)

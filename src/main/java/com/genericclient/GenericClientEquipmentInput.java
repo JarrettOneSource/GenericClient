@@ -62,7 +62,7 @@ final class GenericClientEquipmentInput
 	CompletableFuture<Map<String, Object>> interact(
 		int itemId,
 		String action,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		if (itemId < 0)
 		{
@@ -72,16 +72,16 @@ final class GenericClientEquipmentInput
 		CompletableFuture<Boolean> visible = new CompletableFuture<>();
 		clientThread.invoke(() -> visible.complete(visibleEquipment() != null));
 		return visible.thenCompose(isVisible -> isVisible
-			? interactVisible(itemId, cleanAction, breaksEnabled)
-			: openThenInteract(itemId, cleanAction, breaksEnabled));
+			? interactVisible(itemId, cleanAction, activityContext)
+			: openThenInteract(itemId, cleanAction, activityContext));
 	}
 
 	private CompletableFuture<Map<String, Object>> openThenInteract(
 		int itemId,
 		String action,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		return menuInput.interactDirect(this::resolveEquipmentTab, breaksEnabled)
+		return menuInput.interactDirect(this::resolveEquipmentTab, activityContext)
 			.thenCompose(tabReceipt ->
 			{
 				if (!wasDispatched(tabReceipt))
@@ -97,7 +97,7 @@ final class GenericClientEquipmentInput
 							tabReceipt,
 							rejected("equipment_did_not_open")));
 					}
-					return interactVisible(itemId, action, breaksEnabled)
+					return interactVisible(itemId, action, activityContext)
 						.thenApply(itemReceipt -> compositeReceipt(
 							"open_equipment_then_item", tabReceipt, itemReceipt));
 				});
@@ -107,10 +107,10 @@ final class GenericClientEquipmentInput
 	private CompletableFuture<Map<String, Object>> interactVisible(
 		int itemId,
 		String action,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return waitForItem(itemId).thenCompose(found -> found
-			? menuInput.interact(() -> resolveItem(itemId, action), breaksEnabled)
+			? menuInput.interact(() -> resolveItem(itemId, action), activityContext)
 			: CompletableFuture.completedFuture(rejected("matching_equipment_item_not_found")));
 	}
 

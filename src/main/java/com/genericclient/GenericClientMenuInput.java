@@ -41,9 +41,12 @@ final class GenericClientMenuInput implements AutoCloseable
 	private volatile CompletableFuture<Map<String, Object>> activeResult;
 	private volatile TargetResolver resolver;
 	private volatile Target target;
-	private volatile boolean breaksEnabled;
+	private volatile GenericClientActivityContext activityContext;
 	private volatile boolean directClick;
 	private volatile boolean awaitingMenuResult;
+	private volatile boolean clickFinished;
+	private volatile boolean behaviorAfterStarted;
+	private volatile Map<String, Object> observedMenuResult;
 	private volatile int clickCount;
 	private volatile int dynamicRetargetCount;
 	private volatile int contextReopenCount;
@@ -68,21 +71,21 @@ final class GenericClientMenuInput implements AutoCloseable
 		this.reporter = reporter;
 	}
 
-	CompletableFuture<Map<String, Object>> interact(TargetResolver resolver, boolean breaksEnabled)
+	CompletableFuture<Map<String, Object>> interact(TargetResolver resolver, GenericClientActivityContext activityContext)
 	{
-		return start(resolver, breaksEnabled, false);
+		return start(resolver, activityContext, false);
 	}
 
 	CompletableFuture<Map<String, Object>> interactDirect(
 		TargetResolver resolver,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		return start(resolver, breaksEnabled, true);
+		return start(resolver, activityContext, true);
 	}
 
 	private CompletableFuture<Map<String, Object>> start(
 		TargetResolver resolver,
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		boolean directClick)
 	{
 		if (resolver == null)
@@ -103,10 +106,13 @@ final class GenericClientMenuInput implements AutoCloseable
 
 		activeResult = result;
 		this.resolver = resolver;
-		this.breaksEnabled = breaksEnabled;
+		this.activityContext = activityContext;
 		this.directClick = directClick;
 		target = null;
 		awaitingMenuResult = false;
+		clickFinished = false;
+		behaviorAfterStarted = false;
+		observedMenuResult = null;
 		clickCount = 0;
 		dynamicRetargetCount = 0;
 		contextReopenCount = 0;
@@ -114,7 +120,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		behaviorBefore = Collections.emptyMap();
 		behaviorAfter = Collections.emptyMap();
 
-		behavior.beforeAction(breaksEnabled).whenComplete((before, error) ->
+		behavior.beforeAction(activityContext).whenComplete((before, error) ->
 		{
 			if (error != null)
 			{
@@ -148,21 +154,16 @@ final class GenericClientMenuInput implements AutoCloseable
 			return;
 		}
 
-		awaitingMenuResult = false;
 		Map<String, Object> observed = new LinkedHashMap<>();
 		observed.put("menu_action", event.getMenuAction().name().toLowerCase(java.util.Locale.ROOT));
 		observed.put("menu_option", event.getMenuOption());
 		observed.put("menu_target", event.getMenuTarget());
-		behavior.afterAction(breaksEnabled).whenComplete((after, error) ->
+		synchronized (this)
 		{
-			if (error != null)
-			{
-				finishRejected("behavior_after: " + rootMessage(error));
-				return;
-			}
-			behaviorAfter = after;
-			finishSuccess(observed);
-		});
+			awaitingMenuResult = false;
+			observedMenuResult = observed;
+		}
+		finishLeftClickIfReady();
 	}
 
 	private void resolveTargetOnClientThread()
@@ -310,7 +311,7 @@ final class GenericClientMenuInput implements AutoCloseable
 				finishRejected("synthetic_click: " + rootMessage(clickError));
 				return;
 			}
-			behavior.afterAction(breaksEnabled).whenComplete((after, behaviorError) ->
+			behavior.afterAction(activityContext).whenComplete((after, behaviorError) ->
 			{
 				if (behaviorError != null)
 				{
@@ -432,6 +433,9 @@ final class GenericClientMenuInput implements AutoCloseable
 	{
 		this.dispatch = dispatch;
 		awaitingMenuResult = true;
+		clickFinished = false;
+		behaviorAfterStarted = false;
+		observedMenuResult = null;
 		clickCount++;
 		syntheticMouse.click(MouseEvent.BUTTON1).whenComplete((ignored, error) ->
 		{
@@ -439,16 +443,45 @@ final class GenericClientMenuInput implements AutoCloseable
 			{
 				awaitingMenuResult = false;
 				finishRejected("synthetic_click: " + rootMessage(error));
+				return;
 			}
+			clickFinished = true;
+			finishLeftClickIfReady();
 		});
 		schedule(() ->
 		{
-			if (awaitingMenuResult)
+			if (awaitingMenuResult || !clickFinished)
 			{
 				awaitingMenuResult = false;
-				finishRejected("menu_event_timeout");
+				finishRejected(observedMenuResult == null
+					? "menu_event_timeout"
+					: "synthetic_click_timeout");
 			}
 		}, CLICK_RESULT_TIMEOUT_MILLIS);
+	}
+
+	private void finishLeftClickIfReady()
+	{
+		final Map<String, Object> observed;
+		synchronized (this)
+		{
+			if (!running.get() || !clickFinished || observedMenuResult == null || behaviorAfterStarted)
+			{
+				return;
+			}
+			behaviorAfterStarted = true;
+			observed = new LinkedHashMap<>(observedMenuResult);
+		}
+		behavior.afterAction(activityContext).whenComplete((after, error) ->
+		{
+			if (error != null)
+			{
+				finishRejected("behavior_after: " + rootMessage(error));
+				return;
+			}
+			behaviorAfter = after;
+			finishSuccess(observed);
+		});
 	}
 
 	static int findEntryIndex(MenuEntry[] entries, Target target)
@@ -592,6 +625,9 @@ final class GenericClientMenuInput implements AutoCloseable
 			return;
 		}
 		awaitingMenuResult = false;
+		clickFinished = false;
+		behaviorAfterStarted = false;
+		observedMenuResult = null;
 		cancelPending();
 		reporter.accept("MENU_INTERACTION_COMPLETED status=" + receipt.get("status") +
 			" result=" + receipt.get("result") + " clicks=" + receipt.get("click_count"));

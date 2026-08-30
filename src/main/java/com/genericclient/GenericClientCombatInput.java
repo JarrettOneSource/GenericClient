@@ -56,7 +56,7 @@ final class GenericClientCombatInput implements AutoCloseable
 	private volatile int requestedStyle;
 	private volatile boolean requestedAutoRetaliate;
 	private volatile Operation operation = Operation.STYLE;
-	private volatile boolean breaksEnabled;
+	private volatile GenericClientActivityContext activityContext;
 	private volatile int clickCount;
 	private volatile long deadlineNanos;
 	private volatile Map<String, Object> behaviorBefore = Collections.emptyMap();
@@ -79,29 +79,29 @@ final class GenericClientCombatInput implements AutoCloseable
 		this.reporter = reporter;
 	}
 
-	CompletableFuture<Map<String, Object>> setStyle(int style, boolean breaksEnabled)
+	CompletableFuture<Map<String, Object>> setStyle(int style, GenericClientActivityContext activityContext)
 	{
 		if (style < 0 || style >= STYLE_WIDGETS.length)
 		{
 			throw new IllegalArgumentException("Combat style index must be between 0 and 3");
 		}
-		return start(Operation.STYLE, style, false, breaksEnabled);
+		return start(Operation.STYLE, style, false, activityContext);
 	}
 
-	CompletableFuture<Map<String, Object>> setAutoRetaliate(boolean enabled, boolean breaksEnabled)
+	CompletableFuture<Map<String, Object>> setAutoRetaliate(boolean enabled, GenericClientActivityContext activityContext)
 	{
-		return start(Operation.AUTO_RETALIATE, -1, enabled, breaksEnabled);
+		return start(Operation.AUTO_RETALIATE, -1, enabled, activityContext);
 	}
 
-	CompletableFuture<Map<String, Object>> setMode(int mode, boolean breaksEnabled)
+	CompletableFuture<Map<String, Object>> setMode(int mode, GenericClientActivityContext activityContext)
 	{
 		if (mode >= 0 && mode < STYLE_WIDGETS.length)
 		{
-			return setStyle(mode, breaksEnabled);
+			return setStyle(mode, activityContext);
 		}
 		if (mode == MODE_AUTO_RETALIATE_OFF || mode == MODE_AUTO_RETALIATE_ON)
 		{
-			return setAutoRetaliate(mode == MODE_AUTO_RETALIATE_ON, breaksEnabled);
+			return setAutoRetaliate(mode == MODE_AUTO_RETALIATE_ON, activityContext);
 		}
 		throw new IllegalArgumentException("Unsupported combat mode: " + mode);
 	}
@@ -110,7 +110,7 @@ final class GenericClientCombatInput implements AutoCloseable
 		Operation operation,
 		int style,
 		boolean autoRetaliate,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
 		if (closed)
@@ -129,7 +129,7 @@ final class GenericClientCombatInput implements AutoCloseable
 		requestedStyle = style;
 		requestedAutoRetaliate = autoRetaliate;
 		activeResult = result;
-		this.breaksEnabled = breaksEnabled;
+		this.activityContext = activityContext;
 		clickCount = 0;
 		behaviorBefore = Collections.emptyMap();
 		behaviorAfter = Collections.emptyMap();
@@ -330,7 +330,7 @@ final class GenericClientCombatInput implements AutoCloseable
 
 	private void beginAction(Runnable action)
 	{
-		behavior.beforeAction(breaksEnabled).whenComplete((before, error) ->
+		behavior.beforeAction(activityContext).whenComplete((before, error) ->
 		{
 			if (error != null)
 			{
@@ -344,7 +344,7 @@ final class GenericClientCombatInput implements AutoCloseable
 
 	private void finishAction(Runnable continuation)
 	{
-		behavior.afterAction(breaksEnabled).whenComplete((after, error) ->
+		behavior.afterAction(activityContext).whenComplete((after, error) ->
 		{
 			if (error != null)
 			{

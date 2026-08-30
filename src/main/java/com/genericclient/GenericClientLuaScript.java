@@ -40,6 +40,8 @@ final class GenericClientLuaScript implements AutoCloseable
 	private Wait wait;
 	private long nextRequestId;
 	private String currentPhase;
+	private GenericClientActivityContext.Activity currentActivity =
+		GenericClientActivityContext.Activity.GENERAL;
 	private List<GenericClientScriptInput> inputs = Collections.emptyList();
 	private List<GenericClientScriptAction> actions = Collections.emptyList();
 	private Map<String, Object> resolvedInputs = Collections.emptyMap();
@@ -109,6 +111,18 @@ final class GenericClientLuaScript implements AutoCloseable
 	List<GenericClientOverlayRow> getOverlayRows()
 	{
 		return overlayRows;
+	}
+
+	String getActivity()
+	{
+		Wait current = wait;
+		if (current != null &&
+			(current.kind == WaitKind.ACTION || current.kind == WaitKind.PHASE) &&
+			current.activityContext != null)
+		{
+			return current.activityContext.getActivity().getValue();
+		}
+		return currentActivity.getValue();
 	}
 
 	String queueAction(String actionId)
@@ -244,6 +258,7 @@ final class GenericClientLuaScript implements AutoCloseable
 		wait = null;
 		nextRequestId = 0;
 		currentPhase = null;
+		currentActivity = GenericClientActivityContext.Activity.GENERAL;
 		activated = false;
 		startedNanos = 0L;
 		inputs = Collections.emptyList();
@@ -314,6 +329,8 @@ final class GenericClientLuaScript implements AutoCloseable
 		lua.setGlobal("__gc_overlay");
 		lua.push((JFunction) this::nextAction);
 		lua.setGlobal("__gc_next_action");
+		lua.push((JFunction) this::activity);
+		lua.setGlobal("__gc_activity");
 		lua.push((JFunction) this::budgetHook);
 		lua.setGlobal("__gc_budget_hook");
 
@@ -330,12 +347,14 @@ final class GenericClientLuaScript implements AutoCloseable
 			"local host_log = __gc_log\n" +
 			"local host_overlay = __gc_overlay\n" +
 			"local host_next_action = __gc_next_action\n" +
+			"local host_activity = __gc_activity\n" +
 			"local host_yield = coroutine.yield\n" +
 			"gc = {}\n" +
 			"gc.read = host_read\n" +
 			"gc.log = host_log\n" +
 			"gc.overlay = host_overlay\n" +
 			"gc.next_action = host_next_action\n" +
+			"gc.activity = host_activity\n" +
 			"gc.await = function(request)\n" +
 			"  local response = host_yield({ protocol = 'gc.await.v1', request = request })\n" +
 			"  if response and response.host_error then error(response.host_error, 2) end\n" +
@@ -343,6 +362,7 @@ final class GenericClientLuaScript implements AutoCloseable
 			"end\n" +
 			"gc.phase = function(name, options)\n" +
 			"  local request = { phase = name }\n" +
+			"  if options and options.activity ~= nil then gc.activity(options.activity) end\n" +
 			"  if options and options.breaks ~= nil then request.breaks = options.breaks end\n" +
 			"  return gc.await(request)\n" +
 			"end\n" +
@@ -360,8 +380,28 @@ final class GenericClientLuaScript implements AutoCloseable
 			"__gc_log = nil\n" +
 			"__gc_overlay = nil\n" +
 			"__gc_next_action = nil\n" +
+			"__gc_activity = nil\n" +
 			"__gc_budget_hook = nil");
 
+	}
+
+	private int activity(Lua state)
+	{
+		try
+		{
+			if (state.getTop() >= 1 && !state.isNil(1))
+			{
+				String name = state.toString(1);
+				currentActivity = GenericClientActivityContext.Activity.fromName(name);
+			}
+			state.push(currentActivity.getValue());
+			return 1;
+		}
+		catch (RuntimeException exception)
+		{
+			state.push(exception.getMessage());
+			return -1;
+		}
 	}
 
 	private int read(Lua state)
@@ -512,6 +552,16 @@ final class GenericClientLuaScript implements AutoCloseable
 		}
 		boolean breaksEnabled = !(request.get("breaks") instanceof Boolean) ||
 			(Boolean) request.get("breaks");
+		GenericClientActivityContext.Activity requestedActivity = currentActivity;
+		if (request.containsKey("activity"))
+		{
+			if (!(request.get("activity") instanceof String))
+			{
+				throw new IllegalArgumentException("activity must be a string");
+			}
+			requestedActivity = GenericClientActivityContext.Activity.fromName(
+				(String) request.get("activity"));
+		}
 		if (request.get("ticks") instanceof Number)
 		{
 			int ticks = ((Number) request.get("ticks")).intValue();
@@ -563,7 +613,10 @@ final class GenericClientLuaScript implements AutoCloseable
 
 			if ("walk.random".equals(type))
 			{
-				return Wait.randomAction(++nextRequestId, timeout, breaksEnabled);
+				return Wait.randomAction(
+					++nextRequestId,
+					timeout,
+					activityContext(type, action, breaksEnabled, requestedActivity));
 			}
 			if ("mouse.offscreen".equals(type))
 			{
@@ -600,7 +653,7 @@ final class GenericClientLuaScript implements AutoCloseable
 					timeout,
 					new WorldPoint(x, y, plane),
 					within,
-					breaksEnabled,
+					activityContext(type, action, breaksEnabled, requestedActivity),
 					useRun);
 			}
 			if ("npc.interact".equals(type))
@@ -626,7 +679,7 @@ final class GenericClientLuaScript implements AutoCloseable
 					name,
 					option,
 					within,
-					breaksEnabled);
+					activityContext(type, action, breaksEnabled, requestedActivity));
 			}
 			if (isQuestAction(type))
 			{
@@ -635,7 +688,7 @@ final class GenericClientLuaScript implements AutoCloseable
 					timeout,
 					type,
 					copyAction(action),
-					breaksEnabled);
+					activityContext(type, action, breaksEnabled, requestedActivity));
 			}
 			if ("combat.set_style".equals(type))
 			{
@@ -649,7 +702,11 @@ final class GenericClientLuaScript implements AutoCloseable
 				{
 					throw new IllegalArgumentException("combat.set_style style must be between 0 and 3");
 				}
-				return Wait.combatStyle(++nextRequestId, timeout, style, breaksEnabled);
+				return Wait.combatStyle(
+					++nextRequestId,
+					timeout,
+					style,
+					activityContext(type, action, breaksEnabled, requestedActivity));
 			}
 			if ("combat.set_auto_retaliate".equals(type))
 			{
@@ -660,7 +717,10 @@ final class GenericClientLuaScript implements AutoCloseable
 						"combat.set_auto_retaliate requires enabled=true or enabled=false");
 				}
 				return Wait.combatAutoRetaliate(
-					++nextRequestId, timeout, (Boolean) enabledValue, breaksEnabled);
+					++nextRequestId,
+					timeout,
+					(Boolean) enabledValue,
+					activityContext(type, action, breaksEnabled, requestedActivity));
 			}
 			throw new IllegalArgumentException("Unsupported action: " + type);
 		}
@@ -673,7 +733,10 @@ final class GenericClientLuaScript implements AutoCloseable
 				throw new IllegalArgumentException(
 					"Phase name must be 1-64 letters, numbers, dots, underscores, or hyphens");
 			}
-			return Wait.phase(++nextRequestId, phase, breaksEnabled);
+			return Wait.phase(
+				++nextRequestId,
+				phase,
+				GenericClientActivityContext.of(requestedActivity, breaksEnabled));
 		}
 
 		throw new IllegalArgumentException("Await request must contain ticks, event, action, or phase");
@@ -701,11 +764,11 @@ final class GenericClientLuaScript implements AutoCloseable
 				return;
 			}
 			currentPhase = wait.phaseName;
-			host.submitPhase(this, wait.requestId, wait.phaseName, wait.breaksEnabled);
+			host.submitPhase(this, wait.requestId, wait.phaseName, wait.activityContext);
 		}
 		else if ("walk.random".equals(wait.actionType))
 		{
-			host.submitWalkRandom(this, wait.requestId, wait.breaksEnabled);
+			host.submitWalkRandom(this, wait.requestId, wait.activityContext);
 		}
 		else if ("mouse.offscreen".equals(wait.actionType))
 		{
@@ -720,7 +783,7 @@ final class GenericClientLuaScript implements AutoCloseable
 				wait.targetName,
 				wait.targetAction,
 				wait.within,
-				wait.breaksEnabled);
+				wait.activityContext);
 		}
 		else if (wait.questAction != null)
 		{
@@ -729,28 +792,76 @@ final class GenericClientLuaScript implements AutoCloseable
 				wait.requestId,
 				wait.actionType,
 				wait.questAction,
-				wait.breaksEnabled);
+				wait.activityContext);
 		}
 		else if ("combat.set_style".equals(wait.actionType))
 		{
-			host.submitCombatSetStyle(this, wait.requestId, wait.within, wait.breaksEnabled);
+			host.submitCombatSetStyle(this, wait.requestId, wait.within, wait.activityContext);
 		}
 		else if ("combat.set_auto_retaliate".equals(wait.actionType))
 		{
 			host.submitCombatSetAutoRetaliate(
-				this, wait.requestId, wait.within == 1, wait.breaksEnabled);
+				this, wait.requestId, wait.within == 1, wait.activityContext);
 		}
 		else
 		{
 				host.submitWalkTo(
 				this,
 				wait.requestId,
-				wait.destination,
+					wait.destination,
 					wait.within,
 					wait.remainingTicks,
-					wait.breaksEnabled,
+					wait.activityContext,
 					wait.useRun);
 		}
+	}
+
+	private GenericClientActivityContext activityContext(
+		String actionType,
+		Map<?, ?> action,
+		boolean discretionaryBehaviorEnabled,
+		GenericClientActivityContext.Activity requestedActivity)
+	{
+		GenericClientActivityContext.Activity activity = requestedActivity;
+		if ("bank.loadout".equals(actionType))
+		{
+			activity = GenericClientActivityContext.Activity.BANKING;
+		}
+		else if ("ge.buy".equals(actionType))
+		{
+			activity = GenericClientActivityContext.Activity.TRADING;
+		}
+		else if ("npc.interact".equals(actionType) &&
+			"Bank".equalsIgnoreCase(String.valueOf(action.get("action"))))
+		{
+			activity = GenericClientActivityContext.Activity.BANKING;
+		}
+		else if ("npc.interact".equals(actionType) &&
+			"Exchange".equalsIgnoreCase(String.valueOf(action.get("action"))))
+		{
+			activity = GenericClientActivityContext.Activity.TRADING;
+		}
+		else if (actionType.startsWith("combat.") ||
+			("npc.interact".equals(actionType) &&
+				"Attack".equalsIgnoreCase(String.valueOf(action.get("action")))))
+		{
+			activity = GenericClientActivityContext.Activity.COMBAT;
+		}
+		else if (actionType.startsWith("dialogue.") ||
+			("npc.interact".equals(actionType) &&
+				"Talk-to".equalsIgnoreCase(String.valueOf(action.get("action")))))
+		{
+			activity = GenericClientActivityContext.Activity.DIALOGUE;
+		}
+		else if (actionType.startsWith("walk.") &&
+			activity != GenericClientActivityContext.Activity.COMBAT &&
+			activity != GenericClientActivityContext.Activity.BANKING &&
+			activity != GenericClientActivityContext.Activity.TRADING &&
+			activity != GenericClientActivityContext.Activity.DIALOGUE)
+		{
+			activity = GenericClientActivityContext.Activity.TRAVEL;
+		}
+		return GenericClientActivityContext.of(activity, discretionaryBehaviorEnabled);
 	}
 
 	private static int requiredInt(Map<?, ?> value, String key)
@@ -991,7 +1102,7 @@ final class GenericClientLuaScript implements AutoCloseable
 		private final Integer targetId;
 		private final String targetName;
 		private final String targetAction;
-		private final boolean breaksEnabled;
+		private final GenericClientActivityContext activityContext;
 		private final boolean useRun;
 		private final String phaseName;
 		private final Map<String, Object> questAction;
@@ -1008,7 +1119,7 @@ final class GenericClientLuaScript implements AutoCloseable
 			Integer targetId,
 			String targetName,
 			String targetAction,
-			boolean breaksEnabled,
+			GenericClientActivityContext activityContext,
 			boolean useRun,
 			String phaseName,
 			Map<String, Object> questAction)
@@ -1022,7 +1133,7 @@ final class GenericClientLuaScript implements AutoCloseable
 			this.targetId = targetId;
 			this.targetName = targetName;
 			this.targetAction = targetAction;
-			this.breaksEnabled = breaksEnabled;
+			this.activityContext = activityContext;
 			this.useRun = useRun;
 			this.phaseName = phaseName;
 			this.questAction = questAction;
@@ -1030,19 +1141,24 @@ final class GenericClientLuaScript implements AutoCloseable
 
 		private static Wait gameTick()
 		{
-			return new Wait(WaitKind.GAME_TICK, 0, 0, null, null, 0, null, null, null, true, true, null, null);
+			return new Wait(WaitKind.GAME_TICK, 0, 0, null, null, 0, null, null, null,
+				GenericClientActivityContext.general(false), true, null, null);
 		}
 
 		private static Wait ticks(int ticks)
 		{
-			return new Wait(WaitKind.TICKS, 0, ticks, null, null, 0, null, null, null, true, true, null, null);
+			return new Wait(WaitKind.TICKS, 0, ticks, null, null, 0, null, null, null,
+				GenericClientActivityContext.general(false), true, null, null);
 		}
 
-		private static Wait randomAction(long requestId, int timeoutTicks, boolean breaksEnabled)
+		private static Wait randomAction(
+			long requestId,
+			int timeoutTicks,
+			GenericClientActivityContext activityContext)
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "walk.random", null, 0,
-				null, null, null, breaksEnabled, true, null, null);
+				null, null, null, activityContext, true, null, null);
 		}
 
 		private static Wait walkAction(
@@ -1050,12 +1166,12 @@ final class GenericClientLuaScript implements AutoCloseable
 			int timeoutTicks,
 			WorldPoint destination,
 			int within,
-			boolean breaksEnabled,
+			GenericClientActivityContext activityContext,
 			boolean useRun)
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "walk.to", destination, within,
-				null, null, null, breaksEnabled, useRun, null, null);
+				null, null, null, activityContext, useRun, null, null);
 		}
 
 		private static Wait npcAction(
@@ -1065,11 +1181,11 @@ final class GenericClientLuaScript implements AutoCloseable
 			String name,
 			String action,
 			int within,
-			boolean breaksEnabled)
+			GenericClientActivityContext activityContext)
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "npc.interact", null, within,
-				id, name, action, breaksEnabled, true, null, null);
+				id, name, action, activityContext, true, null, null);
 		}
 
 		private static Wait questAction(
@@ -1077,46 +1193,49 @@ final class GenericClientLuaScript implements AutoCloseable
 			int timeoutTicks,
 			String type,
 			Map<String, Object> action,
-			boolean breaksEnabled)
+			GenericClientActivityContext activityContext)
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, type, null, 0,
-				null, null, null, breaksEnabled, true, null, action);
+				null, null, null, activityContext, true, null, action);
 		}
 
 		private static Wait combatStyle(
 			long requestId,
 			int timeoutTicks,
 			int style,
-			boolean breaksEnabled)
+			GenericClientActivityContext activityContext)
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "combat.set_style", null, style,
-				null, null, null, breaksEnabled, true, null, null);
+				null, null, null, activityContext, true, null, null);
 		}
 
 		private static Wait combatAutoRetaliate(
 			long requestId,
 			int timeoutTicks,
 			boolean enabled,
-			boolean breaksEnabled)
+			GenericClientActivityContext activityContext)
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "combat.set_auto_retaliate", null,
-					enabled ? 1 : 0, null, null, null, breaksEnabled, true, null, null);
+					enabled ? 1 : 0, null, null, null, activityContext, true, null, null);
 		}
 
 		private static Wait mouseOffscreen(long requestId, int timeoutTicks)
 		{
 			return new Wait(
 				WaitKind.ACTION, requestId, timeoutTicks, "mouse.offscreen", null, 0,
-					null, null, null, false, true, null, null);
+					null, null, null, GenericClientActivityContext.general(false), true, null, null);
 		}
 
-		private static Wait phase(long requestId, String name, boolean breaksEnabled)
+		private static Wait phase(
+			long requestId,
+			String name,
+			GenericClientActivityContext activityContext)
 		{
 			return new Wait(WaitKind.PHASE, requestId, 0, null, null, 0,
-				null, null, null, breaksEnabled, true, name, null);
+				null, null, null, activityContext, true, name, null);
 		}
 	}
 }

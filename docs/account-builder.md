@@ -218,6 +218,19 @@ XP and Hitpoints to 25 at 8,184 XP. Fire Strike autocast, exact-ID reacquisition
 after level-up dialogue, the global 30%-HP forced-food rule, and continued
 combat after a successful wine were all exercised live.
 
+A later exact-target run completed Magic 30 at 13,386 XP and Hitpoints 27 at
+10,674 XP. It gained 6,654 Magic XP from its validated 6,732-XP start and
+returned a terminal target receipt rather than stopping on an approximate
+level observation.
+
+Tree Gnome Village is the next bounded quest milestone. Preparation bought only
+the six logs, 100 chaos runes, and 300 earth runes needed for its current slice,
+reusing the air staff, ring of dueling, and wines. Known bank cash after that
+preparation was 14,160,204 coins and the existing bond offer remained untouched.
+Quest Runner crossed the maze, handled a Count Check interruption, honored a
+21-minute AFK break through logout and launcher relogin, accepted the quest, and
+stopped at the verified `talk_montai_checkpoint` with quest varp 1.
+
 Sources:
 
 - [Pay-to-play melee training](https://oldschool.runescape.wiki/w/Pay-to-play_melee_training)
@@ -256,8 +269,8 @@ Reference surfaces used for this envelope:
 
 ## Next evidence gate
 
-Preserve Waterfall as a completed standalone quest module. Reconcile the live
-bank and quest graph, select the next efficient members-first prerequisite or
-combat milestone, and implement only the reusable AIO/quest slice needed for
-that milestone. Continue enforcing exact Attack, Defence, and Prayer caps,
-just-in-time purchasing, and the 5,000,000-coin reserve.
+Resume the modular Tree Gnome Village runner from Commander Montai. Keep each
+quest phase state-derived and resumable, and stop at the next stable checkpoint
+unless a complete run has already been selected. Continue enforcing exact
+Attack, Defence, and Prayer caps, just-in-time purchasing, and the
+5,000,000-coin reserve.

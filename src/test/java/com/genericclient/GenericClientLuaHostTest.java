@@ -208,7 +208,8 @@ public class GenericClientLuaHostTest
 			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			(id, name, action, within, breaks) ->
 			{
-				request.set(id + ":" + name + ":" + action + ":" + within + ":" + breaks);
+				request.set(id + ":" + name + ":" + action + ":" + within + ":" +
+					breaks.allowsBreaks());
 				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
 				receipt.put("status", "dispatched");
 				receipt.put("result", "menu_action_executed");
@@ -259,7 +260,7 @@ public class GenericClientLuaHostTest
 			{
 				requestedType.set(type);
 				requestedAction.set(action);
-				requestedBreaks.set(breaks);
+				requestedBreaks.set(breaks.allowsBreaks());
 				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
 				receipt.put("status", "dispatched");
 				receipt.put("result", "item_used_on_object");
@@ -291,6 +292,72 @@ public class GenericClientLuaHostTest
 			assertEquals(2903.0, ((Map<?, ?>) requestedAction.get().get("world")).get("x"));
 			assertEquals(Boolean.FALSE, requestedBreaks.get());
 			assertTrue(host.getRecentLogs().contains("item_used_on_object"));
+		}
+		finally
+		{
+			host.close();
+		}
+	}
+
+	@Test
+	public void capturesAndInfersAnImmutableActivityForEveryAwaitedAction() throws Exception
+	{
+		List<String> activities = new java.util.concurrent.CopyOnWriteArrayList<>();
+		GenericClientLuaHost host = new GenericClientLuaHost(
+			temporaryFolder.newFolder("activity-scripts").toPath(),
+			context -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
+			(destination, within, timeout, context, useRun) ->
+			{
+				activities.add("walk:" + context.getActivity().getValue());
+				return CompletableFuture.completedFuture(Collections.singletonMap("status", "arrived"));
+			},
+			(id, name, action, within, context) ->
+			{
+				activities.add(action + ":" + context.getActivity().getValue());
+				return CompletableFuture.completedFuture(Collections.singletonMap("status", "dispatched"));
+			},
+			(mode, context) -> CompletableFuture.completedFuture(Collections.singletonMap("status", "set")),
+			(type, action, context) ->
+			{
+				activities.add(type + ":" + context.getActivity().getValue());
+				return CompletableFuture.completedFuture(Collections.singletonMap("status", "complete"));
+			},
+			reason -> { },
+			GenericClientTestSupport.behavior(
+				temporaryFolder.newFolder("activity-behavior").toPath()),
+			message -> { });
+		try
+		{
+			host.saveScript(
+				"activity",
+				"Activity",
+				"Exercise activity capture and semantic inference.",
+				script(
+					"gc.activity('skilling')\n" +
+					"gc.await { activity = 'banking', action = { type = 'item.interact', id = 1, action = 'Use' } }\n" +
+					"gc.await { action = { type = 'item.interact', id = 1, action = 'Use' } }\n" +
+					"gc.await { action = { type = 'walk.to', destination = { x = 3200, y = 3200, plane = 0 } } }\n" +
+					"gc.await { action = { type = 'npc.interact', id = 1, action = 'Talk-to' } }\n" +
+					"gc.await { action = { type = 'npc.interact', id = 1, action = 'Attack' } }\n" +
+					"gc.await { action = { type = 'npc.interact', id = 1, action = 'Bank' } }\n" +
+					"gc.await { action = { type = 'npc.interact', id = 1, action = 'Exchange' } }\n" +
+					"gc.await { action = { type = 'bank.loadout', items = {} } }\n" +
+					"gc.await { action = { type = 'ge.buy', item_id = 1, item_name = 'Test', quantity = 1, maximum_unit_price = 1 } }"))
+				.get(2, TimeUnit.SECONDS);
+
+			host.start("activity").get(2, TimeUnit.SECONDS);
+			waitForStatus(host, "COMPLETED");
+
+			assertEquals(java.util.Arrays.asList(
+				"item.interact:banking",
+				"item.interact:skilling",
+				"walk:travel",
+				"Talk-to:dialogue",
+				"Attack:combat",
+				"Bank:banking",
+				"Exchange:trading",
+				"bank.loadout:banking",
+				"ge.buy:trading"), activities);
 		}
 		finally
 		{
@@ -361,7 +428,7 @@ public class GenericClientLuaHostTest
 			{
 				requestedType.set(type);
 				requestedAction.set(action);
-				requestedBreaks.set(breaks);
+				requestedBreaks.set(breaks.allowsBreaks());
 				return CompletableFuture.completedFuture(receipt("dispatched"));
 			},
 			reason -> { },
@@ -514,7 +581,7 @@ public class GenericClientLuaHostTest
 			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			(style, breaks) ->
 			{
-				request.set(style + ":" + breaks);
+				request.set(style + ":" + breaks.allowsBreaks());
 				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
 				receipt.put("status", "set");
 				receipt.put("style_index", (long) style);
@@ -559,7 +626,7 @@ public class GenericClientLuaHostTest
 			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			(mode, breaks) ->
 			{
-				request.set(mode + ":" + breaks);
+				request.set(mode + ":" + breaks.allowsBreaks());
 				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
 				receipt.put("status", "set");
 				receipt.put("enabled", mode == 5);
@@ -940,7 +1007,7 @@ public class GenericClientLuaHostTest
 			});
 		long behaviorHash = 0L;
 		while (GenericClientBehaviorProfile.fromAccountHash(behaviorHash)
-			.getShortReleaseProbability() > 0.10)
+			.getMicroBreakProbability() > 0.10)
 		{
 			behaviorHash++;
 		}
@@ -1383,7 +1450,7 @@ public class GenericClientLuaHostTest
 				if ("object.interact".equals(type))
 				{
 					bankObject.set(action.get("id") + ":" + action.get("action"));
-					bankBreaks.set(breaks);
+					bankBreaks.set(breaks.allowsBreaks());
 				}
 				return CompletableFuture.completedFuture(receipt(
 					"safety.configure".equals(type) ? "complete" : "dispatched"));
@@ -1413,7 +1480,7 @@ public class GenericClientLuaHostTest
 			}
 
 			assertEquals("4483.0:Use", bankObject.get());
-			assertEquals(Boolean.TRUE, bankBreaks.get());
+			assertEquals(Boolean.FALSE, bankBreaks.get());
 		}
 		finally
 		{
@@ -1443,7 +1510,7 @@ public class GenericClientLuaHostTest
 				if ("bank.loadout".equals(type))
 				{
 					requestedItems.set((List<Map<String, Object>>) action.get("items"));
-					requestedBreaks.set(breaks);
+					requestedBreaks.set(breaks.allowsBreaks());
 				}
 				return CompletableFuture.completedFuture(receipt(
 					"safety.configure".equals(type) || "bank.loadout".equals(type)
@@ -1482,7 +1549,7 @@ public class GenericClientLuaHostTest
 			assertTrue("No bank loadout was dispatched", loadout != null);
 			assertTrue(loadout.stream().anyMatch(item ->
 				((Number) item.get("id")).intValue() == 295));
-			assertEquals(Boolean.TRUE, requestedBreaks.get());
+			assertEquals(Boolean.FALSE, requestedBreaks.get());
 		}
 		finally
 		{
@@ -1701,7 +1768,7 @@ public class GenericClientLuaHostTest
 				if (!"safety.configure".equals(type))
 				{
 					questRequest.set(type + ":" + action.get("id"));
-					questBreaks.set(breaks);
+					questBreaks.set(breaks.allowsBreaks());
 				}
 				return CompletableFuture.completedFuture(receipt(
 					"safety.configure".equals(type) ? "complete" : "dispatched"));
@@ -1763,7 +1830,7 @@ public class GenericClientLuaHostTest
 				}
 				if ("item.interact".equals(type))
 				{
-					escapeBreaks.set(breaks);
+					escapeBreaks.set(breaks.allowsBreaks());
 				}
 				return CompletableFuture.completedFuture(receipt(
 					"safety.configure".equals(type)
@@ -1837,7 +1904,7 @@ public class GenericClientLuaHostTest
 				}
 				if ("item.interact".equals(type))
 				{
-					escapeBreaks.set(breaks);
+					escapeBreaks.set(breaks.allowsBreaks());
 				}
 				return CompletableFuture.completedFuture(receipt(
 					"safety.configure".equals(type)
@@ -1902,7 +1969,7 @@ public class GenericClientLuaHostTest
 			{
 				destinations.add(world);
 				within.add(requestedWithin);
-				walkBreaks.add(breaks);
+				walkBreaks.add(breaks.allowsBreaks());
 				return CompletableFuture.completedFuture(receipt(
 					destinations.size() == 1 ? "arrived" : "rejected"));
 			},
@@ -1973,7 +2040,7 @@ public class GenericClientLuaHostTest
 			{
 				destination.set(world);
 				within.set(requestedWithin);
-				walkBreaks.set(breaks);
+				walkBreaks.set(breaks.allowsBreaks());
 				return CompletableFuture.completedFuture(receipt("rejected"));
 			},
 			(id, name, action, requestedWithin, breaks) ->

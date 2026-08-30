@@ -206,14 +206,14 @@ final class GenericClientBehaviorController implements AutoCloseable
 		}
 	}
 
-	CompletableFuture<Map<String, Object>> beforeAction(boolean breaksEnabled)
+	CompletableFuture<Map<String, Object>> beforeAction(GenericClientActivityContext activityContext)
 	{
 		synchronized (this)
 		{
 			ensureOpen();
-			if (!breaksEnabled)
+			if (!activityContext.allowsBreaks())
 			{
-				return completed("bypassed", "action");
+				return completed("bypassed", "action", activityContext);
 			}
 			if (profile == null || state == null)
 			{
@@ -221,24 +221,46 @@ final class GenericClientBehaviorController implements AutoCloseable
 			}
 			if (activeBreak != null)
 			{
-				return activeBreak.thenApply(ignored -> receipt("resumed", "existing_break"));
+				return activeBreak.thenApply(ignored ->
+					receipt("resumed", "existing_break", activityContext));
 			}
 			if (longDue(0.0))
 			{
 				return startLongBreak("action", 0.0);
 			}
-			return completed("ready", "action");
+			return completed("ready", "action", activityContext);
 		}
 	}
 
-	CompletableFuture<Map<String, Object>> afterAction(boolean breaksEnabled)
+	CompletableFuture<Map<String, Object>> afterAction(GenericClientActivityContext activityContext)
+	{
+		final CompletableFuture<Map<String, Object>> cursorRelease;
+		synchronized (this)
+		{
+			ensureOpen();
+			if (profile == null || state == null)
+			{
+				return failed(new IllegalStateException("Behavior profile is unavailable until account login"));
+			}
+			cursorRelease = cursorRelease(activityContext);
+		}
+		return cursorRelease.thenCompose(cursor -> afterActionBreak(activityContext).thenApply(pause ->
+		{
+			Map<String, Object> result = new LinkedHashMap<>(pause);
+			result.put("cursor_release", cursor);
+			return result;
+		}));
+	}
+
+	private CompletableFuture<Map<String, Object>> afterActionBreak(
+		GenericClientActivityContext activityContext)
 	{
 		synchronized (this)
 		{
 			ensureOpen();
-			if (!breaksEnabled)
+			if (!activityContext.allowsBreaks())
 			{
-				return completed("bypassed", "action_complete");
+				return completed("bypassed", "action_complete", activityContext);
 			}
 			if (profile == null || state == null)
 			{
@@ -251,28 +273,85 @@ final class GenericClientBehaviorController implements AutoCloseable
 			if (state.consumeMicroSuppression())
 			{
 				saveStateQuietly();
-				return completed("suppressed_after_long_break", "action_complete");
+				return completed("suppressed_after_long_break", "action_complete", activityContext);
 			}
 			if (longDue(0.0))
 			{
 				return startLongBreak("action_complete_due", 0.0);
 			}
-			if (random.nextDouble() < profile.getShortReleaseProbability())
+			if (random.nextDouble() < profile.getMicroBreakProbability())
 			{
-				return startMicroBreak("action_complete", profile.getShortReleaseProbability(), false);
+				return startMicroBreak("action_complete", profile.getMicroBreakProbability(), false);
 			}
-			return completed("no_break", "action_complete");
+			return completed("no_break", "action_complete", activityContext);
 		}
 	}
 
-	CompletableFuture<Map<String, Object>> enterPhase(String phase, boolean breaksEnabled)
+	private CompletableFuture<Map<String, Object>> cursorRelease(
+		GenericClientActivityContext activityContext)
+	{
+		if (!activityContext.allowsCursorRelease())
+		{
+			return completed("bypassed", "cursor_release", activityContext);
+		}
+		double probability = profile.getCursorReleaseProbability();
+		double roll = random.nextDouble();
+		if (roll >= probability)
+		{
+			Map<String, Object> skipped = receipt("not_selected", "cursor_release", activityContext);
+			skipped.put("probability", probability);
+			skipped.put("roll", roll);
+			return CompletableFuture.completedFuture(skipped);
+		}
+		GenericClientBehaviorProfile.Edge edge = profile.getIdleEdge();
+		reporter.accept("BEHAVIOR_CURSOR_RELEASE_STARTED activity=" +
+			activityContext.getActivity().getValue() + " edge=" + edge.name().toLowerCase(Locale.ROOT));
+		return effects.moveOffscreen(edge).handle((value, error) ->
+		{
+			Map<String, Object> result = receipt(
+				error == null ? "moved" : "failed",
+				"cursor_release",
+				activityContext);
+			result.put("probability", probability);
+			result.put("roll", roll);
+			result.put("edge", edge.name().toLowerCase(Locale.ROOT));
+			if (error == null)
+			{
+				synchronized (GenericClientBehaviorController.this)
+				{
+					if (state != null)
+					{
+						state.recordCursorRelease();
+						saveStateQuietly();
+					}
+				}
+				reporter.accept("BEHAVIOR_CURSOR_RELEASE_COMPLETED activity=" +
+					activityContext.getActivity().getValue() + " edge=" +
+					edge.name().toLowerCase(Locale.ROOT));
+				result.put("result", value);
+			}
+			else
+			{
+				String message = error.getMessage() == null
+					? error.getClass().getSimpleName()
+					: error.getMessage();
+				reporter.accept("BEHAVIOR_CURSOR_RELEASE_FAILED message=" + message);
+				result.put("message", message);
+			}
+			return result;
+		});
+	}
+
+	CompletableFuture<Map<String, Object>> enterPhase(
+		String phase,
+		GenericClientActivityContext activityContext)
 	{
 		synchronized (this)
 		{
 			ensureOpen();
-			if (!breaksEnabled)
+			if (!activityContext.allowsBreaks())
 			{
-				return completed("bypassed", "phase:" + phase);
+				return completed("bypassed", "phase:" + phase, activityContext);
 			}
 			if (profile == null || state == null)
 			{
@@ -280,7 +359,8 @@ final class GenericClientBehaviorController implements AutoCloseable
 			}
 			if (activeBreak != null)
 			{
-				return activeBreak.thenApply(ignored -> receipt("resumed", "phase:" + phase));
+				return activeBreak.thenApply(ignored ->
+					receipt("resumed", "phase:" + phase, activityContext));
 			}
 
 			long activeMillis = state.getTotalActiveMillis();
@@ -294,7 +374,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 				{
 					return startLongBreak("phase_due:" + phase, 0.0);
 				}
-				return completed("phase_cooldown", phase);
+				return completed("phase_cooldown", phase, activityContext);
 			}
 
 			state.recordPhase(phase);
@@ -307,14 +387,14 @@ final class GenericClientBehaviorController implements AutoCloseable
 				return startLongBreak("phase:" + phase, longBonus);
 			}
 			double shortChance = 1.0 - Math.pow(
-				1.0 - profile.getShortReleaseProbability(),
+				1.0 - profile.getMicroBreakProbability(),
 				profile.getPhaseShortChances());
 			if (random.nextDouble() < shortChance)
 			{
 				return startMicroBreak("phase:" + phase, shortChance, true);
 			}
 			saveStateQuietly();
-			return completed("no_break", "phase:" + phase);
+			return completed("no_break", "phase:" + phase, activityContext);
 		}
 	}
 
@@ -340,6 +420,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 		value.put("long_due", hazard >= state.getLongHazardBudget());
 		value.put("micro_break_count", state.getMicroBreakCount());
 		value.put("long_break_count", state.getLongBreakCount());
+		value.put("cursor_release_count", state.getCursorReleaseCount());
 		return value;
 	}
 
@@ -524,21 +605,9 @@ final class GenericClientBehaviorController implements AutoCloseable
 
 	private CompletableFuture<Void> applyBreakEffects(String type, String mode)
 	{
-		return effects.moveOffscreen(profile.getIdleEdge())
-			.handle((ignored, error) ->
-			{
-				if (error != null)
-				{
-					reporter.accept("BEHAVIOR_OFFSCREEN_FAILED message=" + error.getMessage());
-				}
-				return null;
-			})
-			.thenCompose(ignored -> "long".equals(type) && "logout".equals(mode)
-				? effects.logout()
-				: CompletableFuture.completedFuture("not_required"))
-			.thenCompose(ignored -> "long".equals(type) && "logout".equals(mode)
-				? effects.moveOffscreen(profile.getIdleEdge())
-				: CompletableFuture.completedFuture("not_required"))
+		return ("long".equals(type) && "logout".equals(mode)
+			? effects.logout()
+			: CompletableFuture.completedFuture("not_required"))
 			.handle((ignored, error) ->
 			{
 				if (error != null)
@@ -643,6 +712,14 @@ final class GenericClientBehaviorController implements AutoCloseable
 		return CompletableFuture.completedFuture(receipt(status, kind));
 	}
 
+	private static CompletableFuture<Map<String, Object>> completed(
+		String status,
+		String kind,
+		GenericClientActivityContext activityContext)
+	{
+		return CompletableFuture.completedFuture(receipt(status, kind, activityContext));
+	}
+
 	private static <T> CompletableFuture<T> failed(Throwable error)
 	{
 		CompletableFuture<T> result = new CompletableFuture<>();
@@ -655,6 +732,17 @@ final class GenericClientBehaviorController implements AutoCloseable
 		Map<String, Object> value = new LinkedHashMap<>();
 		value.put("status", status);
 		value.put("kind", kind);
+		return value;
+	}
+
+	private static Map<String, Object> receipt(
+		String status,
+		String kind,
+		GenericClientActivityContext activityContext)
+	{
+		Map<String, Object> value = receipt(status, kind);
+		value.put("activity", activityContext.getActivity().getValue());
+		value.put("policy", activityContext.toMap());
 		return value;
 	}
 

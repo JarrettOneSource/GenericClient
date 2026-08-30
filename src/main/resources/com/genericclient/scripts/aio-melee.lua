@@ -179,6 +179,8 @@ return {
       gc.phase("melee." .. method_id .. ".arrived")
     end
 
+    gc.activity("combat")
+
     local stop_requested = false
     local low_hitpoints = false
     while true do

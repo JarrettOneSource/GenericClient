@@ -52,6 +52,7 @@ public class GenericClientDashboardTest
 
 			List<String> labels = labels(content);
 			assertTrue(labels.contains("Chance"));
+			assertTrue(labels.contains("Offscreen chance"));
 			assertTrue(labels.contains("Move duration"));
 			assertTrue(labels.contains("Effect"));
 			assertFalse(labels.contains("Game ticks"));
@@ -82,8 +83,10 @@ public class GenericClientDashboardTest
 		settings.updateBehavior(behavior);
 
 		spinnerInRow(settings, "Chance").setValue(91);
+		spinnerInRow(settings, "Offscreen chance").setValue(87);
 		button(settings, "Save custom").doClick();
-		assertEquals(0.91, actions.savedOverrides.getShortReleaseProbability(), 0.0);
+		assertEquals(0.91, actions.savedOverrides.getMicroBreakProbability(), 0.0);
+		assertEquals(0.87, actions.savedOverrides.getCursorReleaseProbability(), 0.0);
 
 		button(settings, "Use seeded").doClick();
 		assertEquals(1, actions.resetCount);

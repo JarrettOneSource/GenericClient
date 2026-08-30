@@ -39,8 +39,8 @@ public class GenericClientGameInputTest
 		{
 			CompletableFuture<GenericClientInteractionResult> pending =
 				GenericClientGameInput.performWithBehavior(
-				fixture.behavior,
-				true,
+					fixture.behavior,
+					context(true),
 				() -> CompletableFuture.completedFuture(new GenericClientGameInput.RawWalkResult(
 					new WorldPoint(3205, 3205, 0),
 					"WALK_TILE_CLICK_EXECUTED test",
@@ -66,7 +66,7 @@ public class GenericClientGameInputTest
 		{
 			GenericClientInteractionResult result = GenericClientGameInput.performWithBehavior(
 				fixture.behavior,
-				true,
+				context(true),
 				() -> CompletableFuture.completedFuture(new GenericClientGameInput.RawWalkResult(
 					null,
 					"WALK_TILE_CLICK_FAILED test",
@@ -89,7 +89,7 @@ public class GenericClientGameInputTest
 		{
 			GenericClientInteractionResult result = GenericClientGameInput.performWithBehavior(
 				fixture.behavior,
-				false,
+				context(false),
 				() -> CompletableFuture.completedFuture(new GenericClientGameInput.RawWalkResult(
 					new WorldPoint(3205, 3205, 0),
 					"WALK_TILE_CLICK_EXECUTED test",
@@ -103,6 +103,13 @@ public class GenericClientGameInputTest
 		{
 			fixture.behavior.close();
 		}
+	}
+
+	private static GenericClientActivityContext context(boolean enabled)
+	{
+		return GenericClientActivityContext.of(
+			GenericClientActivityContext.Activity.TRAVEL,
+			enabled);
 	}
 
 	private BehaviorFixture behaviorFixture() throws Exception

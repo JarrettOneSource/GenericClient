@@ -30,6 +30,7 @@ final class GenericClientSettingsPanel extends JPanel
 	private final JLabel profileTitle = GenericClientDashboardStyle.strong("Profile loads after login");
 	private final JLabel breakState = GenericClientDashboardStyle.small("");
 	private final JSpinner microChance = spinner(35, 0, 100, 1);
+	private final JSpinner cursorReleaseChance = spinner(50, 0, 100, 1);
 	private final JSpinner microLength = spinner(5.0, 1.0, 119.0, 0.5);
 	private final JSpinner microTail = spinner(8, 0, 100, 1);
 	private final JSpinner longInterval = spinner(110, 20, 1_440, 5);
@@ -115,6 +116,7 @@ final class GenericClientSettingsPanel extends JPanel
 			.gap(18)
 			.put(GenericClientDashboardStyle.columns(28,
 				GenericClientDashboardStyle.group("Input",
+					GenericClientDashboardStyle.row("Offscreen chance", cursorReleaseChance, "%"),
 					GenericClientDashboardStyle.row("Idle side", idleEdge, ""),
 					GenericClientDashboardStyle.row("Move duration", mouseDuration, "ms"),
 					GenericClientDashboardStyle.row("Typing speed", typingWordsPerMinute, "WPM")),
@@ -122,7 +124,7 @@ final class GenericClientSettingsPanel extends JPanel
 			.gap(20)
 			.put(footer);
 		behaviorControls = Arrays.asList(
-			microChance, microLength, microTail, phaseBoost,
+			microChance, microLength, microTail, phaseBoost, cursorReleaseChance,
 			longInterval, longLength, longStyle, styleSwitchChance,
 			idleEdge, mouseDuration, typingWordsPerMinute, save, seeded);
 
@@ -205,7 +207,8 @@ final class GenericClientSettingsPanel extends JPanel
 		updatingBehavior = true;
 		try
 		{
-			microChance.setValue(percent(profile.get("short_release_probability")));
+			microChance.setValue(percent(profile.get("micro_break_probability")));
+			cursorReleaseChance.setValue(percent(profile.get("cursor_release_probability")));
 			microLength.setValue(roundTo(number(profile.get("short_body_median_seconds")).doubleValue(), 0.5));
 			microTail.setValue(percent(profile.get("short_tail_probability")));
 			longInterval.setValue((int) Math.round(number(profile.get("long_cadence_minutes")).doubleValue()));
@@ -257,6 +260,7 @@ final class GenericClientSettingsPanel extends JPanel
 	{
 		ChangeListener change = event -> markBehaviorDirty();
 		microChance.addChangeListener(change);
+		cursorReleaseChance.addChangeListener(change);
 		microLength.addChangeListener(change);
 		microTail.addChangeListener(change);
 		longInterval.addChangeListener(change);
@@ -284,6 +288,7 @@ final class GenericClientSettingsPanel extends JPanel
 		{
 			GenericClientBehaviorOverrides overrides = new GenericClientBehaviorOverrides(
 				((Number) microChance.getValue()).doubleValue() / 100.0,
+				((Number) cursorReleaseChance.getValue()).doubleValue() / 100.0,
 				((Number) microLength.getValue()).doubleValue(),
 				((Number) microTail.getValue()).doubleValue() / 100.0,
 				((Number) longInterval.getValue()).doubleValue(),

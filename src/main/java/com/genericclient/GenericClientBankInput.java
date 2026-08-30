@@ -68,7 +68,7 @@ final class GenericClientBankInput implements AutoCloseable
 		List<Requirement> requirements,
 		int minimumFreeSlots,
 		boolean closeBank,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		validateRequirements(requirements, minimumFreeSlots);
 		CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
@@ -102,7 +102,7 @@ final class GenericClientBankInput implements AutoCloseable
 					InterfaceID.Bankmain.DEPOSITINV,
 					"deposit_inventory",
 					() -> containerUsedSlots(InventoryID.INV) == 0,
-					breaksEnabled));
+					activityContext));
 			}
 			if (initial.equipmentUsedSlots > 0)
 			{
@@ -110,7 +110,7 @@ final class GenericClientBankInput implements AutoCloseable
 					InterfaceID.Bankmain.DEPOSITWORN,
 					"deposit_equipment",
 					() -> containerUsedSlots(InventoryID.WORN) == 0,
-					breaksEnabled));
+					activityContext));
 			}
 			if (initial.withdrawNotes)
 			{
@@ -118,11 +118,11 @@ final class GenericClientBankInput implements AutoCloseable
 					InterfaceID.Bankmain.NOTE,
 					"withdraw_as_items",
 					() -> client.getVarbitValue(VarbitID.BANK_WITHDRAWNOTES) == 0,
-					breaksEnabled));
+					activityContext));
 			}
 			for (Requirement requirement : requested)
 			{
-				flow = append(flow, () -> withdraw(requirement, breaksEnabled));
+				flow = append(flow, () -> withdraw(requirement, activityContext));
 			}
 			return flow.thenCompose(steps -> verifyLoadout(requested, minimumFreeSlots)
 				.thenCompose(verification ->
@@ -131,7 +131,7 @@ final class GenericClientBankInput implements AutoCloseable
 					{
 						return CompletableFuture.completedFuture(finalReceipt(verification, steps, false));
 					}
-					return closeBank(breaksEnabled).thenApply(closeReceipt ->
+					return closeBank(activityContext).thenApply(closeReceipt ->
 					{
 						steps.add(closeReceipt);
 						boolean bankClosed = "complete".equals(closeReceipt.get("status"));
@@ -165,7 +165,7 @@ final class GenericClientBankInput implements AutoCloseable
 
 	private CompletableFuture<Map<String, Object>> withdraw(
 		Requirement requirement,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return clientRead(() -> itemQuantity(InventoryID.BANK, requirement.itemId)).thenCompose(bankQuantity ->
 		{
@@ -185,27 +185,28 @@ final class GenericClientBankInput implements AutoCloseable
 			if (!"Withdraw-X".equals(action))
 			{
 				return menuInput.interact(
-					() -> resolveBankItem(requirement.itemId, action), breaksEnabled)
+					() -> resolveBankItem(requirement.itemId, action), activityContext)
 					.thenCompose(receipt -> verifyReceipt(
 						receipt,
 						"withdraw_" + requirement.itemId,
 						() -> itemQuantity(InventoryID.INV, requirement.itemId) == requirement.quantity));
 			}
-			return withdrawExact(requirement, breaksEnabled);
+			return withdrawExact(requirement, activityContext);
 		});
 	}
 
 	private CompletableFuture<Map<String, Object>> withdrawExact(
 		Requirement requirement,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		Map<String, Object> outerBefore = new LinkedHashMap<>();
 		Map<String, Object> outerAfter = new LinkedHashMap<>();
-		return behavior.beforeAction(breaksEnabled).thenCompose(before ->
+		return behavior.beforeAction(activityContext).thenCompose(before ->
 		{
 			outerBefore.putAll(before);
 			return menuInput.interact(
-				() -> resolveBankItem(requirement.itemId, "Withdraw-X"), false);
+				() -> resolveBankItem(requirement.itemId, "Withdraw-X"),
+				GenericClientActivityContext.none());
 		}).thenCompose(receipt ->
 		{
 			if (!wasDispatched(receipt))
@@ -238,7 +239,7 @@ final class GenericClientBankInput implements AutoCloseable
 					.thenCompose(typed -> waitUntil(
 						() -> itemQuantity(InventoryID.INV, requirement.itemId) == requirement.quantity,
 						"withdraw_" + requirement.itemId))
-					.thenCompose(verified -> behavior.afterAction(breaksEnabled).thenApply(after ->
+					.thenCompose(verified -> behavior.afterAction(activityContext).thenApply(after ->
 					{
 						outerAfter.putAll(after);
 						Map<String, Object> result = new LinkedHashMap<>(verified);
@@ -257,10 +258,10 @@ final class GenericClientBankInput implements AutoCloseable
 		int widgetId,
 		String description,
 		Supplier<Boolean> condition,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		return menuInput.interact(
-			() -> resolveWidget(widgetId, description), breaksEnabled)
+			() -> resolveWidget(widgetId, description), activityContext)
 			.thenCompose(receipt -> verifyReceipt(receipt, description, condition));
 	}
 
@@ -310,12 +311,12 @@ final class GenericClientBankInput implements AutoCloseable
 		});
 	}
 
-	private CompletableFuture<Map<String, Object>> closeBank(boolean breaksEnabled)
+	private CompletableFuture<Map<String, Object>> closeBank(GenericClientActivityContext activityContext)
 	{
-		return behavior.beforeAction(breaksEnabled)
+		return behavior.beforeAction(activityContext)
 			.thenCompose(before -> keyboard.pressEscape().thenCompose(ignored ->
 				waitUntil(() -> !bankOpen(), "close_bank").thenCompose(receipt ->
-					behavior.afterAction(breaksEnabled).thenApply(after ->
+					behavior.afterAction(activityContext).thenApply(after ->
 					{
 						Map<String, Object> result = new LinkedHashMap<>(receipt);
 						result.put("behavior_before", before);

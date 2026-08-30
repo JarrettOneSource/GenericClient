@@ -23,7 +23,7 @@ public class GenericClientScriptRegistryTest
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(
 			temporaryFolder.newFolder("scripts").toPath());
 
-		assertEquals(8, registry.list().size());
+		assertEquals(9, registry.list().size());
 		assertEquals("Account Auditor", registry.get("account-auditor").getName());
 		assertEquals("AIO Melee Trainer", registry.get("aio-melee").getName());
 		assertEquals("AIO Magic Trainer", registry.get("aio-magic").getName());
@@ -40,12 +40,20 @@ public class GenericClientScriptRegistryTest
 		assertTrue(registry.readExecutableSource("quest-runner").contains("pillar_count_unexpected"));
 		assertTrue(registry.readExecutableSource("quest-runner").contains("equipment.interact"));
 		assertTrue(registry.readExecutableSource("quest-runner").contains("glarial_tomb_exit_ladder_not_observed"));
+		assertTrue(registry.readExecutableSource("quest-runner").contains("warlord_safety_failed"));
+		assertTrue(registry.readExecutableSource("quest-runner").contains("ballista_hit_verified"));
+		assertTrue(Files.isRegularFile(
+			temporaryFolder.getRoot().toPath().resolve("scripts/quest-runner/tree_gnome_village/state.lua")));
 		assertFalse(registry.readModuleSources("quest-runner").get("waterfall_config")
 			.contains("3867"));
 		assertTrue(registry.readSource("aio-melee").contains("combat.set_style"));
 		assertTrue(registry.readSource("account-auditor").contains("gc.read(\"account\")"));
 		assertEquals("capt-arnav", registry.findRandomEventSolver(5426).getId());
 		assertTrue(registry.readSource("capt-arnav").contains("gc.read(\"widgets\","));
+		assertEquals("count-check",
+			registry.findRandomEventSolver(NpcID.MACRO_COUNTCHECK_SURFACE).getId());
+		assertEquals("count-check",
+			registry.findRandomEventSolver(NpcID.MACRO_COUNTCHECK_UNDERWATER).getId());
 		assertEquals("pinball", registry.findRandomEventSolver(NpcID.PINBALL_INVITATION).getId());
 		assertTrue(registry.readSource("pinball").contains("VARBITS.score"));
 		assertEquals("Walker", registry.get("walker").getName());
@@ -98,11 +106,13 @@ public class GenericClientScriptRegistryTest
 
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
 
-		assertEquals(9, registry.list().size());
+		assertEquals(10, registry.list().size());
 		assertEquals("Custom", registry.get("custom").getName());
 		assertTrue(registry.readExecutableSource("quest-runner")
 			.contains("local approach = walk(pillar.world, 3, 120)"));
 		assertEquals("capt-arnav", registry.findRandomEventSolver(5426).getId());
+		assertEquals("count-check",
+			registry.findRandomEventSolver(NpcID.MACRO_COUNTCHECK_SURFACE).getId());
 		assertEquals("pinball", registry.findRandomEventSolver(NpcID.PINBALL_INVITATION).getId());
 		assertEquals("return { run = function(input) return 'custom' end }\n",
 			registry.readSource("custom"));

@@ -146,3 +146,19 @@ varbits and observed scene objects, so it is independent of camera angle,
 screen coordinates, and instance placement. Event dialogue, post tags, and the
 exit all bypass breaks as one time-sensitive interruption; the solver returns
 only after the reward message is present.
+
+## Count Check evidence
+
+On 2026-08-29 GenericClient live-detected Count Check NPC `12551` while Quest
+Runner was crossing the Tree Gnome Village maze. It interrupted and retained
+the quest, completed the event's automatic account check, observed the exact
+`You do not have a Bank PIN, so you fail my checks!` outcome, drained the final
+Continue page, and resumed from the same maze state. No reward exists for that
+outcome, and GenericClient did not attempt to create an account-security PIN.
+
+The bundled `count-check` solver owns surface NPC `12551` and underwater NPC
+`12552`. It accepts the account-check choice when one is shown, handles the
+automatic random-event dialogue, and treats either the pass or fail message
+plus NPC departure as the completion receipt. A successful security check can
+leave its lamp in inventory for the account planner; a failed check is still a
+fully processed event.

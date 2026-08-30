@@ -53,9 +53,9 @@ final class GenericClientWalker implements AutoCloseable
 			@Override
 			public CompletableFuture<GenericClientInteractionResult> walkToFarthest(
 				List<WorldPoint> candidates,
-				boolean breaksEnabled)
+				GenericClientActivityContext activityContext)
 			{
-				return gameInput.walkToFarthest(candidates, breaksEnabled);
+				return gameInput.walkToFarthest(candidates, activityContext);
 			}
 
 			@Override
@@ -71,9 +71,9 @@ final class GenericClientWalker implements AutoCloseable
 				String action,
 				WorldPoint world,
 				int within,
-				boolean breaksEnabled)
+				GenericClientActivityContext activityContext)
 			{
-				return objectInput.interact(objectId, action, world, within, breaksEnabled);
+				return objectInput.interact(objectId, action, world, within, activityContext);
 			}
 
 			@Override
@@ -93,7 +93,7 @@ final class GenericClientWalker implements AutoCloseable
 		this(
 			gameInput,
 			obstacleInput,
-			(enabled, breaksEnabled) -> CompletableFuture.completedFuture(runUnchanged()),
+			(enabled, activityContext) -> CompletableFuture.completedFuture(runUnchanged()),
 			reason -> { },
 			collisionMap,
 			reporter);
@@ -102,7 +102,7 @@ final class GenericClientWalker implements AutoCloseable
 	GenericClientWalker(
 		WalkInput gameInput,
 		ObstacleInput obstacleInput,
-		java.util.function.BiFunction<Boolean, Boolean,
+		java.util.function.BiFunction<Boolean, GenericClientActivityContext,
 			CompletableFuture<Map<String, Object>>> runAction,
 		Consumer<String> cancelRunAction,
 		GenericClientCollisionMap collisionMap,
@@ -115,9 +115,9 @@ final class GenericClientWalker implements AutoCloseable
 			@Override
 			public CompletableFuture<Map<String, Object>> setEnabled(
 				boolean enabled,
-				boolean breaksEnabled)
+				GenericClientActivityContext activityContext)
 			{
-				return runAction.apply(enabled, breaksEnabled);
+				return runAction.apply(enabled, activityContext);
 			}
 
 			@Override
@@ -140,16 +140,16 @@ final class GenericClientWalker implements AutoCloseable
 		WorldPoint destination,
 		int within,
 		int timeoutTicks,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
-		return walkTo(destination, within, timeoutTicks, breaksEnabled, true);
+		return walkTo(destination, within, timeoutTicks, activityContext, true);
 	}
 
 	synchronized CompletableFuture<Map<String, Object>> walkTo(
 		WorldPoint destination,
 		int within,
 		int timeoutTicks,
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		boolean useRun)
 	{
 		if (destination == null)
@@ -191,7 +191,7 @@ final class GenericClientWalker implements AutoCloseable
 		}
 
 		ActiveWalk walk = new ActiveWalk(
-			destination, within, timeoutTicks, tick, start, breaksEnabled, useRun);
+			destination, within, timeoutTicks, tick, start, activityContext, useRun);
 		active = walk;
 		reporter.accept("WALK_REQUESTED start=" + start + " destination=" + destination +
 			" within=" + within + " timeoutTicks=" + timeoutTicks);
@@ -471,7 +471,7 @@ final class GenericClientWalker implements AutoCloseable
 
 	private void dispatchRunToggle(ActiveWalk walk, boolean enabled)
 	{
-		runInput.setEnabled(enabled, walk.breaksEnabled).whenComplete((receipt, error) ->
+		runInput.setEnabled(enabled, walk.activityContext).whenComplete((receipt, error) ->
 		{
 			synchronized (GenericClientWalker.this)
 			{
@@ -543,7 +543,7 @@ final class GenericClientWalker implements AutoCloseable
 			obstacle.getAction(),
 			obstacle.getWorld(),
 			OBSTACLE_INTERACT_DISTANCE + 1,
-			walk.breaksEnabled).whenComplete((receipt, error) ->
+			walk.activityContext).whenComplete((receipt, error) ->
 		{
 			synchronized (GenericClientWalker.this)
 			{
@@ -581,7 +581,7 @@ final class GenericClientWalker implements AutoCloseable
 
 	private void dispatchClick(ActiveWalk walk, List<WorldPoint> candidates)
 	{
-		gameInput.walkToFarthest(candidates, walk.breaksEnabled).whenComplete((result, error) ->
+		gameInput.walkToFarthest(candidates, walk.activityContext).whenComplete((result, error) ->
 		{
 			synchronized (GenericClientWalker.this)
 			{
@@ -934,7 +934,7 @@ final class GenericClientWalker implements AutoCloseable
 	{
 		CompletableFuture<GenericClientInteractionResult> walkToFarthest(
 			List<WorldPoint> candidates,
-			boolean breaksEnabled);
+			GenericClientActivityContext activityContext);
 
 		void cancelWalkToTile();
 	}
@@ -946,7 +946,7 @@ final class GenericClientWalker implements AutoCloseable
 			String action,
 			WorldPoint world,
 			int within,
-			boolean breaksEnabled);
+			GenericClientActivityContext activityContext);
 
 		void cancel();
 	}
@@ -955,7 +955,7 @@ final class GenericClientWalker implements AutoCloseable
 	{
 		CompletableFuture<Map<String, Object>> setEnabled(
 			boolean enabled,
-			boolean breaksEnabled);
+			GenericClientActivityContext activityContext);
 
 		void cancel(String reason);
 	}
@@ -965,7 +965,7 @@ final class GenericClientWalker implements AutoCloseable
 		private final WorldPoint destination;
 		private final int within;
 		private final int timeoutTicks;
-		private final boolean breaksEnabled;
+		private final GenericClientActivityContext activityContext;
 		private final boolean useRun;
 		private final int maximumRecoveryPlans;
 		private final long startedAtTick;
@@ -1011,13 +1011,13 @@ final class GenericClientWalker implements AutoCloseable
 			int timeoutTicks,
 			long startedAtTick,
 			WorldPoint start,
-			boolean breaksEnabled,
+			GenericClientActivityContext activityContext,
 			boolean useRun)
 		{
 			this.destination = destination;
 			this.within = within;
 			this.timeoutTicks = timeoutTicks;
-			this.breaksEnabled = breaksEnabled;
+			this.activityContext = activityContext;
 			this.useRun = useRun;
 			this.maximumRecoveryPlans = recoveryPlanLimit(start, destination);
 			this.startedAtTick = startedAtTick;

@@ -62,7 +62,7 @@ final class GenericClientObjectInput
 		String action,
 		WorldPoint world,
 		int within,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		if (objectId < 0)
 		{
@@ -71,7 +71,7 @@ final class GenericClientObjectInput
 		String cleanAction = requireText(action, "Object action");
 		validateRadius(within);
 		return interactWithCamera(
-			objectId, cleanAction, world, within, false, -1, null, breaksEnabled);
+			objectId, cleanAction, world, within, false, -1, null, activityContext);
 	}
 
 	CompletableFuture<Map<String, Object>> useSelectedItemOnObject(
@@ -80,7 +80,7 @@ final class GenericClientObjectInput
 		int within,
 		int itemId,
 		String itemName,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		if (objectId < 0 || itemId < 0)
 		{
@@ -88,7 +88,7 @@ final class GenericClientObjectInput
 		}
 		validateRadius(within);
 		return interactWithCamera(
-			objectId, "Use", world, within, true, itemId, itemName, breaksEnabled);
+			objectId, "Use", world, within, true, itemId, itemName, activityContext);
 	}
 
 	void cancel(String reason)
@@ -104,11 +104,11 @@ final class GenericClientObjectInput
 		boolean selectedItem,
 		int itemId,
 		String itemName,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		GenericClientMenuInput.TargetResolver resolver = () -> resolveObject(
 			objectId, action, world, within, selectedItem, itemId, itemName);
-		return menuInput.interact(resolver, breaksEnabled).thenCompose(receipt ->
+		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
 		{
 			if (!shouldFaceAndRetry(receipt))
 			{
@@ -121,7 +121,7 @@ final class GenericClientObjectInput
 					within,
 					action,
 					selectedItem,
-					breaksEnabled,
+					activityContext,
 					0,
 					receipt)
 				.whenComplete((ignored, error) -> restoreZoom(zoom)));
@@ -163,7 +163,7 @@ final class GenericClientObjectInput
 		int within,
 		String action,
 		boolean selectedItem,
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		int attempt,
 		Map<String, Object> previousReceipt)
 	{
@@ -178,7 +178,7 @@ final class GenericClientObjectInput
 				return CompletableFuture.completedFuture(previousReceipt);
 			}
 			return waitForCamera(target, 0).thenCompose(ignored ->
-				menuInput.interact(resolver, breaksEnabled).thenCompose(receipt ->
+				menuInput.interact(resolver, activityContext).thenCompose(receipt ->
 					shouldFaceAndRetry(receipt)
 						? retryWithCamera(
 							resolver,
@@ -187,7 +187,7 @@ final class GenericClientObjectInput
 							within,
 							action,
 							selectedItem,
-							breaksEnabled,
+							activityContext,
 							attempt + 1,
 							receipt)
 						: CompletableFuture.completedFuture(receipt)));

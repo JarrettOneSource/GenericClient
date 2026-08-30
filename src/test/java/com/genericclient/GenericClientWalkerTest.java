@@ -56,7 +56,7 @@ public class GenericClientWalkerTest
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			WorldPoint destination = new WorldPoint(3230, 3428, 0);
 			walker.publishGameTick(snapshot(0, start));
-			CompletableFuture<?> completion = walker.walkTo(destination, 0, 60, false);
+			CompletableFuture<?> completion = walker.walkTo(destination, 0, 60, context(false));
 
 			waitForFirstClick(walker, input, start);
 			assertEquals(destination, input.candidateBatches.get(0).get(0));
@@ -98,7 +98,7 @@ public class GenericClientWalkerTest
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			WorldPoint destination = new WorldPoint(3207, 3428, 0);
 			walker.publishGameTick(snapshot(0, start));
-			walker.walkTo(destination, 0, 60, true);
+			walker.walkTo(destination, 0, 60, context(true));
 
 			waitForFirstClick(walker, input, start);
 			assertEquals(Boolean.TRUE, input.breakPolicies.get(0));
@@ -131,7 +131,7 @@ public class GenericClientWalkerTest
 		{
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			walker.publishGameTick(snapshot(0, start));
-			walker.walkTo(new WorldPoint(3230, 3428, 0), 0, 60, false);
+			walker.walkTo(new WorldPoint(3230, 3428, 0), 0, 60, context(false));
 			waitForFirstClick(walker, input, start);
 
 			walker.publishGameTick(snapshot(2, new WorldPoint(3203, 3433, 0)));
@@ -160,7 +160,7 @@ public class GenericClientWalkerTest
 		{
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			walker.publishGameTick(snapshot(0, start));
-			walker.walkTo(new WorldPoint(3230, 3428, 0), 0, 60, false);
+			walker.walkTo(new WorldPoint(3230, 3428, 0), 0, 60, context(false));
 			waitForFirstClick(walker, input, start);
 			int firstDistance = distance(start, input.targets.get(0));
 
@@ -205,7 +205,7 @@ public class GenericClientWalkerTest
 		{
 			walker.publishGameTick(openSceneSnapshot(0, start));
 			CompletableFuture<Map<String, Object>> completion =
-				walker.walkTo(destination, 0, 100, false);
+				walker.walkTo(destination, 0, 100, context(false));
 			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
 			while (reports.stream().noneMatch(message -> message.contains("WALK_PLANNED")) &&
 				System.nanoTime() < deadline)
@@ -260,7 +260,7 @@ public class GenericClientWalkerTest
 		{
 			walker.publishGameTick(doorSnapshot(0, start, beforeDoor, door, true));
 			CompletableFuture<Map<String, Object>> completion =
-				walker.walkTo(destination, 0, 100, false);
+				walker.walkTo(destination, 0, 100, context(false));
 
 			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
 			long tick = 1;
@@ -323,7 +323,7 @@ public class GenericClientWalkerTest
 		{
 			walker.publishGameTick(doorSnapshot(0, start, beforeDoor, door, true));
 			CompletableFuture<Map<String, Object>> completion =
-				walker.walkTo(destination, 0, 100, false);
+				walker.walkTo(destination, 0, 100, context(false));
 			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
 			long tick = 1;
 			while (obstacleInput.interactions == 0 && System.nanoTime() < deadline)
@@ -375,7 +375,7 @@ public class GenericClientWalkerTest
 		{
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			walker.publishGameTick(runSnapshot(0, start, 10_000, false));
-			walker.walkTo(new WorldPoint(3210, 3428, 0), 0, 60, false, true);
+			walker.walkTo(new WorldPoint(3210, 3428, 0), 0, 60, context(false), true);
 			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
 			long tick = 1;
 			while (runToggles.get() == 0 && System.nanoTime() < deadline)
@@ -418,7 +418,7 @@ public class GenericClientWalkerTest
 		{
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			walker.publishGameTick(runSnapshot(0, start, 10_000, false));
-			walker.walkTo(new WorldPoint(3210, 3428, 0), 0, 60, false, false);
+			walker.walkTo(new WorldPoint(3210, 3428, 0), 0, 60, context(false), false);
 			waitForFirstClick(walker, input, start);
 
 			assertEquals(0, runToggles.get());
@@ -454,7 +454,7 @@ public class GenericClientWalkerTest
 		{
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			walker.publishGameTick(runSnapshot(0, start, 10_000, true));
-			walker.walkTo(new WorldPoint(3210, 3428, 0), 0, 60, false, false);
+			walker.walkTo(new WorldPoint(3210, 3428, 0), 0, 60, context(false), false);
 			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
 			long tick = 1;
 			while (runToggles.get() == 0 && System.nanoTime() < deadline)
@@ -492,7 +492,7 @@ public class GenericClientWalkerTest
 			WorldPoint start = new WorldPoint(3009, 3197, 0);
 			WorldPoint destination = new WorldPoint(3165, 3491, 0);
 			walker.publishGameTick(openSceneSnapshot(0, start));
-			walker.walkTo(destination, 8, 600, false);
+			walker.walkTo(destination, 8, 600, context(false));
 			waitForFirstClick(walker, input, start);
 			assertTrue(input.candidateBatches.get(0).size() > 49);
 			assertTrue(distance(input.candidateBatches.get(0).get(0), destination) <= 8);
@@ -728,6 +728,13 @@ public class GenericClientWalkerTest
 			Math.abs(first.getY() - second.getY()));
 	}
 
+	private static GenericClientActivityContext context(boolean enabled)
+	{
+		return GenericClientActivityContext.of(
+			GenericClientActivityContext.Activity.TRAVEL,
+			enabled);
+	}
+
 	private static final class FakeWalkInput implements GenericClientWalker.WalkInput
 	{
 		private final int maximumProjectedTiles;
@@ -748,10 +755,10 @@ public class GenericClientWalkerTest
 		@Override
 		public CompletableFuture<GenericClientInteractionResult> walkToFarthest(
 			List<WorldPoint> candidates,
-			boolean breaksEnabled)
+			GenericClientActivityContext activityContext)
 		{
 			candidateBatches.add(new ArrayList<>(candidates));
-			breakPolicies.add(breaksEnabled);
+			breakPolicies.add(activityContext.allowsBreaks());
 			int projectedTiles = Math.min(maximumProjectedTiles, candidates.size());
 			WorldPoint target = candidates.get(candidates.size() - projectedTiles);
 			targets.add(target);
@@ -777,7 +784,7 @@ public class GenericClientWalkerTest
 			String action,
 			WorldPoint world,
 			int within,
-			boolean breaksEnabled)
+			GenericClientActivityContext activityContext)
 		{
 			Map<String, Object> receipt = new LinkedHashMap<>();
 			receipt.put("status", "dispatched");
@@ -805,13 +812,13 @@ public class GenericClientWalkerTest
 			String action,
 			WorldPoint world,
 			int within,
-			boolean breaksEnabled)
+			GenericClientActivityContext activityContext)
 		{
 			interactions++;
 			this.objectId = objectId;
 			this.action = action;
 			this.world = world;
-			this.breaksEnabled = breaksEnabled;
+			this.breaksEnabled = activityContext.allowsBreaks();
 			Map<String, Object> receipt = new LinkedHashMap<>();
 			receipt.put("status", "dispatched");
 			receipt.put("result", "menu_action_executed");

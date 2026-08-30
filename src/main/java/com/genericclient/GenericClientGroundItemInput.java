@@ -55,7 +55,7 @@ final class GenericClientGroundItemInput
 		int itemId,
 		WorldPoint world,
 		int within,
-		boolean breaksEnabled)
+		GenericClientActivityContext activityContext)
 	{
 		if (itemId < 0)
 		{
@@ -67,9 +67,9 @@ final class GenericClientGroundItemInput
 		}
 		GenericClientMenuInput.TargetResolver resolver =
 			() -> resolveGroundItem(itemId, world, within);
-		return menuInput.interact(resolver, breaksEnabled).thenCompose(receipt ->
+		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
 			retryWithCamera(
-				resolver, receipt, itemId, world, within, breaksEnabled, 0));
+				resolver, receipt, itemId, world, within, activityContext, 0));
 	}
 
 	private CompletableFuture<Map<String, Object>> retryWithCamera(
@@ -78,7 +78,7 @@ final class GenericClientGroundItemInput
 		int itemId,
 		WorldPoint world,
 		int within,
-		boolean breaksEnabled,
+		GenericClientActivityContext activityContext,
 		int cameraAttempt)
 	{
 		Object result = receipt.get("result");
@@ -99,14 +99,14 @@ final class GenericClientGroundItemInput
 			executor.schedule(
 				() -> settled.complete(null), CAMERA_SETTLE_MILLIS, TimeUnit.MILLISECONDS);
 			return settled
-				.thenCompose(ignored -> menuInput.interact(resolver, breaksEnabled))
+				.thenCompose(ignored -> menuInput.interact(resolver, activityContext))
 				.thenCompose(next -> retryWithCamera(
 					resolver,
 					next,
 					itemId,
 					world,
 					within,
-					breaksEnabled,
+					activityContext,
 					cameraAttempt + 1));
 		});
 	}

@@ -41,7 +41,8 @@ public class GenericClientBehaviorProfileTest
 		for (long accountHash = 0; accountHash < 20_000; accountHash++)
 		{
 			GenericClientBehaviorProfile profile = GenericClientBehaviorProfile.fromAccountHash(accountHash);
-			assertBetween(profile.getShortReleaseProbability(), 0.02, 1.0);
+			assertBetween(profile.getMicroBreakProbability(), 0.02, 1.0);
+			assertBetween(profile.getCursorReleaseProbability(), 0.15, 0.95);
 			assertBetween(profile.getShortBodyMedianSeconds(), 2.0, 6.0);
 			assertBetween(profile.getShortTailProbability(), 0.01, 0.04);
 			assertBetween(profile.getLongCadenceMinutes(), 39.9, 300.1);
@@ -68,8 +69,8 @@ public class GenericClientBehaviorProfileTest
 		for (long accountHash = 50_000; accountHash < 150_000; accountHash++)
 		{
 			GenericClientBehaviorProfile profile = GenericClientBehaviorProfile.fromAccountHash(accountHash);
-			boolean frequentShort = profile.getShortReleaseProbability() >= 0.55;
-			boolean rareShort = profile.getShortReleaseProbability() < 0.15;
+			boolean frequentShort = profile.getMicroBreakProbability() >= 0.55;
+			boolean rareShort = profile.getMicroBreakProbability() < 0.15;
 			boolean frequentLong = profile.getLongCadenceMinutes() < 80.0;
 			boolean rareLong = profile.getLongCadenceMinutes() >= 160.0;
 			if (frequentShort && frequentLong)
@@ -106,8 +107,10 @@ public class GenericClientBehaviorProfileTest
 		assertEquals(profile.getTitle(), value.get("title"));
 		assertEquals(profile.getSummary(), value.get("summary"));
 		assertEquals(profile.getIdleEdge().name().toLowerCase(), value.get("idle_edge"));
-		assertEquals(profile.getShortReleaseProbability(),
-			(Double) value.get("short_release_probability"), 0.0);
+		assertEquals(profile.getMicroBreakProbability(),
+			(Double) value.get("micro_break_probability"), 0.0);
+		assertEquals(profile.getCursorReleaseProbability(),
+			(Double) value.get("cursor_release_probability"), 0.0);
 		assertEquals(profile.getLongCadenceMinutes(),
 			(Double) value.get("long_cadence_minutes"), 0.0);
 		assertEquals((long) profile.getMouseMoveDurationMillis(),
@@ -122,6 +125,7 @@ public class GenericClientBehaviorProfileTest
 		GenericClientBehaviorProfile generated = GenericClientBehaviorProfile.fromAccountHash(123L);
 		GenericClientBehaviorProfile custom = generated.withOverrides(new GenericClientBehaviorOverrides(
 			0.90,
+			0.70,
 			10.0,
 			0.25,
 			200.0,
@@ -135,7 +139,8 @@ public class GenericClientBehaviorProfileTest
 
 		assertTrue(custom.isCustomized());
 		assertEquals(generated.getId(), custom.getId());
-		assertEquals(0.90, custom.getShortReleaseProbability(), 0.0);
+		assertEquals(0.90, custom.getMicroBreakProbability(), 0.0);
+		assertEquals(0.70, custom.getCursorReleaseProbability(), 0.0);
 		assertEquals(10.0, custom.getShortBodyMedianSeconds(), 0.0);
 		assertEquals(0.25, custom.getShortTailProbability(), 0.0);
 		assertEquals(200.0, custom.getLongCadenceMinutes(), 0.0);

@@ -10,7 +10,7 @@ Build GenericClient scripting as an in-process, sequential-coroutine Lua host ov
 
 Use **LuaJava 4.1.0 with native PUC Lua 5.4** for the first implementation. Keep the runtime behind an internal seam, but ship only the Lua 5.4 adapter initially. A deterministic fake adapter is sufficient to test `ScriptHost`; a second production VM is not useful enough to justify LuaJ's language mismatch and one-Java-thread-per-coroutine behavior.
 
-Expose five script-facing primitives:
+Expose six script-facing primitives:
 
 ```lua
 gc.read(subject, query) -- inspect one pinned immutable frame
@@ -18,10 +18,11 @@ gc.await(request)       -- yield for a tick, event, or semantic action receipt
 gc.log(level, event, fields)
 gc.overlay(rows)        -- publish up to four compact label/value rows
 gc.next_action()        -- consume one dashboard action id, or nil
+gc.activity(name)       -- set/query this coroutine's activity descriptor
 ```
 
-`gc.phase(name, options)` is a Lua convenience wrapper over `gc.await`; it does
-not add another host callback.
+`gc.phase(name, options)` is a Lua convenience wrapper over `gc.await`; its
+optional `activity` value updates the coroutine before the phase evaluation.
 
 Manifest entries may also declare named module files. For those scripts the
 registry composes a private, cached `gc.require(name)` loader before the entry
@@ -48,7 +49,8 @@ The current checkout implements:
   the same-plane `walk.to` ground-route action, `npc.interact`,
   `combat.set_style`, `combat.set_auto_retaliate`, and profile-owned
   `mouse.offscreen` idle placement;
-- per-interaction `breaks=false`, phase transitions, seeded mouse timing, and a
+- per-coroutine activity contexts, independent post-action break/cursor rolls,
+  per-interaction `breaks=false`, phase transitions, seeded mouse timing, and a
   behavior controller that pauses coroutine action progression without blocking control;
 - `gc.log` to `client.log` and the GenericClient dashboard;
 - `gc.overlay` plus the automatic name/runtime game overlay;

@@ -9,15 +9,15 @@ fresh runtime random source.
 
 ## Profile traits
 
-Independent SHA-256 labels derive an attention style and separate short, long,
-duration, mouse, phase, logout, and idle-edge traits. A Gaussian copula softly
-correlates attention style with short cadence, long cadence, short duration,
-and phase sensitivity while preserving all four combinations of frequent or
-rare short and long breaks.
+Independent SHA-256 labels derive an attention style and separate micro-break,
+cursor-release, long-break, duration, mouse, phase, logout, and idle-edge
+traits. A Gaussian copula softly correlates them without making one decision
+depend on another.
 
 | Trait | Envelope |
 | --- | --- |
 | Post-action micro probability | 2-100%, population midpoint 35% |
+| Post-action cursor release | 15-95% |
 | Micro body median | 2-6 seconds |
 | Micro tail | 1-4% chance of a log-uniform 12-120 second duration |
 | Micro hard bounds | At least 1 second and strictly below 120 seconds |
@@ -43,9 +43,9 @@ micro breaks keep their original timer.
 ### Manual overrides
 
 The Settings page can override the understandable profile controls per account:
-micro chance and duration, long-micro chance, long-break interval and duration,
-phase boost, preferred AFK/logout style, style-switch chance, idle edge, and
-mouse move duration, and typing speed from 20-180 WPM.
+micro chance and duration, long-micro chance, cursor-release chance, long-break
+interval and duration, phase boost, preferred AFK/logout style, style-switch
+chance, idle edge, mouse move duration, and typing speed from 20-180 WPM.
 Derived refractory, hazard scale, summary, and downtime are recomputed from the
 custom values. **Use seeded** deletes the override and restores the exact
 account-derived profile.
@@ -53,17 +53,37 @@ account-derived profile.
 Overrides live beside runtime state as `overrides-<profile-id>.json`. The
 profile ID is a one-way derived identifier; the raw account hash is not stored.
 
-## Action contract
+## Activity and action contract
 
-A composite client interaction evaluates breaks. For walking, one interaction
-contains any needed camera turn, one recorded-template cursor movement, and the
-click that advances the interaction. Context-menu walking treats its right-click
-and menu-selection click as one interaction; no break may run between opening
-the menu and selecting its row.
-Every dispatched route interaction runs its own before/after evaluation. A
-`walk.to` task containing eight route clicks therefore performs eight micro
-rolls, not one roll around the whole task. Low-level mouse path samples do not
-roll independently.
+Each Lua coroutine owns an activity descriptor. `gc.activity(name)` changes it
+for subsequent awaits and `gc.phase(name, { activity = name })` changes it at a
+state-machine transition. Every await captures an immutable activity context,
+so the standalone script and REPL cannot leak behavior state into one another.
+One interaction can override the descriptor without changing later actions by
+putting `activity = "banking"` beside its `action` in the `gc.await` request.
+
+Semantic actions refine broad workflow labels such as `questing`:
+
+| Activity | Breaks | Cursor release |
+| --- | --- | --- |
+| `general`, `questing`, `travel`, `skilling` | Allowed | Allowed |
+| `dialogue`, `combat`, `banking`, `trading` | Suppressed | Suppressed |
+
+`walk.*`, `bank.loadout`, `ge.buy`, dialogue actions, combat actions, NPC
+`Talk-to`, and NPC `Attack` select their safe leaf activity automatically.
+This means a quest can travel with normal behavior, then bank or fight without
+either behavior, without treating the whole quest as one coarse policy.
+
+A composite client interaction evaluates the two independent post-action
+decisions allowed by its activity. For walking, one interaction contains any
+needed camera turn, one recorded-template cursor movement, and the click that
+advances the interaction. Context-menu walking treats its right-click and
+menu-selection click as one interaction. Post-action behavior begins only after
+both the synthetic click and its matching RuneLite menu event complete.
+Every dispatched route interaction runs its own evaluation. A `walk.to` task
+containing eight route clicks therefore performs eight eligible micro rolls and
+eight eligible cursor-release rolls, not one pair around the whole task.
+Low-level mouse path samples do not roll independently.
 
 Automated Lua and MCP actions default to breaks enabled:
 
@@ -76,7 +96,7 @@ local result = gc.await {
 }
 ```
 
-A time-sensitive sequence can bypass both micro and long breaks for every
+A time-sensitive sequence can bypass all discretionary behavior for every
 composite interaction it performs:
 
 ```lua
@@ -90,22 +110,21 @@ Explicit dashboard actions are operator commands and bypass behavior. Status,
 reads, logging, script stop/reset, manifest editing, and MCP control remain
 responsive during a break.
 
-## Micro breaks and off-canvas idle
+## Independent breaks and cursor release
 
-A micro roll occurs after each dispatched composite interaction. If selected:
+A cursor-release roll occurs after each eligible dispatched composite
+interaction. If selected, the recorded matcher moves the synthetic client
+cursor to the account's stable off-canvas edge and the action receipt waits only
+for that movement. The next action re-enters from a randomized point on the same
+edge.
 
-1. the recorded mouse-template matcher moves the synthetic client cursor to the
-   account's stable off-canvas edge;
-2. the Lua action receipt waits for the forced micro duration;
-3. after the timer ends, script execution may continue, but the cursor stays
-   outside the canvas until another action needs it.
+A separate micro roll can pause the same action. It does not move the cursor.
+The four outcomes are therefore all valid: neither behavior, release only,
+break only, or release followed by a break. Long breaks likewise do not force a
+cursor move.
 
-The profile's idle side is stable. The next action randomizes a new off-screen
-origin along that same side before applying its recorded movement template, so
-the cursor does not repeatedly leave and re-enter through one identical point.
-
-The natural off-canvas idle between actions is workload-driven and is not part
-of forced-break downtime.
+An explicit `mouse.offscreen` action remains available when a script must park
+the cursor deterministically at completion.
 
 ## Long breaks
 
@@ -124,6 +143,7 @@ Micro breaks never reset or suppress it. If long and micro are both selected,
 long wins.
 
 At long-break start, the profile fresh-rolls its stable AFK/logout preference.
+The cursor stays wherever the independent post-action roll left it.
 At the deadline GenericClient uses the Jagex Launcher session to return to the
 world if the client logged out naturally or deliberately. A completed long
 break resets both behavior processes and suppresses the first post-return micro
@@ -148,6 +168,11 @@ break roll before the next phase runs:
 gc.phase("banking.complete")
 ```
 
+The phase uses the coroutine's current activity policy. A protected banking,
+trading, dialogue, or combat phase does not roll; scripts can transition and
+set the next activity atomically with
+`gc.phase("route.start", { activity = "travel" })`.
+
 Repeating the current phase is a no-op. Accepted heavy evaluations have a
 two-active-minute global cooldown and a five-active-minute per-name cooldown.
 The short chance is `1 - (1 - p)^k`, where `k` is the profile's 1-4 phase
@@ -163,7 +188,7 @@ State files live in:
 ```
 
 They contain only the derived profile ID, active-time progress, fresh hazard
-budget, phase cooldowns, counts, and an in-progress break deadline. Writes are
+budget, phase cooldowns, break/cursor counts, and an in-progress break deadline. Writes are
 atomic. An in-progress break resumes after a plugin restart.
 
 `client_status`, `behavior_profile`, `behavior_status`, and
