@@ -17,6 +17,7 @@ return {
     glough_ladder = { x = 2476, y = 3463, plane = 0 },
     glough_upstairs = { x = 2476, y = 3463, plane = 1 },
     glough_room = { x = 2483, y = 3463, plane = 1 },
+    grand_tree_top = { x = 2466, y = 3495, plane = 3 },
   },
   return_route = {
     { x = 2505, y = 3190, plane = 0 },
@@ -32,9 +33,18 @@ return {
     king_narnode = { 8019, 8020, 1423 },
     hazelmere = { 1422, 13610 },
     glough = { 2061, 1424 },
+    charlie = { 1428, 122 },
   },
   objects = {
     hazelmere_ladder = 16683,
     glough_ladder = 16683,
+    glough_ladder_down = 16679,
+    grand_tree_ladder = 4458,
+    grand_tree_ladder_top = 56229,
+    glough_cupboard_closed = 2434,
+    glough_cupboard_open = 2435,
+  },
+  items = {
+    glough_journal = 785,
   },
 }

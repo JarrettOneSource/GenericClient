@@ -159,9 +159,52 @@ local function reach_glough()
   }
 end
 
+local function return_after_glough()
+  if interactions.npc(config.npcs.king_narnode, 20, true) then return true end
+  gc.activity("travel")
+  local player = gc.read("player").world
+  if player.plane == 1 and distance(player, config.points.glough_room) <= 20 then
+    local descended = interactions.descend_glough()
+    if descended.status ~= "complete" then return nil, descended end
+  elseif player.plane ~= 0 then
+    return nil, { status = "post_glough_resume_location_unknown", player = player }
+  end
+  return reach_narnode()
+end
+
+local function reach_charlie()
+  if interactions.npc(config.npcs.charlie, 20, true) then return true end
+  gc.activity("travel")
+  local climbed = interactions.climb_grand_tree_top()
+  if climbed.status ~= "complete" then return nil, climbed end
+  if not interactions.npc(config.npcs.charlie, 20, true) then
+    local approached = walk(config.points.grand_tree_top, 3)
+    if approached.status ~= "arrived" then
+      return nil, { status = "charlie_approach_failed", receipt = approached }
+    end
+  end
+  if interactions.npc(config.npcs.charlie, 20, true) then return true end
+  return nil, {
+    status = "charlie_not_observed_after_climb",
+    player = gc.read("player"),
+    nearby = gc.read("npcs", { within = 20, limit = 30 }),
+  }
+end
+
+local function return_to_glough_for_journal()
+  if gc.read("player").world.plane == 3 then
+    local descended = interactions.descend_grand_tree_bottom()
+    if descended.status ~= "complete" then return nil, descended end
+  end
+  return reach_glough()
+end
+
 return {
   reach_narnode = reach_narnode,
   reach_hazelmere = reach_hazelmere,
   return_to_narnode = return_to_narnode,
   reach_glough = reach_glough,
+  return_after_glough = return_after_glough,
+  reach_charlie = reach_charlie,
+  return_to_glough_for_journal = return_to_glough_for_journal,
 }

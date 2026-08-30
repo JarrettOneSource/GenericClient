@@ -44,8 +44,8 @@ local function run(input)
     initial_phase == "unknown_stage" then
     return terminal(initial_phase, initial)
   end
-  if initial_phase == "narnode_after_glough_checkpoint" then
-    return terminal("narnode_after_glough_checkpoint", initial)
+  if initial_phase == "cell_checkpoint" then
+    return terminal("cell_checkpoint", initial)
   end
 
   local safety = gc.await {
@@ -77,8 +77,8 @@ local function run(input)
     local state = read()
     local phase = state_module.resolve(state)
     if phase ~= initial_phase then
-      if phase == "narnode_after_glough_checkpoint" then
-        return terminal("narnode_after_glough_checkpoint", state, receipt)
+      if phase == "cell_checkpoint" then
+        return terminal("cell_checkpoint", state, receipt)
       end
       return terminal(phase, state, receipt)
     end

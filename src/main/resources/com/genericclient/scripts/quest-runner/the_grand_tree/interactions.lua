@@ -299,6 +299,229 @@ local function talk_glough()
   return { status = "complete", result = "glough_warning_verified", receipt = clicked }
 end
 
+local function descend_glough()
+  if gc.read("player").world.plane == 0 then
+    return { status = "complete", result = "glough_ladder_already_descended" }
+  end
+  local ladder = object(config.objects.glough_ladder_down, "Climb-down", 12)
+  if not ladder then
+    return {
+      status = "glough_descent_not_observed",
+      objects = gc.read("objects", { within = 12, limit = 40 }),
+    }
+  end
+  local descended = gc.await {
+    action = {
+      type = "object.interact",
+      id = ladder.id,
+      action = "Climb-down",
+      world = ladder.world,
+      within = 12,
+    },
+    breaks = true,
+    timeout = { game_ticks = 30 },
+  }
+  if descended.status ~= "dispatched" then return descended end
+  for _ = 1, 30 do
+    gc.await { event = "game.tick" }
+    if gc.read("player").world.plane == 0 then
+      return { status = "complete", result = "glough_ladder_descended", receipt = descended }
+    end
+  end
+  return { status = "glough_descent_unverified", receipt = descended }
+end
+
+local function talk_narnode_after_glough()
+  local target = npc(config.npcs.king_narnode, 20, true)
+  if not target then return { status = "king_narnode_not_reachable_after_glough" } end
+  local started_tick = gc.read("runtime").game_tick
+  local clicked = gc.await {
+    action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 20 },
+    breaks = false,
+    timeout = { game_ticks = 40 },
+  }
+  if clicked.status ~= "dispatched" then return clicked end
+  local finished, failure = finish_dialogue(
+    function()
+      local vars = gc.read("vars", { varps = { config.varp } })
+      return vars.varps[config.varp] >= 50
+    end,
+    {},
+    started_tick)
+  if not finished then return failure end
+  return { status = "complete", result = "narnode_after_glough_verified", receipt = clicked }
+end
+
+local function climb_grand_tree_top()
+  if gc.read("player").world.plane == 3 then
+    return { status = "complete", result = "grand_tree_top_already_reached" }
+  end
+  local ladder = object(config.objects.grand_tree_ladder, "Top-Floor", 12)
+  if not ladder then
+    return {
+      status = "grand_tree_top_ladder_not_observed",
+      player = gc.read("player"),
+      objects = gc.read("objects", { within = 12, limit = 40 }),
+    }
+  end
+  local climbed = gc.await {
+    action = {
+      type = "object.interact",
+      id = ladder.id,
+      action = "Top-Floor",
+      world = ladder.world,
+      within = 12,
+    },
+    breaks = true,
+    timeout = { game_ticks = 40 },
+  }
+  if climbed.status ~= "dispatched" then return climbed end
+  for _ = 1, 40 do
+    gc.await { event = "game.tick" }
+    if gc.read("player").world.plane == 3 then
+      return { status = "complete", result = "grand_tree_top_reached", receipt = climbed }
+    end
+  end
+  return { status = "grand_tree_top_unverified", receipt = climbed }
+end
+
+local function talk_charlie()
+  local target = npc(config.npcs.charlie, 20, true)
+  if not target then return { status = "charlie_not_reachable" } end
+  local started_tick = gc.read("runtime").game_tick
+  local clicked = gc.await {
+    action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 20 },
+    breaks = false,
+    timeout = { game_ticks = 40 },
+  }
+  if clicked.status ~= "dispatched" then return clicked end
+  local finished, failure = finish_dialogue(
+    function()
+      local vars = gc.read("vars", { varps = { config.varp } })
+      return vars.varps[config.varp] >= 60
+    end,
+    {},
+    started_tick)
+  if not finished then return failure end
+  return { status = "complete", result = "charlie_investigation_verified", receipt = clicked }
+end
+
+local function descend_grand_tree_bottom()
+  if gc.read("player").world.plane == 0 then
+    return { status = "complete", result = "grand_tree_bottom_already_reached" }
+  end
+  local ladder = object(config.objects.grand_tree_ladder_top, "Bottom-Floor", 12)
+  if not ladder then
+    return {
+      status = "grand_tree_bottom_ladder_not_observed",
+      player = gc.read("player"),
+      objects = gc.read("objects", { within = 12, limit = 40 }),
+    }
+  end
+  local descended = gc.await {
+    action = {
+      type = "object.interact",
+      id = ladder.id,
+      action = "Bottom-Floor",
+      world = ladder.world,
+      within = 12,
+    },
+    breaks = true,
+    timeout = { game_ticks = 40 },
+  }
+  if descended.status ~= "dispatched" then return descended end
+  for _ = 1, 40 do
+    gc.await { event = "game.tick" }
+    if gc.read("player").world.plane == 0 then
+      return { status = "complete", result = "grand_tree_bottom_reached", receipt = descended }
+    end
+  end
+  return { status = "grand_tree_bottom_unverified", receipt = descended }
+end
+
+local function has_inventory_item(id)
+  for _, item in ipairs(gc.read("inventory").items or {}) do
+    if item.id == id and item.quantity > 0 then return true end
+  end
+  return false
+end
+
+local function search_glough_cupboard()
+  if has_inventory_item(config.items.glough_journal) then
+    return { status = "complete", result = "glough_journal_already_owned" }
+  end
+  local cupboard = object(config.objects.glough_cupboard_open, "Search", 12)
+  local closed = object(config.objects.glough_cupboard_closed, "Open", 12)
+  if not cupboard and closed then
+    local opened = gc.await {
+      action = {
+        type = "object.interact",
+        id = closed.id,
+        action = "Open",
+        world = closed.world,
+        within = 12,
+      },
+      breaks = true,
+      timeout = { game_ticks = 30 },
+    }
+    if opened.status ~= "dispatched" then return opened end
+    for _ = 1, 20 do
+      gc.await { event = "game.tick" }
+      cupboard = object(config.objects.glough_cupboard_open, "Search", 12)
+      if cupboard then break end
+    end
+  end
+  if not cupboard then
+    return {
+      status = "glough_cupboard_not_observed",
+      objects = gc.read("objects", { within = 12, limit = 50 }),
+    }
+  end
+  local searched = gc.await {
+    action = {
+      type = "object.interact",
+      id = cupboard.id,
+      action = "Search",
+      world = cupboard.world,
+      within = 12,
+    },
+    breaks = true,
+    timeout = { game_ticks = 30 },
+  }
+  if searched.status ~= "dispatched" then return searched end
+  for _ = 1, 30 do
+    gc.await { event = "game.tick" }
+    if has_inventory_item(config.items.glough_journal) then
+      return { status = "complete", result = "glough_journal_obtained", receipt = searched }
+    end
+  end
+  return { status = "glough_journal_unverified", receipt = searched }
+end
+
+local function talk_glough_again()
+  local started_tick = gc.read("runtime").game_tick
+  local clicked = { status = "dispatched", result = "resumed_open_dialogue" }
+  if not gc.read("dialogue").open then
+    local target = npc(config.npcs.glough, 16, true)
+    if not target then return { status = "glough_not_reachable_for_confrontation" } end
+    clicked = gc.await {
+      action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 16 },
+      breaks = false,
+      timeout = { game_ticks = 40 },
+    }
+    if clicked.status ~= "dispatched" then return clicked end
+  end
+  local finished, failure = finish_dialogue(
+    function()
+      local world = gc.read("player").world
+      return world.plane == 3 and world.x == 2464 and world.y == 3496
+    end,
+    {},
+    started_tick)
+  if not finished then return failure end
+  return { status = "complete", result = "glough_confrontation_verified", receipt = clicked }
+end
+
 return {
   npc = npc,
   talk_narnode = talk_narnode,
@@ -307,4 +530,11 @@ return {
   talk_narnode_translation = talk_narnode_translation,
   climb_glough = climb_glough,
   talk_glough = talk_glough,
+  descend_glough = descend_glough,
+  talk_narnode_after_glough = talk_narnode_after_glough,
+  climb_grand_tree_top = climb_grand_tree_top,
+  talk_charlie = talk_charlie,
+  descend_grand_tree_bottom = descend_grand_tree_bottom,
+  search_glough_cupboard = search_glough_cupboard,
+  talk_glough_again = talk_glough_again,
 }

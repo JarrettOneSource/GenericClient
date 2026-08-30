@@ -54,6 +54,14 @@ public class GenericClientScriptRegistryTest
 			.contains("hazelmere_translation_verified"));
 		assertTrue(registry.readExecutableSource("quest-runner")
 			.contains("glough_warning_verified"));
+		assertTrue(registry.readExecutableSource("quest-runner")
+			.contains("narnode_after_glough_verified"));
+		assertTrue(registry.readExecutableSource("quest-runner")
+			.contains("charlie_investigation_verified"));
+		assertTrue(registry.readExecutableSource("quest-runner")
+			.contains("glough_journal_obtained"));
+		assertTrue(registry.readExecutableSource("quest-runner")
+			.contains("glough_confrontation_verified"));
 		assertTrue(Files.isRegularFile(
 			temporaryFolder.getRoot().toPath().resolve("scripts/quest-runner/tree_gnome_village/state.lua")));
 		assertTrue(Files.isRegularFile(

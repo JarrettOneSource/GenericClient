@@ -115,7 +115,7 @@ level-up handling, and a compact XP/hour/ETA overlay.
 House, Waterfall Quest, Tree Gnome Village, and Fight Arena are isolated in
 their own folders and live-proven through normalized completion. The Grand Tree
 has its own folder and is live-proven through Hazelmere, the translated report,
-and Glough at quest varp 40.
+Glough's journal, and the prison-cell transition at quest varp 70.
 
 The current scripting interface intentionally contains only:
 
