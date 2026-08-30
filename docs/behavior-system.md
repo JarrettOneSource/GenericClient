@@ -10,7 +10,7 @@ fresh runtime random source.
 ## Profile traits
 
 Independent SHA-256 labels derive an attention style and separate micro-break,
-cursor-release, long-break, duration, mouse, phase, logout, and idle-edge
+cursor-release, long-break, duration, mouse, dialogue-reading, phase, logout, and idle-edge
 traits. A Gaussian copula softly correlates them without making one decision
 depend on another.
 
@@ -29,6 +29,7 @@ depend on another.
 | Idle edge | One stable choice from left, right, top, or bottom |
 | Mouse move duration | 300-650 milliseconds in 25 ms steps |
 | Typing speed | 35-100 WPM in 5 WPM steps |
+| Dialogue reading | 0-100 in 5-point steps, from immediate skipping to slow reading |
 
 The dashboard and MCP status expose a title and plain-language summary generated
 only from these numeric values. That text never feeds back into behavior.
@@ -45,7 +46,8 @@ micro breaks keep their original timer.
 The Settings page can override the understandable profile controls per account:
 micro chance and duration, long-micro chance, cursor-release chance, long-break
 interval and duration, phase boost, preferred AFK/logout style, style-switch
-chance, idle edge, mouse move duration, and typing speed from 20-180 WPM.
+chance, idle edge, mouse move duration, typing speed from 20-180 WPM, and the
+dialogue-reading scale.
 Derived refractory, hazard scale, summary, and downtime are recomputed from the
 custom values. **Use seeded** deletes the override and restores the exact
 account-derived profile.
@@ -78,6 +80,16 @@ Semantic actions refine broad workflow labels such as `questing`:
 `Talk-to`, and NPC `Attack` select their safe leaf activity automatically.
 This means a quest can travel with normal behavior, then bank or fight without
 either behavior, without treating the whole quest as one coarse policy.
+
+Dialogue reading is paced independently of breaks. A profile at the skip end
+adds no delay. Other profiles derive a reading speed continuously from the
+0-100 scale: low values skim, middle values read normally, and high values read
+slowly. `dialogue.continue` calculates its delay from the visible page's word
+count. `dialogue.choose` uses the combined text of every visible option so the
+account has time to inspect the choice before selecting one. The delay is
+bounded at nine seconds so existing dialogue action deadlines remain stable.
+Action receipts expose the scale, human-readable style, word count, effective
+WPM, and applied milliseconds.
 
 A composite client interaction evaluates the two independent post-action
 decisions allowed by its activity. For walking, one interaction contains any

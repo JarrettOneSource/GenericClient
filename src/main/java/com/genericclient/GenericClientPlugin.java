@@ -228,7 +228,8 @@ public final class GenericClientPlugin extends Plugin
 		equipmentInput = new GenericClientEquipmentInput(client, clientThread, executor, menuInput);
 		groundItemInput = new GenericClientGroundItemInput(
 			client, clientThread, executor, menuInput);
-		dialogueInput = new GenericClientDialogueInput(client, menuInput);
+		dialogueInput = new GenericClientDialogueInput(
+			client, menuInput, behaviorController, this::publishResult);
 		emergencyController = new GenericClientEmergencyController(
 			(itemId, action) -> inventoryInput.interact(
 				itemId, null, action, GenericClientActivityContext.none()),

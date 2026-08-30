@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
@@ -33,16 +34,27 @@ final class GenericClientDialogueInput
 
 	private final Client client;
 	private final GenericClientMenuInput menuInput;
+	private final GenericClientBehaviorController behavior;
+	private final Consumer<String> reporter;
 
-	GenericClientDialogueInput(Client client, GenericClientMenuInput menuInput)
+	GenericClientDialogueInput(
+		Client client,
+		GenericClientMenuInput menuInput,
+		GenericClientBehaviorController behavior,
+		Consumer<String> reporter)
 	{
 		this.client = client;
 		this.menuInput = menuInput;
+		this.behavior = behavior;
+		this.reporter = reporter;
 	}
 
 	CompletableFuture<Map<String, Object>> continueDialogue(GenericClientActivityContext activityContext)
 	{
-		return menuInput.interactDirect(this::resolveContinue, activityContext);
+		return menuInput.interactDirect(
+			this::resolveContinue,
+			activityContext,
+			() -> pacing(visibleContinueText()).toPreInteraction());
 	}
 
 	CompletableFuture<Map<String, Object>> choose(String text, GenericClientActivityContext activityContext)
@@ -52,7 +64,80 @@ final class GenericClientDialogueInput
 			throw new IllegalArgumentException("Dialogue choice text cannot be empty");
 		}
 		String exactText = text.trim();
-		return menuInput.interactDirect(() -> resolveChoice(exactText), activityContext);
+		return menuInput.interactDirect(
+			() -> resolveChoice(exactText),
+			activityContext,
+			() -> pacing(visibleChoiceText()).toPreInteraction());
+	}
+
+	private Pacing pacing(String text)
+	{
+		int readingPercent = behavior.dialogueReadingPercent();
+		int words = countWords(text);
+		long delayMillis = readingDelayMillis(readingPercent, words);
+		Pacing pacing = new Pacing(
+			readingPercent,
+			GenericClientBehaviorProfile.dialogueReadingStyle(readingPercent),
+			GenericClientBehaviorProfile.dialogueWordsPerMinute(readingPercent),
+			words,
+			delayMillis);
+		reporter.accept("DIALOGUE_READING_DELAY style=" + pacing.style.replace(' ', '_') +
+			" percent=" + readingPercent + " words=" + words + " millis=" + delayMillis);
+		return pacing;
+	}
+
+	private String visibleContinueText()
+	{
+		for (int id : new int[]{
+			InterfaceID.ChatLeft.TEXT,
+			InterfaceID.ChatRight.TEXT,
+			InterfaceID.ChatBoth.TEXT,
+			InterfaceID.Objectbox.TEXT,
+			InterfaceID.ObjectboxDouble.TEXT})
+		{
+			Widget widget = visibleWidget(id);
+			if (widget != null)
+			{
+				String text = cleanText(widget.getText());
+				if (!text.isEmpty())
+				{
+					return text;
+				}
+			}
+		}
+		return "";
+	}
+
+	private String visibleChoiceText()
+	{
+		StringBuilder text = new StringBuilder();
+		for (Widget option : visibleOptions())
+		{
+			if (text.length() > 0)
+			{
+				text.append(' ');
+			}
+			text.append(cleanText(option.getText()));
+		}
+		return text.toString();
+	}
+
+	static long readingDelayMillis(int readingPercent, int words)
+	{
+		if (readingPercent <= 20 || words <= 0)
+		{
+			return 0L;
+		}
+		int wordsPerMinute = GenericClientBehaviorProfile.dialogueWordsPerMinute(readingPercent);
+		double reactionMillis = 150.0 + (readingPercent - 20.0) / 80.0 * 250.0;
+		long calculated = Math.round(reactionMillis + words * 60_000.0 / wordsPerMinute);
+		return Math.min(9_000L, Math.max(0L, calculated));
+	}
+
+	static int countWords(String text)
+	{
+		String cleaned = cleanText(text).trim();
+		return cleaned.isEmpty() ? 0 : cleaned.split("\\s+").length;
 	}
 
 	private GenericClientMenuInput.Resolution resolveContinue()
@@ -297,5 +382,44 @@ final class GenericClientDialogueInput
 	private static String cleanText(String text)
 	{
 		return text == null ? "" : Text.removeTags(text).trim();
+	}
+
+	private static final class Pacing
+	{
+		private final int percent;
+		private final String style;
+		private final int wordsPerMinute;
+		private final int wordCount;
+		private final long delayMillis;
+
+		private Pacing(
+			int percent,
+			String style,
+			int wordsPerMinute,
+			int wordCount,
+			long delayMillis)
+		{
+			this.percent = percent;
+			this.style = style;
+			this.wordsPerMinute = wordsPerMinute;
+			this.wordCount = wordCount;
+			this.delayMillis = delayMillis;
+		}
+
+		private Map<String, Object> toMap()
+		{
+			Map<String, Object> value = new LinkedHashMap<>();
+			value.put("dialogue_reading_percent", (long) percent);
+			value.put("dialogue_reading_style", style);
+			value.put("dialogue_words_per_minute", (long) wordsPerMinute);
+			value.put("dialogue_word_count", (long) wordCount);
+			value.put("dialogue_reading_delay_millis", delayMillis);
+			return value;
+		}
+
+		private GenericClientMenuInput.PreInteraction toPreInteraction()
+		{
+			return GenericClientMenuInput.PreInteraction.delayed(delayMillis, toMap());
+		}
 	}
 }

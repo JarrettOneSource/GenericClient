@@ -112,6 +112,7 @@ public class GenericClientBehaviorStoreTest
 			0.15,
 			GenericClientBehaviorProfile.Edge.LEFT,
 			525,
+			65,
 			65);
 
 		store.saveOverrides(profile.getId(), overrides);
@@ -150,6 +151,10 @@ public class GenericClientBehaviorStoreTest
 		GenericClientBehaviorOverrides loaded = store.loadOverrides(profile.getId());
 		assertEquals(0.42, loaded.getMicroBreakProbability(), 0.0);
 		assertEquals(0.42, loaded.getCursorReleaseProbability(), 0.0);
+		assertNull(loaded.getDialogueReadingPercent());
+		assertEquals(
+			profile.getDialogueReadingPercent(),
+			profile.withOverrides(loaded).getDialogueReadingPercent());
 	}
 
 	private static void assertInvalid(GenericClientBehaviorStore store, String profileId) throws Exception

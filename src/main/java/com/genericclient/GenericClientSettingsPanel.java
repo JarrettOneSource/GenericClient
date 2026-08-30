@@ -53,6 +53,8 @@ final class GenericClientSettingsPanel extends JPanel
 		GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MIN,
 		GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MAX,
 		5);
+	private final JSpinner dialogueReading = spinner(50, 0, 100, 5);
+	private final JLabel dialogueReadingStyle = GenericClientDashboardStyle.small("reads dialogue");
 	private final JButton save = GenericClientDashboardStyle.primaryButton("Save custom");
 	private final JButton seeded = GenericClientDashboardStyle.ghostButton("Use seeded");
 	private final JLabel saveResult = GenericClientDashboardStyle.small("");
@@ -119,14 +121,16 @@ final class GenericClientSettingsPanel extends JPanel
 					GenericClientDashboardStyle.row("Offscreen chance", cursorReleaseChance, "%"),
 					GenericClientDashboardStyle.row("Idle side", idleEdge, ""),
 					GenericClientDashboardStyle.row("Move duration", mouseDuration, "ms"),
-					GenericClientDashboardStyle.row("Typing speed", typingWordsPerMinute, "WPM")),
+					GenericClientDashboardStyle.row("Typing speed", typingWordsPerMinute, "WPM"),
+					GenericClientDashboardStyle.row(
+						"Dialogue reading", dialogueReading, dialogueReadingStyle)),
 				GenericClientDashboardStyle.spacer()))
 			.gap(20)
 			.put(footer);
 		behaviorControls = Arrays.asList(
 			microChance, microLength, microTail, phaseBoost, cursorReleaseChance,
 			longInterval, longLength, longStyle, styleSwitchChance,
-			idleEdge, mouseDuration, typingWordsPerMinute, save, seeded);
+			idleEdge, mouseDuration, typingWordsPerMinute, dialogueReading, save, seeded);
 
 		JPanel page = GenericClientDashboardStyle.page();
 		page.add(GenericClientDashboardStyle.stack(16,
@@ -221,6 +225,8 @@ final class GenericClientSettingsPanel extends JPanel
 				String.valueOf(profile.get("idle_edge")).toUpperCase(Locale.ROOT)));
 			mouseDuration.setValue(number(profile.get("mouse_move_duration_millis")).intValue());
 			typingWordsPerMinute.setValue(number(profile.get("typing_words_per_minute")).intValue());
+			dialogueReading.setValue(number(profile.get("dialogue_reading_percent")).intValue());
+			dialogueReadingStyle.setText(String.valueOf(profile.get("dialogue_reading_style")));
 			profileKey = nextKey;
 			behaviorDirty = false;
 		}
@@ -269,6 +275,12 @@ final class GenericClientSettingsPanel extends JPanel
 		styleSwitchChance.addChangeListener(change);
 		mouseDuration.addChangeListener(change);
 		typingWordsPerMinute.addChangeListener(change);
+		dialogueReading.addChangeListener(event ->
+		{
+			dialogueReadingStyle.setText(GenericClientBehaviorProfile.dialogueReadingStyle(
+				((Number) dialogueReading.getValue()).intValue()));
+			markBehaviorDirty();
+		});
 		longStyle.addActionListener(event -> markBehaviorDirty());
 		idleEdge.addActionListener(event -> markBehaviorDirty());
 	}
@@ -298,7 +310,8 @@ final class GenericClientSettingsPanel extends JPanel
 				((Number) styleSwitchChance.getValue()).doubleValue() / 100.0,
 				(GenericClientBehaviorProfile.Edge) idleEdge.getSelectedItem(),
 				((Number) mouseDuration.getValue()).intValue(),
-				((Number) typingWordsPerMinute.getValue()).intValue());
+				((Number) typingWordsPerMinute.getValue()).intValue(),
+				((Number) dialogueReading.getValue()).intValue());
 			setSaveResult(actions.saveBehaviorOverrides(overrides), GenericClientDashboardStyle.MUTED);
 			behaviorDirty = false;
 			profileKey = null;

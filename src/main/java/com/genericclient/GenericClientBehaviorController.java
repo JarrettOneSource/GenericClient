@@ -163,6 +163,11 @@ final class GenericClientBehaviorController implements AutoCloseable
 			: profile.getTypingWordsPerMinute();
 	}
 
+	synchronized int dialogueReadingPercent()
+	{
+		return profile == null ? 50 : profile.getDialogueReadingPercent();
+	}
+
 	CompletableFuture<String> moveMouseOffscreen()
 	{
 		final GenericClientBehaviorProfile.Edge edge;

@@ -26,6 +26,8 @@ final class GenericClientBehaviorOverrides
 	private GenericClientBehaviorProfile.Edge idleEdge;
 	private int mouseMoveDurationMillis;
 	private int typingWordsPerMinute;
+	@SerializedName("dialogue_reading_percent")
+	private Integer dialogueReadingPercent;
 
 	private GenericClientBehaviorOverrides()
 	{
@@ -43,7 +45,8 @@ final class GenericClientBehaviorOverrides
 		double oppositeLongBreakProbability,
 		GenericClientBehaviorProfile.Edge idleEdge,
 		int mouseMoveDurationMillis,
-		int typingWordsPerMinute)
+		int typingWordsPerMinute,
+		int dialogueReadingPercent)
 	{
 		this.microBreakProbability = microBreakProbability;
 		this.cursorReleaseProbability = cursorReleaseProbability;
@@ -57,6 +60,7 @@ final class GenericClientBehaviorOverrides
 		this.idleEdge = idleEdge;
 		this.mouseMoveDurationMillis = mouseMoveDurationMillis;
 		this.typingWordsPerMinute = typingWordsPerMinute;
+		this.dialogueReadingPercent = dialogueReadingPercent;
 		validate();
 	}
 
@@ -74,7 +78,8 @@ final class GenericClientBehaviorOverrides
 			profile.getOppositeLongBreakProbability(),
 			profile.getIdleEdge(),
 			profile.getMouseMoveDurationMillis(),
-			profile.getTypingWordsPerMinute());
+			profile.getTypingWordsPerMinute(),
+			profile.getDialogueReadingPercent());
 	}
 
 	void validate()
@@ -109,6 +114,14 @@ final class GenericClientBehaviorOverrides
 			throw new IllegalArgumentException("Typing speed must be between " +
 				GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MIN + " and " +
 				GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MAX + " WPM");
+		}
+		if (dialogueReadingPercent != null &&
+			(dialogueReadingPercent < GenericClientBehaviorProfile.DIALOGUE_READING_PERCENT_MIN ||
+				dialogueReadingPercent > GenericClientBehaviorProfile.DIALOGUE_READING_PERCENT_MAX))
+		{
+			throw new IllegalArgumentException("Dialogue reading must be between " +
+				GenericClientBehaviorProfile.DIALOGUE_READING_PERCENT_MIN + " and " +
+				GenericClientBehaviorProfile.DIALOGUE_READING_PERCENT_MAX + " percent");
 		}
 		if (favoredLongBreakMode == null)
 		{
@@ -182,6 +195,11 @@ final class GenericClientBehaviorOverrides
 		return typingWordsPerMinute;
 	}
 
+	Integer getDialogueReadingPercent()
+	{
+		return dialogueReadingPercent;
+	}
+
 	Map<String, Object> toMap()
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
@@ -198,6 +216,10 @@ final class GenericClientBehaviorOverrides
 		value.put("idle_edge", idleEdge.name().toLowerCase(Locale.ROOT));
 		value.put("mouse_move_duration_millis", (long) mouseMoveDurationMillis);
 		value.put("typing_words_per_minute", (long) typingWordsPerMinute);
+		if (dialogueReadingPercent != null)
+		{
+			value.put("dialogue_reading_percent", (long) dialogueReadingPercent);
+		}
 		return value;
 	}
 

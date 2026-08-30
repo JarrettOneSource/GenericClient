@@ -401,6 +401,7 @@ public class GenericClientBehaviorControllerTest
 				0.25,
 				GenericClientBehaviorProfile.Edge.TOP,
 				650,
+				85,
 				85));
 
 			Map<String, Object> custom = (Map<String, Object>) fixture.controller.status().get("profile");
@@ -408,6 +409,7 @@ public class GenericClientBehaviorControllerTest
 			assertEquals(0.95, (Double) custom.get("micro_break_probability"), 0.0);
 			assertEquals("top", custom.get("idle_edge"));
 			assertEquals(650, fixture.controller.mouseMoveDurationMillis());
+			assertEquals(85, fixture.controller.dialogueReadingPercent());
 
 			fixture.controller.resetOverrides();
 			Map<String, Object> restored = (Map<String, Object>) fixture.controller.status().get("profile");
@@ -440,6 +442,7 @@ public class GenericClientBehaviorControllerTest
 			0.18,
 			GenericClientBehaviorProfile.Edge.RIGHT,
 			375,
+			75,
 			75);
 		GenericClientBehaviorController first = controller(directory);
 		first.activateAccount(8080L);
@@ -455,6 +458,7 @@ public class GenericClientBehaviorControllerTest
 			assertEquals(0.88, (Double) profile.get("micro_break_probability"), 0.0);
 			assertEquals(300.0, (Double) profile.get("long_cadence_minutes"), 0.0);
 			assertEquals(375, second.mouseMoveDurationMillis());
+			assertEquals(75, second.dialogueReadingPercent());
 		}
 		finally
 		{

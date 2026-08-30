@@ -21,6 +21,8 @@ final class GenericClientBehaviorProfile
 	static final int DEFAULT_TYPING_WORDS_PER_MINUTE = 55;
 	static final int TYPING_WORDS_PER_MINUTE_MIN = 20;
 	static final int TYPING_WORDS_PER_MINUTE_MAX = 180;
+	static final int DIALOGUE_READING_PERCENT_MIN = 0;
+	static final int DIALOGUE_READING_PERCENT_MAX = 100;
 
 	private static final String DOMAIN = "genericclient.behavior.v1";
 	private static final double[] SHORT_QUANTILES = {0.0, 0.10, 0.25, 0.50, 0.75, 0.90, 1.0};
@@ -43,6 +45,7 @@ final class GenericClientBehaviorProfile
 	private final Edge idleEdge;
 	private final int mouseMoveDurationMillis;
 	private final int typingWordsPerMinute;
+	private final int dialogueReadingPercent;
 	private final String title;
 	private final String summary;
 	private final double referenceDowntimePercent;
@@ -65,6 +68,7 @@ final class GenericClientBehaviorProfile
 		Edge idleEdge,
 		int mouseMoveDurationMillis,
 		int typingWordsPerMinute,
+		int dialogueReadingPercent,
 		boolean customized)
 	{
 		this.id = id;
@@ -83,6 +87,7 @@ final class GenericClientBehaviorProfile
 		this.idleEdge = idleEdge;
 		this.mouseMoveDurationMillis = mouseMoveDurationMillis;
 		this.typingWordsPerMinute = typingWordsPerMinute;
+		this.dialogueReadingPercent = dialogueReadingPercent;
 		this.customized = customized;
 		this.referenceDowntimePercent = calculateReferenceDowntimePercent();
 		this.title = buildTitle();
@@ -106,6 +111,8 @@ final class GenericClientBehaviorProfile
 		double longDurationQuantile = unit(accountHash, "long.duration");
 		double mouseDurationQuantile = correlatedUnit(accountHash, "mouse.duration", styleZ, 0.35);
 		double typingQuantile = correlatedUnit(accountHash, "typing.wpm", styleZ, 0.20);
+		double dialogueReadingQuantile = correlatedUnit(
+			accountHash, "dialogue.reading", styleZ, 0.15);
 
 		double longCadence = 300.0 * Math.exp(-2.015 * longQuantile);
 		double longRefractory = clamp(0.30 * longCadence, 10.0, 60.0);
@@ -131,6 +138,7 @@ final class GenericClientBehaviorProfile
 			Edge.values()[(int) Math.floor(unit(accountHash, "idle.edge") * Edge.values().length)],
 			roundToStep(300.0 + 350.0 * mouseDurationQuantile, 25),
 			roundToStep(35.0 + 65.0 * typingQuantile, 5),
+			roundToStep(100.0 * dialogueReadingQuantile, 5),
 			false);
 	}
 
@@ -161,6 +169,9 @@ final class GenericClientBehaviorProfile
 			overrides.getTypingWordsPerMinute() == 0
 				? typingWordsPerMinute
 				: overrides.getTypingWordsPerMinute(),
+			overrides.getDialogueReadingPercent() == null
+				? dialogueReadingPercent
+				: overrides.getDialogueReadingPercent(),
 			true);
 	}
 
@@ -244,6 +255,21 @@ final class GenericClientBehaviorProfile
 		return typingWordsPerMinute;
 	}
 
+	int getDialogueReadingPercent()
+	{
+		return dialogueReadingPercent;
+	}
+
+	String getDialogueReadingStyle()
+	{
+		return dialogueReadingStyle(dialogueReadingPercent);
+	}
+
+	int getDialogueWordsPerMinute()
+	{
+		return dialogueWordsPerMinute(dialogueReadingPercent);
+	}
+
 	String getTitle()
 	{
 		return title;
@@ -295,6 +321,9 @@ final class GenericClientBehaviorProfile
 		value.put("idle_edge", idleEdge.name().toLowerCase(Locale.ROOT));
 		value.put("mouse_move_duration_millis", (long) mouseMoveDurationMillis);
 		value.put("typing_words_per_minute", (long) typingWordsPerMinute);
+		value.put("dialogue_reading_percent", (long) dialogueReadingPercent);
+		value.put("dialogue_reading_style", getDialogueReadingStyle());
+		value.put("dialogue_words_per_minute", (long) getDialogueWordsPerMinute());
 		value.put("reference_eligible_interactions_per_hour", REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR);
 		value.put("reference_forced_downtime_percent", referenceDowntimePercent);
 		return value;
@@ -330,7 +359,7 @@ final class GenericClientBehaviorProfile
 				"Typical forced pauses center near %.1f seconds, with a %.0f%% chance of a 12-120 second tail. " +
 				"Long breaks average about %.0f active minutes apart and center near %.1f minutes; usually %s, " +
 				"with the opposite choice about %.0f%% of the time. Major phases apply %.1f ordinary short-break chances. " +
-				"Recorded mouse paths play over %d milliseconds and text entry averages %d WPM. " +
+				"Recorded mouse paths play over %d milliseconds and text entry averages %d WPM. %s. " +
 				"At %.0f eligible actions per hour, estimated forced downtime is %.0f%%.",
 			microBreakProbability * 100.0,
 			cursorReleaseProbability * 100.0,
@@ -343,8 +372,51 @@ final class GenericClientBehaviorProfile
 			phaseShortChances,
 			mouseMoveDurationMillis,
 			typingWordsPerMinute,
+			dialogueReadingSummary(),
 			REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR,
 			referenceDowntimePercent);
+	}
+
+	private String dialogueReadingSummary()
+	{
+		if (dialogueReadingPercent <= 20)
+		{
+			return "Skips dialogue without trying to read it";
+		}
+		String verb = dialogueReadingPercent <= 45
+			? "Skims dialogue"
+			: dialogueReadingPercent <= 75 ? "Reads dialogue" : "Reads dialogue slowly";
+		return String.format(Locale.ROOT,
+			"%s at about %d WPM",
+			verb,
+			getDialogueWordsPerMinute());
+	}
+
+	static String dialogueReadingStyle(int percent)
+	{
+		if (percent <= 20)
+		{
+			return "skips dialogue";
+		}
+		if (percent <= 45)
+		{
+			return "skims dialogue";
+		}
+		if (percent <= 75)
+		{
+			return "reads dialogue";
+		}
+		return "slow reader";
+	}
+
+	static int dialogueWordsPerMinute(int percent)
+	{
+		if (percent <= 20)
+		{
+			return 0;
+		}
+		double progress = (percent - 20.0) / 80.0;
+		return (int) Math.round(650.0 * Math.exp(-Math.log(650.0 / 160.0) * progress));
 	}
 
 	private double calculateReferenceDowntimePercent()

@@ -57,6 +57,7 @@ final class GenericClientMenuInput implements AutoCloseable
 	private volatile boolean cursorRetained;
 	private volatile Map<String, Object> behaviorBefore = Collections.emptyMap();
 	private volatile Map<String, Object> behaviorAfter = Collections.emptyMap();
+	private volatile Map<String, Object> receiptMetadata = Collections.emptyMap();
 	private volatile boolean closed;
 
 	GenericClientMenuInput(
@@ -77,20 +78,29 @@ final class GenericClientMenuInput implements AutoCloseable
 
 	CompletableFuture<Map<String, Object>> interact(TargetResolver resolver, GenericClientActivityContext activityContext)
 	{
-		return start(resolver, activityContext, false);
+		return start(resolver, activityContext, false, null);
 	}
 
 	CompletableFuture<Map<String, Object>> interactDirect(
 		TargetResolver resolver,
 		GenericClientActivityContext activityContext)
 	{
-		return start(resolver, activityContext, true);
+		return start(resolver, activityContext, true, null);
+	}
+
+	CompletableFuture<Map<String, Object>> interactDirect(
+		TargetResolver resolver,
+		GenericClientActivityContext activityContext,
+		PreInteractionResolver preInteractionResolver)
+	{
+		return start(resolver, activityContext, true, preInteractionResolver);
 	}
 
 	private CompletableFuture<Map<String, Object>> start(
 		TargetResolver resolver,
 		GenericClientActivityContext activityContext,
-		boolean directClick)
+		boolean directClick,
+		PreInteractionResolver preInteractionResolver)
 	{
 		if (resolver == null)
 		{
@@ -112,6 +122,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		this.resolver = resolver;
 		this.activityContext = activityContext;
 		this.directClick = directClick;
+		receiptMetadata = Collections.emptyMap();
 		target = null;
 		awaitingMenuResult = false;
 		clickFinished = false;
@@ -134,9 +145,45 @@ final class GenericClientMenuInput implements AutoCloseable
 				return;
 			}
 			behaviorBefore = before;
-			clientThread.invoke(this::resolveTargetOnClientThread);
+			clientThread.invoke(() -> prepareOnClientThread(preInteractionResolver));
 		});
 		return result;
+	}
+
+	private void prepareOnClientThread(PreInteractionResolver preInteractionResolver)
+	{
+		if (!running.get())
+		{
+			return;
+		}
+		PreInteraction preInteraction;
+		try
+		{
+			preInteraction = preInteractionResolver == null
+				? PreInteraction.none()
+				: preInteractionResolver.resolve();
+		}
+		catch (RuntimeException exception)
+		{
+			finishRejected("pre_interaction: " + exception.getMessage());
+			return;
+		}
+		if (preInteraction == null)
+		{
+			finishRejected("pre_interaction_unavailable");
+			return;
+		}
+		receiptMetadata = preInteraction.metadata;
+		if (preInteraction.delayMillis == 0L)
+		{
+			resolveTargetOnClientThread();
+		}
+		else
+		{
+			schedule(
+				() -> clientThread.invoke(this::resolveTargetOnClientThread),
+				preInteraction.delayMillis);
+		}
 	}
 
 	boolean isRunning()
@@ -654,7 +701,7 @@ final class GenericClientMenuInput implements AutoCloseable
 
 	private Map<String, Object> baseReceipt(String status, String result)
 	{
-		Map<String, Object> receipt = new LinkedHashMap<>();
+		Map<String, Object> receipt = new LinkedHashMap<>(receiptMetadata);
 		receipt.put("status", status);
 		receipt.put("result", result);
 		Target current = target;
@@ -697,6 +744,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		activeResult = null;
 		resolver = null;
 		target = null;
+		receiptMetadata = Collections.emptyMap();
 		if (completion != null)
 		{
 			completion.complete(receipt);
@@ -751,6 +799,40 @@ final class GenericClientMenuInput implements AutoCloseable
 	interface TargetResolver
 	{
 		Resolution resolve();
+	}
+
+	interface PreInteractionResolver
+	{
+		PreInteraction resolve();
+	}
+
+	static final class PreInteraction
+	{
+		private final long delayMillis;
+		private final Map<String, Object> metadata;
+
+		private PreInteraction(long delayMillis, Map<String, Object> metadata)
+		{
+			if (delayMillis < 0L || delayMillis > 60_000L)
+			{
+				throw new IllegalArgumentException(
+					"Menu interaction delay must be between 0 and 60000ms");
+			}
+			this.delayMillis = delayMillis;
+			this.metadata = metadata == null || metadata.isEmpty()
+				? Collections.emptyMap()
+				: Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
+		}
+
+		static PreInteraction none()
+		{
+			return new PreInteraction(0L, Collections.emptyMap());
+		}
+
+		static PreInteraction delayed(long delayMillis, Map<String, Object> metadata)
+		{
+			return new PreInteraction(delayMillis, metadata);
+		}
 	}
 
 	interface EntryMatcher
