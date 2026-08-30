@@ -25,9 +25,11 @@ final class GenericClientMenuInput implements AutoCloseable
 	private static final long HOVER_SETTLE_MILLIS = 75L;
 	private static final long CONTEXT_MENU_SETTLE_MILLIS = 150L;
 	private static final long CLICK_RESULT_TIMEOUT_MILLIS = 2_500L;
+	private static final long POST_LONG_BREAK_SETTLE_MILLIS = 100L;
 	private static final int CONTEXT_MENU_ENTRY_HEIGHT = 15;
 	private static final int MAX_DYNAMIC_RETARGETS = 12;
 	private static final int MAX_CONTEXT_REOPENS = 3;
+	private static final int MAX_POST_LONG_BREAK_RESOLVE_RETRIES = 50;
 
 	private final Client client;
 	private final ClientThread clientThread;
@@ -50,6 +52,7 @@ final class GenericClientMenuInput implements AutoCloseable
 	private volatile int clickCount;
 	private volatile int dynamicRetargetCount;
 	private volatile int contextReopenCount;
+	private volatile int postLongBreakResolveRetries;
 	private volatile String dispatch;
 	private volatile Map<String, Object> behaviorBefore = Collections.emptyMap();
 	private volatile Map<String, Object> behaviorAfter = Collections.emptyMap();
@@ -116,6 +119,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		clickCount = 0;
 		dynamicRetargetCount = 0;
 		contextReopenCount = 0;
+		postLongBreakResolveRetries = 0;
 		dispatch = null;
 		behaviorBefore = Collections.emptyMap();
 		behaviorAfter = Collections.emptyMap();
@@ -184,7 +188,12 @@ final class GenericClientMenuInput implements AutoCloseable
 		}
 		if (resolution == null || resolution.target == null)
 		{
-			finishRejected(resolution == null ? "target_unavailable" : resolution.reason);
+			String reason = resolution == null ? "target_unavailable" : resolution.reason;
+			if (retryAfterLongBreak(reason))
+			{
+				return;
+			}
+			finishRejected(reason);
 			return;
 		}
 		target = resolution.target;
@@ -193,6 +202,11 @@ final class GenericClientMenuInput implements AutoCloseable
 		Canvas canvas = client.getCanvas();
 		if (canvas == null || !canvas.isShowing())
 		{
+			target = null;
+			if (retryAfterLongBreak("canvas_not_showing"))
+			{
+				return;
+			}
 			finishRejected("canvas_not_showing");
 			return;
 		}
@@ -205,6 +219,23 @@ final class GenericClientMenuInput implements AutoCloseable
 			}
 			schedule(() -> clientThread.invoke(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
 		});
+	}
+
+	private boolean retryAfterLongBreak(String reason)
+	{
+		if (!"long".equals(behaviorBefore.get("kind")) ||
+			!"completed".equals(behaviorBefore.get("status")) ||
+			postLongBreakResolveRetries >= MAX_POST_LONG_BREAK_RESOLVE_RETRIES)
+		{
+			return false;
+		}
+		postLongBreakResolveRetries++;
+		reporter.accept("MENU_INTERACTION_POST_BREAK_SETTLE attempt=" +
+			postLongBreakResolveRetries + " reason=" + reason);
+		schedule(
+			() -> clientThread.invoke(this::resolveTargetOnClientThread),
+			POST_LONG_BREAK_SETTLE_MILLIS);
+		return true;
 	}
 
 	private void verifyHoverAndClick()

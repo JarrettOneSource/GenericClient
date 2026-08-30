@@ -1,8 +1,10 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import java.awt.Rectangle;
 import java.lang.reflect.Proxy;
 import net.runelite.api.MenuEntry;
 import org.junit.Test;
@@ -20,6 +22,18 @@ public class GenericClientBankInputTest
 			entry, 556, 9, 786444, "Withdraw-X"));
 		assertFalse(GenericClientBankInput.matchesBankItem(
 			entry, 556, 8, 786444, "Withdraw-All"));
+	}
+
+	@Test
+	public void bankItemClickBoundsStopBeforeTheBottomControls()
+	{
+		Rectangle clipped = GenericClientBankInput.clipBankItemBounds(
+			new Rectangle(350, 263, 48, 36),
+			282,
+			765,
+			503);
+
+		assertEquals(new Rectangle(350, 263, 48, 19), clipped);
 	}
 
 	private static MenuEntry menuEntry(int itemId, int slot, int widgetId, String option)

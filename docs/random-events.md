@@ -42,10 +42,16 @@ local event = gc.read("random_event")
 client_status.random_event
 ```
 
-An unregistered event reports `state = "attention_required"`. The MCP monitor
-prints the event fields and exits with code `3`, so a background job wakes Codex
-instead of mistaking the interruption for normal script completion. The alert is
-also written to GenericClient's log/chat reporter and RuneLite's notifier.
+An unregistered event reports `state = "attention_required"`. After the interrupt
+barrier, GenericClient immediately selects `Talk-to` once to hold or advance the
+event while a dedicated solver is written. `auto_talk_status` records whether
+that click was dispatched; talking never clears the event latch. Registered
+solvers own their interactions and do not receive this fallback click.
+
+The MCP monitor prints the event fields and exits with code `3`, so a background
+job wakes Codex instead of mistaking the interruption for normal script
+completion. The alert is also written to GenericClient's log/chat reporter and
+RuneLite's notifier.
 
 `random_event_acknowledge` only records that the alert was seen. It never clears
 the latch. After an unknown event has been solved and its outcome observed, call
@@ -54,6 +60,15 @@ manual script from current observed game state; set `resume_interrupted = false`
 when that is not appropriate.
 
 GenericClient never selects `Dismiss` as a framework fallback.
+
+The bundled Mime solver accepts the show, records the Mime's last recognized
+animation until the response panel appears, and clicks the matching performance.
+It repeats until the Mime despawns and the emote-unlock message is observed. The
+answer must be selected from the last animation before the panel opens; reacting
+to the first animation after the previous click can select a stale performance.
+The first live receipt completed five correctly observed rounds, unlocked the
+Lean emote, and returned the player to `(2487, 3420, 0)` on the interrupted
+Gnome Stronghold course before the runner resumed.
 
 ## Registering a standalone solver
 

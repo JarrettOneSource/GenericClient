@@ -93,6 +93,7 @@ public final class GenericClientPlugin extends Plugin
 	private volatile String lastStatus = "Plugin instance created";
 	private volatile long tickCount;
 	private volatile Instant startedAt;
+	private boolean loginMessageShown;
 
 	private GenericClientDashboard panel;
 	private GenericClientBreakOverlay breakOverlay;
@@ -138,6 +139,7 @@ public final class GenericClientPlugin extends Plugin
 	protected void startUp() throws Exception
 	{
 		startedAt = Instant.now();
+		loginMessageShown = false;
 		lifecycle = "RUNNING";
 		gameStateName = client.getGameState().name();
 		lastStatus = "PLUGIN_STARTED stock RuneLite loaded GenericClient";
@@ -232,6 +234,20 @@ public final class GenericClientPlugin extends Plugin
 				itemId, null, action, GenericClientActivityContext.none()),
 			this::startEmergencyEscape,
 			behaviorController::endActiveBreak,
+			new GenericClientEmergencyController.InputControl()
+			{
+				@Override
+				public java.util.concurrent.CompletableFuture<?> pause(String reason)
+				{
+					return pauseForEmergency(reason);
+				}
+
+				@Override
+				public java.util.concurrent.CompletableFuture<?> resume(String reason)
+				{
+					return resumeAfterEmergency(reason);
+				}
+			},
 			this::stopForEmergency,
 			this::publishResult);
 		bankInput = new GenericClientBankInput(
@@ -347,6 +363,12 @@ public final class GenericClientPlugin extends Plugin
 						});
 				}
 			},
+			npcId -> npcInput.interact(
+				npcId,
+				null,
+				"Talk-to",
+				12,
+				GenericClientActivityContext.none()),
 			message ->
 			{
 				notifier.notify(message);
@@ -357,7 +379,9 @@ public final class GenericClientPlugin extends Plugin
 			randomEventController::status,
 			randomEventController::solverFinished);
 		screenshot = new GenericClientScreenshot(drawManager, executor);
-		scriptOverlay = new GenericClientScriptOverlay(luaHost::getActiveScriptView);
+		scriptOverlay = new GenericClientScriptOverlay(
+			luaHost::getActiveScriptView,
+			luaHost::getActivity);
 		controlServer = new GenericClientControlServer(
 			config.controlPort(),
 			luaHost,
@@ -546,6 +570,10 @@ public final class GenericClientPlugin extends Plugin
 	public void onGameStateChanged(GameStateChanged event)
 	{
 		gameStateName = event.getGameState().name();
+		if (event.getGameState() == GameState.LOGIN_SCREEN)
+		{
+			loginMessageShown = false;
+		}
 		if (event.getGameState() != GameState.LOGGED_IN)
 		{
 			latestSnapshot = null;
@@ -564,7 +592,11 @@ public final class GenericClientPlugin extends Plugin
 		if (event.getGameState() == GameState.LOGGED_IN)
 		{
 			activateBehaviorProfile();
-			postChat("GenericClient loaded");
+			if (!loginMessageShown)
+			{
+				loginMessageShown = true;
+				postChat("GenericClient loaded");
+			}
 		}
 	}
 
@@ -1030,6 +1062,41 @@ public final class GenericClientPlugin extends Plugin
 		return host == null
 			? java.util.concurrent.CompletableFuture.completedFuture(null)
 			: host.stop();
+	}
+
+	private java.util.concurrent.CompletableFuture<?> pauseForEmergency(String reason)
+	{
+		GenericClientWalker activeWalker = walker;
+		if (activeWalker != null)
+		{
+			activeWalker.pauseActiveInput(reason);
+		}
+		GenericClientGameInput activeGameInput = gameInput;
+		if (activeGameInput != null)
+		{
+			activeGameInput.cancel(reason);
+		}
+		GenericClientMenuInput activeMenuInput = menuInput;
+		if (activeMenuInput != null)
+		{
+			activeMenuInput.cancel(reason);
+		}
+		GenericClientCombatInput activeCombatInput = combatInput;
+		if (activeCombatInput != null)
+		{
+			activeCombatInput.cancel(reason);
+		}
+		return java.util.concurrent.CompletableFuture.completedFuture(null);
+	}
+
+	private java.util.concurrent.CompletableFuture<?> resumeAfterEmergency(String reason)
+	{
+		GenericClientWalker activeWalker = walker;
+		if (activeWalker != null)
+		{
+			activeWalker.resumeActiveInput(reason);
+		}
+		return java.util.concurrent.CompletableFuture.completedFuture(null);
 	}
 
 	private java.util.concurrent.CompletableFuture<Map<String, Object>> startEmergencyEscape(

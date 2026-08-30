@@ -380,8 +380,10 @@ final class GenericClientBankInput implements AutoCloseable
 				{
 					continue;
 				}
+				Rectangle clickableBounds = clipBankItemBounds(
+					item.getBounds(), bankControlsTop(), client.getCanvasWidth(), client.getCanvasHeight());
 				Point point = GenericClientMenuInput.randomPointInside(
-					item.getBounds(), client.getCanvasWidth(), client.getCanvasHeight());
+					clickableBounds, client.getCanvasWidth(), client.getCanvasHeight());
 				if (point == null)
 				{
 					continue;
@@ -402,6 +404,44 @@ final class GenericClientBankInput implements AutoCloseable
 			}
 		}
 		return GenericClientMenuInput.Resolution.rejected("requested_bank_item_not_visible");
+	}
+
+	private int bankControlsTop()
+	{
+		int top = client.getCanvasHeight();
+		int[] controls = {
+			InterfaceID.Bankmain.SWAP_INSERT,
+			InterfaceID.Bankmain.NOTE,
+			InterfaceID.Bankmain.QUANTITY_LAYER,
+			InterfaceID.Bankmain.PLACEHOLDER,
+			InterfaceID.Bankmain.SEARCH,
+			InterfaceID.Bankmain.DEPOSIT_LINE,
+		};
+		for (int id : controls)
+		{
+			Widget widget = visibleWidget(id);
+			if (widget != null)
+			{
+				top = Math.min(top, widget.getBounds().y);
+			}
+		}
+		return top;
+	}
+
+	static Rectangle clipBankItemBounds(
+		Rectangle itemBounds,
+		int controlsTop,
+		int canvasWidth,
+		int canvasHeight)
+	{
+		if (itemBounds == null)
+		{
+			return null;
+		}
+		int visibleHeight = Math.min(canvasHeight, controlsTop);
+		Rectangle canvas = new Rectangle(0, 0, canvasWidth, Math.max(0, visibleHeight));
+		Rectangle clipped = itemBounds.intersection(canvas);
+		return clipped.width > 0 && clipped.height > 0 ? clipped : null;
 	}
 
 	private CompletableFuture<Map<String, Object>> waitUntil(

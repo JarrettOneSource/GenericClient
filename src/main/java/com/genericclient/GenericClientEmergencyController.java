@@ -19,6 +19,7 @@ final class GenericClientEmergencyController
 	private final FoodAction foodAction;
 	private final EscapeAction escapeAction;
 	private final Supplier<CompletableFuture<Map<String, Object>>> endBreakAction;
+	private final InputControl inputControl;
 	private final Function<String, CompletableFuture<?>> stopAction;
 	private final Consumer<String> reporter;
 	private final AtomicBoolean recovering = new AtomicBoolean();
@@ -34,9 +35,27 @@ final class GenericClientEmergencyController
 		Function<String, CompletableFuture<?>> stopAction,
 		Consumer<String> reporter)
 	{
+		this(
+			foodAction,
+			escapeAction,
+			endBreakAction,
+			InputControl.none(),
+			stopAction,
+			reporter);
+	}
+
+	GenericClientEmergencyController(
+		FoodAction foodAction,
+		EscapeAction escapeAction,
+		Supplier<CompletableFuture<Map<String, Object>>> endBreakAction,
+		InputControl inputControl,
+		Function<String, CompletableFuture<?>> stopAction,
+		Consumer<String> reporter)
+	{
 		this.foodAction = foodAction;
 		this.escapeAction = escapeAction;
 		this.endBreakAction = endBreakAction;
+		this.inputControl = inputControl;
 		this.stopAction = stopAction;
 		this.reporter = reporter;
 	}
@@ -71,13 +90,19 @@ final class GenericClientEmergencyController
 		guard = null;
 		lastEvent = "unarmed";
 		reporter.accept("EMERGENCY_GUARD_CLEARED");
-		return CompletableFuture.completedFuture(receipt("complete", "emergency_guard_cleared"));
+		if (!recovering.getAndSet(false))
+		{
+			return CompletableFuture.completedFuture(
+				receipt("complete", "emergency_guard_cleared"));
+		}
+		return stopAction.apply("emergency_guard_cleared")
+			.handle((ignored, error) -> receipt("complete", "emergency_guard_cleared"));
 	}
 
 	void publishGameTick(GenericClientSnapshot snapshot)
 	{
 		Guard current = guard;
-		if (current == null || snapshot == null || recovering.get())
+		if (current == null || snapshot == null)
 		{
 			return;
 		}
@@ -87,8 +112,15 @@ final class GenericClientEmergencyController
 		lastHitpoints = hitpoints;
 		if (hitpoints <= 0)
 		{
+			guard = null;
+			recovering.set(false);
 			lastEvent = "death_observed";
 			reporter.accept("EMERGENCY_DEATH_OBSERVED");
+			stopAction.apply("emergency_death_observed").handle((ignored, error) -> null);
+			return;
+		}
+		if (recovering.get())
+		{
 			return;
 		}
 		boolean forcedHealReady = maximumHitpoints > 0 &&
@@ -120,6 +152,11 @@ final class GenericClientEmergencyController
 		recovery
 			.whenComplete((receipt, error) ->
 			{
+				if (guard != current)
+				{
+					recovering.set(false);
+					return;
+				}
 				if (error != null)
 				{
 					lastEvent = "recovery_failed";
@@ -147,14 +184,18 @@ final class GenericClientEmergencyController
 		boolean allowOverhealNow,
 		boolean fallbackRequired)
 	{
-		return tryConsumable(current, 0, allowOverhealNow ? null : missingHitpoints)
+		return inputControl.pause("emergency_consumable")
+			.handle((ignored, error) -> null)
+			.thenCompose(ignored ->
+				tryConsumable(current, 0, allowOverhealNow ? null : missingHitpoints))
 			.thenCompose(food ->
 			{
 				if (wasAccepted(food) || !fallbackRequired)
 				{
 					return endBreakAction.get()
 						.handle((result, error) -> null)
-						.thenApply(ignored -> food);
+						.thenCompose(ignored -> inputControl.resume("emergency_consumable"))
+						.handle((ignored, error) -> food);
 				}
 				return stopAction.apply("emergency_consumable_unavailable")
 					.handle((ignored, error) -> null)
@@ -293,6 +334,31 @@ final class GenericClientEmergencyController
 	interface EscapeAction
 	{
 		CompletableFuture<Map<String, Object>> escape(Escape escape);
+	}
+
+	interface InputControl
+	{
+		CompletableFuture<?> pause(String reason);
+
+		CompletableFuture<?> resume(String reason);
+
+		static InputControl none()
+		{
+			return new InputControl()
+			{
+				@Override
+				public CompletableFuture<?> pause(String reason)
+				{
+					return CompletableFuture.completedFuture(null);
+				}
+
+				@Override
+				public CompletableFuture<?> resume(String reason)
+				{
+					return CompletableFuture.completedFuture(null);
+				}
+			};
+		}
 	}
 
 	static final class Escape

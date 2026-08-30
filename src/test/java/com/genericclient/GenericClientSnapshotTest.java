@@ -152,9 +152,18 @@ public class GenericClientSnapshotTest
 				Collections.singletonList("Open"), 0, 0)),
 			GenericClientQuestSnapshot.DialogueSnapshot.closed());
 		GenericClientSnapshot drawersSnapshot = sceneSnapshot(flags, withDrawers);
+		GenericClientQuestSnapshot withGate = new GenericClientQuestSnapshot(
+			true,
+			new int[0],
+			Collections.singletonList(new GenericClientQuestSnapshot.ObjectSnapshot(
+				190, "Gate", "game", 102, 201, 0, 1,
+				Collections.singletonList("Open"), 0, 0)),
+			GenericClientQuestSnapshot.DialogueSnapshot.closed());
+		GenericClientSnapshot gateSnapshot = sceneSnapshot(flags, withGate);
 		GenericClientSnapshot wallSnapshot = sceneSnapshot(flags, GenericClientQuestSnapshot.empty());
 
 		assertEquals(true, doorSnapshot.canPlanMove(101, 201, 0, 1, 0, true));
+		assertEquals(true, gateSnapshot.canPlanMove(101, 201, 0, 1, 0, true));
 		assertEquals(false, doorSnapshot.canPlanMove(102, 201, 0, 0, 1, true));
 		assertEquals(false, drawersSnapshot.canPlanMove(101, 201, 0, 1, 0, true));
 		assertEquals(false, wallSnapshot.canPlanMove(101, 201, 0, 1, 0, true));

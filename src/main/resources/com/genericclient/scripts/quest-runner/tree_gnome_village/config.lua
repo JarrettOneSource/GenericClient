@@ -1,6 +1,6 @@
 local zones = {
   village = { x1 = 2514, y1 = 3158, x2 = 2542, y2 = 3175, plane = 0 },
-  tower_ground = { x1 = 2500, y1 = 3253, x2 = 2507, y2 = 3260, plane = 0 },
+  tower_ground = { x1 = 2500, y1 = 3251, x2 = 2508, y2 = 3260, plane = 0 },
   tower_upstairs = { x1 = 2500, y1 = 3251, x2 = 2506, y2 = 3259, plane = 1 },
 }
 
@@ -13,13 +13,15 @@ local points = {
   tracker_two = { x = 2524, y = 3257, plane = 0 },
   tracker_three = { x = 2497, y = 3234, plane = 0 },
   ballista = { x = 2509, y = 3211, plane = 0 },
-  crumbled_wall = { x = 2503, y = 3252, plane = 0 },
+  crumbled_wall = { x = 2509, y = 3253, plane = 0 },
   tower_chest = { x = 2506, y = 3259, plane = 1 },
   elkoy = { x = 2505, y = 3191, plane = 0 },
   tower_exit = { x = 2503, y = 3248, plane = 0 },
   warlord = { x = 2456, y = 3301, plane = 0 },
-  warlord_reset = { x = 2447, y = 3302, plane = 0 },
-  warlord_cast = { x = 2447, y = 3297, plane = 0 },
+  warlord_drag = { x = 2443, y = 3303, plane = 0 },
+  warlord_cast = { x = 2443, y = 3296, plane = 0 },
+  warlord_pin = { x = 2448, y = 3301, plane = 0 },
+  warlord_fallback = { x = 2448, y = 3282, plane = 0 },
 }
 
 local npcs = {
@@ -36,7 +38,7 @@ local npcs = {
 local objects = {
   ballista = 2181,
   khazard_door = 2184,
-  crumbled_wall = 2926,
+  crumbled_wall = 2185,
   tower_ladder = 16683,
   chest_open = 2182,
   chest_closed = 2183,
@@ -47,7 +49,7 @@ local items = {
   staff_of_air = 1381,
   earth_rune = 557,
   chaos_rune = 562,
-  wine = 1993,
+  food = 379,
   ring_of_dueling = 2552,
   first_orb = 587,
   remaining_orbs = 588,
@@ -67,20 +69,24 @@ local combat_loadout = {
   { id = items.chaos_rune, name = "Chaos rune", quantity = 100, maximum_unit_price = 500 },
   { id = items.earth_rune, name = "Earth rune", quantity = 300, maximum_unit_price = 100 },
   ring,
-  { id = items.wine, name = "Jug of wine", quantity = 8, maximum_unit_price = 100 },
+  { id = items.food, name = "Lobster", quantity = 20, maximum_unit_price = 500 },
 }
 
 local combat_minimum = {
   { id = items.staff_of_air, name = "Staff of air", quantity = 1, maximum_unit_price = 2000 },
   { id = items.chaos_rune, name = "Chaos rune", quantity = 40, maximum_unit_price = 500 },
   { id = items.earth_rune, name = "Earth rune", quantity = 120, maximum_unit_price = 100 },
-  { id = items.wine, name = "Jug of wine", quantity = 3, maximum_unit_price = 100 },
+  { id = items.food, name = "Lobster", quantity = 10, maximum_unit_price = 500 },
 }
 
 local initial_loadout = {
   { id = items.logs, name = "Logs", quantity = 6, maximum_unit_price = 500 },
+  { id = items.staff_of_air, name = "Staff of air", quantity = 1, maximum_unit_price = 2000 },
+  { id = items.chaos_rune, name = "Chaos rune", quantity = 100, maximum_unit_price = 500 },
+  { id = items.earth_rune, name = "Earth rune", quantity = 300, maximum_unit_price = 100 },
+  ring,
+  { id = items.food, name = "Lobster", quantity = 14, maximum_unit_price = 500 },
 }
-for _, item in ipairs(combat_loadout) do initial_loadout[#initial_loadout + 1] = item end
 
 local maze_route = {
   { x = 2505, y = 3190, plane = 0 },

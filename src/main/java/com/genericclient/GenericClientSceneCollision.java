@@ -17,7 +17,8 @@ final class GenericClientSceneCollision
 	private static final int SCENE_BORDER_SENTINEL = 0xFFFFFF;
 	private static final int UNINITIALIZED_SENTINEL = 0x1000000;
 	private static final GenericClientSceneCollision EMPTY =
-		new GenericClientSceneCollision(false, 0, 0, 0, new int[0][]);
+		new GenericClientSceneCollision(false, 0, 0, 0, new int[0][], new boolean[0][],
+			false, new int[0][][]);
 
 	private final boolean available;
 	private final int baseX;
@@ -25,6 +26,8 @@ final class GenericClientSceneCollision
 	private final int plane;
 	private final int[][] flags;
 	private final boolean[][] loaded;
+	private final boolean instance;
+	private final int[][][] instanceTemplateChunks;
 
 	GenericClientSceneCollision(
 		boolean available,
@@ -33,7 +36,7 @@ final class GenericClientSceneCollision
 		int plane,
 		int[][] flags)
 	{
-		this(available, baseX, baseY, plane, flags, allLoaded(flags));
+		this(available, baseX, baseY, plane, flags, allLoaded(flags), false, new int[0][][]);
 	}
 
 	GenericClientSceneCollision(
@@ -44,12 +47,27 @@ final class GenericClientSceneCollision
 		int[][] flags,
 		boolean[][] loaded)
 	{
+		this(available, baseX, baseY, plane, flags, loaded, false, new int[0][][]);
+	}
+
+	GenericClientSceneCollision(
+		boolean available,
+		int baseX,
+		int baseY,
+		int plane,
+		int[][] flags,
+		boolean[][] loaded,
+		boolean instance,
+		int[][][] instanceTemplateChunks)
+	{
 		this.available = available;
 		this.baseX = baseX;
 		this.baseY = baseY;
 		this.plane = plane;
 		this.flags = copy(flags);
 		this.loaded = copy(loaded);
+		this.instance = instance;
+		this.instanceTemplateChunks = copy(instanceTemplateChunks);
 	}
 
 	static GenericClientSceneCollision empty()
@@ -59,7 +77,7 @@ final class GenericClientSceneCollision
 
 	static GenericClientSceneCollision capture(WorldView worldView, int plane)
 	{
-		if (worldView == null || worldView.isInstance())
+		if (worldView == null)
 		{
 			return empty();
 		}
@@ -93,7 +111,9 @@ final class GenericClientSceneCollision
 			worldView.getBaseY(),
 			plane,
 			flags,
-			loaded);
+			loaded,
+			worldView.isInstance(),
+			worldView.getInstanceTemplateChunks());
 	}
 
 	boolean isAvailable()
@@ -143,12 +163,100 @@ final class GenericClientSceneCollision
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
 		value.put("available", available);
+		value.put("instance", instance);
 		value.put("plane", (long) plane);
 		value.put("base", worldMap(new WorldPoint(baseX, baseY, plane)));
 		value.put("from", tileMap(from));
 		value.put("to", tileMap(to));
 		value.put("can_move", canMove(from, to));
 		return value;
+	}
+
+	Map<String, Object> inspectInstance(WorldPoint template)
+	{
+		if (template == null)
+		{
+			throw new IllegalArgumentException("instance reads require a template world point");
+		}
+		Map<String, Object> value = new LinkedHashMap<>();
+		value.put("available", available);
+		value.put("instance", instance);
+		value.put("template", worldMap(template));
+		List<Map<String, Object>> matches = new ArrayList<>();
+		if (available && instance)
+		{
+			for (WorldPoint match : toLocalInstance(template))
+			{
+				matches.add(worldMap(match));
+			}
+		}
+		else if (available && template.getPlane() == plane &&
+			template.getX() >= baseX && template.getX() < baseX + flags.length)
+		{
+			matches.add(worldMap(template));
+		}
+		value.put("matches", matches);
+		return value;
+	}
+
+	private List<WorldPoint> toLocalInstance(WorldPoint template)
+	{
+		List<WorldPoint> matches = new ArrayList<>();
+		for (int localPlane = 0; localPlane < instanceTemplateChunks.length; localPlane++)
+		{
+			int[][] planeChunks = instanceTemplateChunks[localPlane];
+			if (planeChunks == null)
+			{
+				continue;
+			}
+			for (int chunkX = 0; chunkX < planeChunks.length; chunkX++)
+			{
+				int[] column = planeChunks[chunkX];
+				if (column == null)
+				{
+					continue;
+				}
+				for (int chunkY = 0; chunkY < column.length; chunkY++)
+				{
+					int chunk = column[chunkY];
+					int rotation = chunk >> 1 & 3;
+					int templateY = (chunk >> 3 & 2047) * 8;
+					int templateX = (chunk >> 14 & 1023) * 8;
+					int templatePlane = chunk >> 24 & 3;
+					if (template.getPlane() != templatePlane ||
+						template.getX() < templateX || template.getX() >= templateX + 8 ||
+						template.getY() < templateY || template.getY() >= templateY + 8)
+					{
+						continue;
+					}
+					WorldPoint local = new WorldPoint(
+						baseX + chunkX * 8 + (template.getX() & 7),
+						baseY + chunkY * 8 + (template.getY() & 7),
+						localPlane);
+					matches.add(rotate(local, rotation));
+				}
+			}
+		}
+		return matches;
+	}
+
+	private static WorldPoint rotate(WorldPoint point, int rotation)
+	{
+		int baseX = point.getX() & -8;
+		int baseY = point.getY() & -8;
+		int x = point.getX() & 7;
+		int y = point.getY() & 7;
+		switch (rotation)
+		{
+			case 1:
+				return new WorldPoint(baseX + y, baseY + 7 - x, point.getPlane());
+			case 2:
+				return new WorldPoint(baseX + 7 - x, baseY + 7 - y, point.getPlane());
+			case 3:
+				return new WorldPoint(baseX + 7 - y, baseY + x, point.getPlane());
+			default:
+				return point;
+		}
 	}
 
 	private Boolean cardinalCanMove(WorldPoint from, WorldPoint to)
@@ -285,6 +393,20 @@ final class GenericClientSceneCollision
 		for (int index = 0; index < source.length; index++)
 		{
 			result[index] = source[index] == null ? null : source[index].clone();
+		}
+		return result;
+	}
+
+	private static int[][][] copy(int[][][] source)
+	{
+		if (source == null)
+		{
+			return new int[0][][];
+		}
+		int[][][] result = new int[source.length][][];
+		for (int index = 0; index < source.length; index++)
+		{
+			result[index] = source[index] == null ? null : copy(source[index]);
 		}
 		return result;
 	}

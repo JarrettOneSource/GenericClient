@@ -14,16 +14,26 @@ local waterfall_quest = gc.require("waterfall_quest")
 local tree_gnome_config = gc.require("tree_gnome_config")
 local tree_gnome_state = gc.require("tree_gnome_state")
 local tree_gnome_runner = gc.require("tree_gnome_runner")
+local fight_arena_config = gc.require("fight_arena_config")
+local fight_arena_state = gc.require("fight_arena_state")
+local fight_arena_runner = gc.require("fight_arena_runner")
+local grand_tree_config = gc.require("grand_tree_config")
+local grand_tree_state = gc.require("grand_tree_state")
+local grand_tree_runner = gc.require("grand_tree_runner")
 
 local quest_labels = {
   witchs_house = witch_config.label,
   waterfall = waterfall_config.label,
   tree_gnome_village = tree_gnome_config.label,
+  fight_arena = fight_arena_config.label,
+  the_grand_tree = grand_tree_config.label,
 }
 local state_modules = {
   witchs_house = witch_state,
   waterfall = waterfall_state,
   tree_gnome_village = tree_gnome_state,
+  fight_arena = fight_arena_state,
+  the_grand_tree = grand_tree_state,
 }
 local waterfall_checkpoints = {
   accept = 1,
@@ -116,6 +126,8 @@ return {
         { value = "witchs_house", label = "Witch's House" },
         { value = "waterfall", label = "Waterfall Quest" },
         { value = "tree_gnome_village", label = "Tree Gnome Village" },
+        { value = "fight_arena", label = "Fight Arena" },
+        { value = "the_grand_tree", label = "The Grand Tree" },
       },
     },
     {
@@ -149,6 +161,12 @@ return {
     gc.activity("questing")
     if input.quest == "tree_gnome_village" then
       return tree_gnome_runner.run(input)
+    end
+    if input.quest == "fight_arena" then
+      return fight_arena_runner.run(input)
+    end
+    if input.quest == "the_grand_tree" then
+      return grand_tree_runner.run(input)
     end
     gc.await { event = "game.tick" }
 

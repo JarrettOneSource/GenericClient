@@ -118,6 +118,50 @@ public class GenericClientWalkerTest
 	}
 
 	@Test
+	public void emergencyPauseKeepsTheWalkAliveAndResumesInput() throws Exception
+	{
+		DeferredWalkInput input = new DeferredWalkInput();
+		GenericClientWalker walker = new GenericClientWalker(
+			input,
+			new FakeObstacleInput(),
+			GenericClientCollisionMap.loadBundled(),
+			message -> { });
+		try
+		{
+			WorldPoint start = new WorldPoint(3202, 3428, 0);
+			walker.publishGameTick(snapshot(0, start));
+			CompletableFuture<Map<String, Object>> completion = walker.walkTo(
+				new WorldPoint(3230, 3428, 0), 0, 60, context(false));
+			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+			while (input.calls == 0 && System.nanoTime() < deadline)
+			{
+				walker.publishGameTick(snapshot(1, start));
+				Thread.sleep(10L);
+			}
+			assertEquals(1, input.calls);
+
+			walker.pauseActiveInput("emergency_consumable");
+			assertEquals(1, input.cancellations);
+			input.completeFirstAsCancelled();
+			walker.publishGameTick(snapshot(2, start));
+			assertEquals(1, input.calls);
+			assertFalse(completion.isDone());
+
+			walker.resumeActiveInput("emergency_consumable");
+			for (long tick = 3; tick <= 6 && input.calls < 2; tick++)
+			{
+				walker.publishGameTick(snapshot(tick, start));
+			}
+			assertEquals(2, input.calls);
+			assertFalse(completion.isDone());
+		}
+		finally
+		{
+			walker.close();
+		}
+	}
+
+	@Test
 	public void doesNotReplanWhileAnAcceptedClickIsStillMovingOffRoute() throws Exception
 	{
 		FakeWalkInput input = new FakeWalkInput();
@@ -773,6 +817,41 @@ public class GenericClientWalkerTest
 		@Override
 		public void cancelWalkToTile()
 		{
+		}
+	}
+
+	private static final class DeferredWalkInput implements GenericClientWalker.WalkInput
+	{
+		private final List<CompletableFuture<GenericClientInteractionResult>> requests =
+			new ArrayList<>();
+		private int calls;
+		private int cancellations;
+
+		@Override
+		public CompletableFuture<GenericClientInteractionResult> walkToFarthest(
+			List<WorldPoint> candidates,
+			GenericClientActivityContext activityContext)
+		{
+			calls++;
+			CompletableFuture<GenericClientInteractionResult> request = new CompletableFuture<>();
+			requests.add(request);
+			return request;
+		}
+
+		@Override
+		public void cancelWalkToTile()
+		{
+			cancellations++;
+		}
+
+		private void completeFirstAsCancelled()
+		{
+			requests.get(0).complete(new GenericClientInteractionResult(
+				null,
+				"WALK_CLICK_FAILED reason=cancelled",
+				false,
+				Collections.emptyMap(),
+				Collections.emptyMap()));
 		}
 	}
 

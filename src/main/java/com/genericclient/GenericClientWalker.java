@@ -227,6 +227,12 @@ final class GenericClientWalker implements AutoCloseable
 				finish(walk, "unsupported_transition", "player_changed_plane", player, tick);
 				return;
 			}
+			if (walk.inputPaused)
+			{
+				walk.lastPlayer = player;
+				walk.lastMovedTick = tick;
+				return;
+			}
 			if (distance(player, walk.destination) <= walk.within)
 			{
 				if (walk.clickInFlight || walk.obstacleInFlight)
@@ -480,6 +486,10 @@ final class GenericClientWalker implements AutoCloseable
 					return;
 				}
 				walk.runInFlight = false;
+				if (walk.inputPaused)
+				{
+					return;
+				}
 				GenericClientSnapshot snapshot = latestSnapshot;
 				long tick = snapshot == null ? walk.startedAtTick : snapshot.getGameTick();
 				walk.pausedInteractionTicks += Math.max(0L, tick - walk.runStartedTick);
@@ -518,6 +528,54 @@ final class GenericClientWalker implements AutoCloseable
 		finish(walk, "cancelled", reason, reached, tick);
 	}
 
+	synchronized void pauseActiveInput(String reason)
+	{
+		ActiveWalk walk = active;
+		if (walk == null || walk.inputPaused)
+		{
+			return;
+		}
+		GenericClientSnapshot snapshot = latestSnapshot;
+		long tick = snapshot == null ? walk.startedAtTick : snapshot.getGameTick();
+		walk.inputPaused = true;
+		walk.inputPausedAtTick = tick;
+		if (walk.clickInFlight)
+		{
+			walk.clickInFlight = false;
+			gameInput.cancelWalkToTile();
+		}
+		if (walk.obstacleInFlight)
+		{
+			walk.obstacleInFlight = false;
+			obstacleInput.cancel();
+		}
+		if (walk.runInFlight)
+		{
+			walk.runInFlight = false;
+			runInput.cancel(reason);
+		}
+		reporter.accept("WALK_INPUT_PAUSED reason=" + reason);
+	}
+
+	synchronized void resumeActiveInput(String reason)
+	{
+		ActiveWalk walk = active;
+		if (walk == null || !walk.inputPaused)
+		{
+			return;
+		}
+		GenericClientSnapshot snapshot = latestSnapshot;
+		long tick = snapshot == null ? walk.inputPausedAtTick : snapshot.getGameTick();
+		walk.pausedInteractionTicks += Math.max(0L, tick - walk.inputPausedAtTick);
+		walk.inputPaused = false;
+		walk.lastPlayer = snapshot == null ? walk.lastPlayer : snapshot.getPlayerWorldPoint();
+		walk.lastMovedTick = tick;
+		walk.nextClickTick = tick + 1;
+		walk.clickTarget = null;
+		walk.clickTargetIndex = -1;
+		reporter.accept("WALK_INPUT_RESUMED reason=" + reason);
+	}
+
 	private void prepareObstacleDispatch(
 		ActiveWalk walk,
 		GenericClientSnapshot.RouteBlock obstacle,
@@ -552,6 +610,10 @@ final class GenericClientWalker implements AutoCloseable
 					return;
 				}
 				walk.obstacleInFlight = false;
+				if (walk.inputPaused)
+				{
+					return;
+				}
 				GenericClientSnapshot snapshot = latestSnapshot;
 				long tick = snapshot == null ? walk.startedAtTick : snapshot.getGameTick();
 				walk.pausedInteractionTicks += Math.max(0L, tick - walk.clickStartedTick);
@@ -591,6 +653,10 @@ final class GenericClientWalker implements AutoCloseable
 				}
 
 				walk.clickInFlight = false;
+				if (walk.inputPaused)
+				{
+					return;
+				}
 				GenericClientSnapshot snapshot = latestSnapshot;
 				long tick = snapshot == null ? walk.startedAtTick : snapshot.getGameTick();
 				walk.pausedInteractionTicks += Math.max(0L, tick - walk.clickStartedTick);
@@ -979,6 +1045,8 @@ final class GenericClientWalker implements AutoCloseable
 		private boolean clickInFlight;
 		private boolean obstacleInFlight;
 		private boolean runInFlight;
+		private boolean inputPaused;
+		private long inputPausedAtTick;
 		private boolean runToggleArmed = true;
 		private int planRevision;
 		private int plans;

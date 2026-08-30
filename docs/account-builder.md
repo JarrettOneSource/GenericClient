@@ -1,7 +1,7 @@
 # Account builder
 
 Status: active persistent goal. Historical baseline captured 2026-08-27; latest
-live reconciliation recorded after Waterfall completion on 2026-08-29.
+live reconciliation recorded after Fight Arena completion on 2026-08-30.
 
 ## Account goal
 
@@ -54,16 +54,14 @@ member-optimized implementation.
 
 ## Current live progress
 
-The 2026-08-29 GenericClient account snapshots verified:
+The 2026-08-30 GenericClient account snapshots verified:
 
-- Attack 30 / 13,842 XP, Strength 30 / 14,050 XP, Defence 1 / 0 XP;
-- Hitpoints 25 / 8,184 XP, Ranged 1 / 12 XP, Prayer 1 / 0 XP, Magic 16 / 3,080 XP;
-- Waterfall Quest, Witch's House, Ernest the Chicken, X Marks the Spot, and
-  Learning the Ropes complete;
-- Waterfall rewards received: one quest point, two diamonds, two gold bars,
-  and 40 mithril seeds;
-- the complete bank frame contained 14,182,577 coins; the 5,000,000 reserve
-  remained intact;
+- Attack 40 / 37,467 XP, Strength 30 / 14,050 XP, Defence 1 / 0 XP;
+- Hitpoints 28 / 10,980 XP, Ranged 1 / 12 XP, Prayer 1 / 0 XP, Magic 32 /
+  16,774 XP, Thieving 14 / 2,175 XP, and Agility 25 / 7,888 XP;
+- Fight Arena, Tree Gnome Village, Waterfall Quest, Witch's House, Ernest the
+  Chicken, X Marks the Spot, and Learning the Ropes complete;
+- known cash was 14,135,734 coins and the 5,000,000 reserve remained intact;
 - the pre-existing Old school bond sell offer remains active and untouched.
 
 ## Live Account Auditor receipt
@@ -223,13 +221,25 @@ A later exact-target run completed Magic 30 at 13,386 XP and Hitpoints 27 at
 returned a terminal target receipt rather than stopping on an approximate
 level observation.
 
-Tree Gnome Village is the next bounded quest milestone. Preparation bought only
-the six logs, 100 chaos runes, and 300 earth runes needed for its current slice,
-reusing the air staff, ring of dueling, and wines. Known bank cash after that
-preparation was 14,160,204 coins and the existing bond offer remained untouched.
-Quest Runner crossed the maze, handled a Count Check interruption, honored a
-21-minute AFK break through logout and launcher relogin, accepted the quest, and
-stopped at the verified `talk_montai_checkpoint` with quest varp 1.
+Tree Gnome Village completed through its modular Quest Runner, including maze
+navigation, Count Check interruption, logout/relogin break recovery, the orb
+sequence, and the Khazard Warlord safespot. Fight Arena then completed through
+the same root script. Its live run proved just-in-time restocking, a Castle Wars
+route, arena death re-entry, template-to-instance safespot mapping, Earth Bolt
+autocast against Bouncer, the post-fight Khazard cutscene, verified
+`Quick-escape`, and final hand-in. The exact rewards raised Attack from 36 to
+40 and Thieving from 1 to 14; combat raised Hitpoints to 28 and Magic to 32.
+
+The standalone AIO Agility script then reached level 25 at 7,888 XP. Its live
+proof survived a logout-length break, a Mime interruption, exact mid-course
+resume, and stopped after the threshold-crossing obstacle. The Mime event
+unlocked Lean and produced a registered standalone solver.
+
+The Grand Tree is now in progress at varp 40. Quest Runner opened the Grand
+Tree door, handled the low-combat quest warning, reached Hazelmere from Castle
+Wars through both Yanille gates and the island bridges, used emergency food
+under jungle-spider pressure, translated Hazelmere's report for King Narnode,
+and warned Glough. The next state-derived phase is returning to Narnode.
 
 Sources:
 
@@ -269,8 +279,6 @@ Reference surfaces used for this envelope:
 
 ## Next evidence gate
 
-Resume the modular Tree Gnome Village runner from Commander Montai. Keep each
-quest phase state-derived and resumable, and stop at the next stable checkpoint
-unless a complete run has already been selected. Continue enforcing exact
-Attack, Defence, and Prayer caps, just-in-time purchasing, and the
-5,000,000-coin reserve.
+Continue The Grand Tree from varp 40. Restock food only when its next live phase
+requires it, before the eventual combat section. Continue enforcing exact
+Attack, Defence, and Prayer caps and the 5,000,000-coin reserve.

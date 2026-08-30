@@ -12,6 +12,7 @@ $ErrorActionPreference = "Stop"
 $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
 $lastLine = ""
 $observedRun = $false
+$minimumRunId = 0
 
 function Invoke-GenericClientRpc {
     param(
@@ -43,6 +44,10 @@ if ($StartScript) {
     if ($ScriptId -eq "") {
         throw "ScriptId is required when StartScript is set."
     }
+    $beforeStart = Invoke-GenericClientStatus
+    if ($RunId -eq 0) {
+        $minimumRunId = [int]$beforeStart.lua.run_id + 1
+    }
     $inputs = $InputsJson | ConvertFrom-Json
     $started = Invoke-GenericClientRpc "scripts.run" ([pscustomobject]@{
         id = $ScriptId
@@ -71,8 +76,15 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
             [long][Math]::Ceiling($breakRemainingMillis / 60000.0)
         }
 
-        if (($ScriptId -eq "" -or $activeScript -eq $ScriptId) -and
-            ($RunId -eq 0 -or $activeRunId -eq $RunId)) {
+        $runMatches = if ($RunId -ne 0) {
+            $activeRunId -eq $RunId
+        } elseif ($minimumRunId -ne 0) {
+            $activeRunId -ge $minimumRunId
+        } else {
+            $true
+        }
+
+        if (($ScriptId -eq "" -or $activeScript -eq $ScriptId) -and $runMatches) {
             $observedRun = $true
         }
 
@@ -126,7 +138,7 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
 
         $requestedRunStillVisible =
             ($ScriptId -eq "" -or $activeScript -eq $ScriptId) -and
-            ($RunId -eq 0 -or $activeRunId -eq $RunId)
+            $runMatches
         $requestedRunDisappeared = $observedRun -and
             $scriptStatus -eq "IDLE" -and $activeScript -eq "none"
         if (($observedRun -and $requestedRunStillVisible -and

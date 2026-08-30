@@ -13,6 +13,7 @@ local checkpoint_rank = {
   tracker_two = 2,
   tracker_three = 2,
   fire_ballista = 2,
+  report_ballista = 3,
   enter_orb_tower = 3,
   search_orb_chest = 3,
   return_first_orb = 4,
@@ -24,6 +25,15 @@ local checkpoint_rank = {
 }
 
 local break_bypass = {
+  fight_warlord = true,
+  take_orbs = true,
+}
+
+local escape_on_failure = {
+  fight_warlord = true,
+}
+
+local safety_required = {
   enter_orb_tower = true,
   search_orb_chest = true,
   fight_warlord = true,
@@ -75,7 +85,7 @@ local function configure_safety(state)
     action = {
       type = "safety.configure",
       minimum_hitpoints = threshold,
-      consumables = { { id = config.items.wine, action = "Drink", heal_amount = 11 } },
+      consumables = { { id = config.items.food, action = "Eat", heal_amount = 12 } },
       continue_after_consumable = true,
       allow_overheal = false,
     },
@@ -83,6 +93,18 @@ local function configure_safety(state)
   }
   if safety.status ~= "complete" then
     return nil, { status = "safety_guard_failed", receipt = safety }
+  end
+  return true
+end
+
+local function food_count(state)
+  return shared.quantity(state.inventory, config.items.food)
+end
+
+local function clear_safety()
+  local cleared = gc.await { action = { type = "safety.clear" }, breaks = false }
+  if cleared.status ~= "complete" then
+    return nil, { status = "safety_clear_failed", receipt = cleared }
   end
   return true
 end
@@ -114,12 +136,23 @@ local function run(input)
     return terminal(initial, initial_phase)
   end
 
-  local configured, configure_error = configure_safety(initial)
-  if not configured then return configure_error end
   if initial_phase == "loadout_required" or initial_phase == "combat_loadout_required" then
     local prepared, prepare_error = prepare(initial_phase, input.restock)
     if not prepared then return prepare_error end
+    initial = read()
+    initial_phase = resolve(initial)
+    initial_rank = checkpoint_rank[initial_phase] or -1
   end
+
+  local configured, configure_error
+  if food_count(initial) > 0 then
+    configured, configure_error = configure_safety(initial)
+  elseif safety_required[resolve(initial)] then
+    return { status = "combat_food_missing", phase = resolve(initial) }
+  else
+    configured, configure_error = clear_safety()
+  end
+  if not configured then return configure_error end
 
   while true do
     local state = read()
@@ -139,10 +172,17 @@ local function run(input)
     if phase == "loadout_required" or phase == "combat_loadout_required" then
       local prepared, prepare_error = prepare(phase, input.restock)
       if not prepared then return prepare_error end
+      local prepared_state = read()
+      configured, configure_error = configure_safety(prepared_state)
+      if not configured then return configure_error end
     elseif phase == "strict_stats_block" or phase == "bank_unknown" or
       phase == "unknown_stage" then
       return terminal(state, phase)
     else
+      if food_count(state) == 0 and not safety_required[phase] then
+        local cleared, clear_error = clear_safety()
+        if not cleared then return clear_error end
+      end
       if gc.next_action() == "stop_safely" then
         return { status = "stopped", quest = config.id, phase = phase }
       end
@@ -159,7 +199,7 @@ local function run(input)
           phase = phase,
           receipt = receipt,
         }
-        if break_bypass[phase] then failure.escape = quest.escape_hostile_area() end
+        if escape_on_failure[phase] then failure.escape = quest.escape_hostile_area() end
         return failure
       end
       local next_state, next_phase = wait_for_phase_change(phase, 60)
@@ -170,7 +210,7 @@ local function run(input)
           phase = next_phase,
           receipt = receipt,
         }
-        if break_bypass[phase] then failure.escape = quest.escape_hostile_area() end
+        if escape_on_failure[phase] then failure.escape = quest.escape_hostile_area() end
         return failure
       end
     end

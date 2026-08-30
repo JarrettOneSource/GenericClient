@@ -65,6 +65,8 @@ manifest** after editing it manually.
 An optional `random_events` array registers a standalone script as the solver
 for those random-event NPC IDs. GenericClient detects owned events internally,
 interrupts normal automation, and never requires RuneLite's Random Events plugin.
+The bundled Mime solver remembers the last performed animation before each
+answer panel and clicks the matching emote until the reward is verified.
 The lifecycle and solver template are in
 [`docs/random-events.md`](docs/random-events.md).
 
@@ -105,10 +107,15 @@ method uses the strongest available Strike spell from the Port Sarim jail corrid
 against targetable inmates. It selects offensive staff autocast when the chosen
 spell supports it and retains verified `combat.cast` as the manual fallback. The core walker opens
 the public entrance when required; the locked cell doors are not route targets.
-`quest-runner.lua` reduces live quest state into a
-resumable phase and currently implements the strict Witch's House opening slice;
-it stops explicitly at the unresolved garden-cover checkpoint instead of
-guessing a stealth route.
+`aio-agility.lua` trains to an exact target through position-derived course
+states. Its first member-first method is the basic Gnome Stronghold course,
+including segmented travel, Femi's entrance dialogue, mid-course resume,
+level-up handling, and a compact XP/hour/ETA overlay.
+`quest-runner.lua` reduces live quest state into resumable phases. Witch's
+House, Waterfall Quest, Tree Gnome Village, and Fight Arena are isolated in
+their own folders and live-proven through normalized completion. The Grand Tree
+has its own folder and is live-proven through Hazelmere, the translated report,
+and Glough at quest varp 40.
 
 The current scripting interface intentionally contains only:
 
@@ -123,14 +130,15 @@ gc.next_action()
 gc.require(name) -- only for modules declared by this script
 ```
 
-Implemented reads are `runtime`, `player`, `random_event`, `npcs`, `messages`, `objects`, `ground_items`,
-`dialogue`, `vars`, `behavior`, `skills`, `inventory`, `equipment`, `bank`,
+Implemented reads are `runtime`, `player`, `random_event`, `npcs`, `messages`,
+`objects`, `ground_items`, `dialogue`, `vars`, `scene`, `instance`, `widgets`,
+`behavior`, `skills`, `inventory`, `equipment`, `bank`,
 `quests`, `grand_exchange`, `cash`, and the
 combined `account` frame. `combat` reports the current attack-style index and
 auto-retaliate state. A bank read explicitly reports `unknown`, `open`, or
 `cached`; it never treats an unseen bank as empty. NPC rows distinguish scene
-presence, canvas clickability, and line of sight. `messages` exposes only a
-bounded history of system feedback, not player chat. Implemented waits are game
+presence, canvas clickability, and line of sight. `messages` exposes a bounded
+history of client messages, including public chat. Implemented waits are game
 ticks, tick counts, `walk.random`, `walk.to`, and `mouse.offscreen`. New semantic
 actions are added when an automation actually needs them. Object, inventory,
 equipment, item-on-entity, dialogue, bank-loadout, GE-buy, UI-close, and combat-cast

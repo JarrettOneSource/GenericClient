@@ -1156,6 +1156,12 @@ final class GenericClientLuaHost implements AutoCloseable
 			: run.snapshot(clock.getAsLong());
 	}
 
+	String getActivity()
+	{
+		GenericClientLuaScript currentSession = session;
+		return currentSession == null ? "idle" : currentSession.getActivity();
+	}
+
 	RunState getRunState()
 	{
 		ActiveRun run = activeRun;

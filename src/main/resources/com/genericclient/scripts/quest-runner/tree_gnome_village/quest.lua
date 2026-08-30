@@ -81,6 +81,28 @@ local function fire_ballista()
   }
 end
 
+local function report_ballista()
+  local talked = talk_montai({}, 5)
+  if talked.status ~= "complete" then return talked end
+  local reached = interact.walk(config.points.crumbled_wall, 8, true, 900)
+  if reached.status ~= "arrived" then return reached end
+  gc.await { event = "game.tick" }
+  local wall = interact.object(config.objects.crumbled_wall, "Climb-over", 32)
+  if not wall then
+    return {
+      status = "rejected",
+      result = "crumbled_wall_not_observed_after_report",
+      nearby = gc.read("objects", { within = 20, limit = 40 }),
+    }
+  end
+  return {
+    status = "complete",
+    result = "ballista_reported",
+    dialogue = talked,
+    wall = wall,
+  }
+end
+
 local function return_first_orb()
   local entered = navigation.return_to_village()
   if entered.status ~= "complete" then return entered end
@@ -117,6 +139,7 @@ local function execute(phase)
       config.varbits.tracker_x)
   end
   if phase == "fire_ballista" then return fire_ballista() end
+  if phase == "report_ballista" then return report_ballista() end
   if phase == "enter_orb_tower" then return navigation.enter_orb_tower() end
   if phase == "search_orb_chest" then return navigation.search_orb_chest() end
   if phase == "return_first_orb" then return return_first_orb() end

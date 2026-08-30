@@ -138,6 +138,7 @@ end
 
 return {
   has_necklace = function() return has_item(games_necklace_ids) end,
+  has_dueling_ring = function() return has_item(dueling_ring_ids) end,
   teleport_to_burthorpe = teleport_to_burthorpe,
   teleport_to_barbarian_outpost = teleport_to_barbarian_outpost,
   teleport_to_castle_wars = teleport_to_castle_wars,

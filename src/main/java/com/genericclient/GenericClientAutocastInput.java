@@ -33,6 +33,7 @@ final class GenericClientAutocastInput
 	private static final long UI_SETTLE_MILLIS = 250L;
 	private static final int UI_POLL_ATTEMPTS = 20;
 	private static final long UI_POLL_MILLIS = 50L;
+	private static final int COMBAT_TAB_CLICK_ATTEMPTS = 3;
 
 	private final Client client;
 	private final ClientThread clientThread;
@@ -124,12 +125,46 @@ final class GenericClientAutocastInput
 		GenericClientActivityContext activityContext,
 		List<Map<String, Object>> steps)
 	{
+		return ensureCombatTab(activityContext, steps, COMBAT_TAB_CLICK_ATTEMPTS);
+	}
+
+	private CompletableFuture<Boolean> ensureCombatTab(
+		GenericClientActivityContext activityContext,
+		List<Map<String, Object>> steps,
+		int clicksRemaining)
+	{
 		return clientRead(() -> visibleWidget(InterfaceID.CombatInterface.AUTOCAST_NORMAL) != null)
-			.thenCompose(visible -> visible
-				? CompletableFuture.completedFuture(true)
-				: click(this::resolveCombatTab, activityContext, steps).thenCompose(clicked -> clicked
-					? waitFor(() -> visibleWidget(InterfaceID.CombatInterface.AUTOCAST_NORMAL) != null)
-					: CompletableFuture.completedFuture(false)));
+			.thenCompose(visible ->
+			{
+				if (visible)
+				{
+					return CompletableFuture.completedFuture(true);
+				}
+				if (clicksRemaining <= 0)
+				{
+					return CompletableFuture.completedFuture(false);
+				}
+				return click(this::resolveCombatTab, activityContext, steps).thenCompose(clicked ->
+				{
+					if (!clicked)
+					{
+						return ensureCombatTab(activityContext, steps, clicksRemaining - 1);
+					}
+					return waitFor(
+						() -> visibleWidget(InterfaceID.CombatInterface.AUTOCAST_NORMAL) != null)
+						.thenCompose(opened ->
+						{
+							if (opened)
+							{
+								return CompletableFuture.completedFuture(true);
+							}
+							reporter.accept("AUTOCAST_COMBAT_TAB_RETRY clicksRemaining=" +
+								(clicksRemaining - 1));
+							return ensureCombatTab(
+								activityContext, steps, clicksRemaining - 1);
+						});
+				});
+			});
 	}
 
 	private CompletableFuture<Boolean> click(

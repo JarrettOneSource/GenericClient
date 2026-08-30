@@ -238,6 +238,20 @@ exact oriented edge, then verifies the edge or object changed before resuming.
 Explicit locked-door feedback or an unchanged obstacle returns an `unreachable`
 walk receipt.
 
+`instance` maps a canonical template tile into the current dynamic scene. A
+quest can keep one authored safespot while the server assigns a different live
+base and chunk rotation on every entry:
+
+```lua
+return gc.read("instance", {
+  template = { x = 2598, y = 3162, plane = 0 },
+})
+```
+
+The result reports whether the scene is instanced and returns every matching
+live WorldPoint. Fight Arena uses this to map the Bouncer safespot and exit door
+after re-entry.
+
 The same account frame exposed by `account_snapshot` is available inside Lua:
 
 ```lua

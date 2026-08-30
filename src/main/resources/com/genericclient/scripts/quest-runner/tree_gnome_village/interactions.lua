@@ -45,6 +45,154 @@ local function carried(id)
   return quantity(gc.read("inventory"), id) + quantity(gc.read("equipment"), id)
 end
 
+local function npc(id, within)
+  return gc.read("npcs", {
+    id = id,
+    within = within or 20,
+    limit = 5,
+  })[1]
+end
+
+local function has_action(object, wanted)
+  for _, action in ipairs(object.actions or {}) do
+    if action == wanted then return true end
+  end
+  return false
+end
+
+local function door_entry(target_world)
+  local closest = nil
+  local closest_distance = 99999
+  for _, object in ipairs(gc.read("objects", { within = 20, limit = 80 })) do
+    if object.name == "Door" and
+      (has_action(object, "Open") or has_action(object, "Close")) then
+      local separation = distance(object.world, target_world)
+      if separation < closest_distance then
+        closest = object
+        closest_distance = separation
+      end
+    end
+  end
+  if not closest then return nil, nil end
+
+  local dx = target_world.x - closest.world.x
+  local dy = target_world.y - closest.world.y
+  local entry = {
+    x = closest.world.x,
+    y = closest.world.y,
+    plane = closest.world.plane,
+  }
+  if math.abs(dx) > math.abs(dy) then
+    entry.x = entry.x + (dx > 0 and 1 or -1)
+  else
+    entry.y = entry.y + (dy > 0 and 1 or -1)
+  end
+  return closest, entry
+end
+
+local function cross_door(target_world, breaks)
+  local door, entry = door_entry(target_world)
+  if not door then return nil end
+
+  local opened = nil
+  if has_action(door, "Open") then
+    local near = walk(door.world, 1, breaks, 120)
+    if near.status ~= "arrived" then
+      return { status = "door_approach_failed", door = door, receipt = near }
+    end
+    opened = gc.await {
+      action = {
+        type = "object.interact",
+        id = door.id,
+        action = "Open",
+        world = door.world,
+        within = 8,
+      },
+      breaks = breaks ~= false,
+      timeout = { game_ticks = 40 },
+    }
+    if opened.status ~= "dispatched" then
+      return { status = "door_open_failed", door = door, receipt = opened }
+    end
+    gc.await { event = "game.tick" }
+  end
+
+  local crossed = walk(entry, 0, breaks, 180)
+  if crossed.status ~= "arrived" then
+    return {
+      status = "door_crossing_failed",
+      door = door,
+      entry = entry,
+      opened = opened,
+      receipt = crossed,
+    }
+  end
+  return {
+    status = "complete",
+    door = door,
+    entry = entry,
+    opened = opened,
+    crossed = crossed,
+  }
+end
+
+local function reach_npc(id, fallback, breaks)
+  local target = npc(id, 20)
+  if not target then
+    local near = approach(fallback, 3, breaks)
+    if near.status ~= "arrived" then return nil, near end
+    gc.await { event = "game.tick" }
+    target = npc(id, 20)
+  end
+  if not target then
+    return nil, {
+      status = "rejected",
+      result = "npc_not_observed_after_approach",
+      id = id,
+      fallback = fallback,
+      nearby = gc.read("npcs", { within = 20, limit = 30 }),
+    }
+  end
+
+  if target.distance > 2 or not target.line_of_sight then
+    local reached = nil
+    local door_crossing = nil
+    if not target.line_of_sight then
+      door_crossing = cross_door(target.world, breaks)
+    end
+    if door_crossing then
+      if door_crossing.status ~= "complete" then
+        return nil, {
+          status = "npc_door_crossing_failed",
+          target = target,
+          receipt = door_crossing,
+        }
+      end
+      reached = door_crossing.crossed
+    else
+      reached = walk(target.world, target.line_of_sight and 2 or 0, breaks, 180)
+    end
+    if reached.status ~= "arrived" then
+      return nil, {
+        status = "npc_approach_failed",
+        target = target,
+        door_crossing = door_crossing,
+        receipt = reached,
+      }
+    end
+    gc.await { event = "game.tick" }
+    target = npc(id, 20)
+    if not target then
+      return nil, {
+        status = "rejected",
+        result = "npc_moved_after_approach",
+        id = id,
+      }
+    end
+  end
+  return target
+end
+
 local function vars()
   return gc.read("vars", {
     varps = { 111 },
@@ -85,7 +233,19 @@ local function choose(dialogue, choices, breaks)
   }
 end
 
-local function finish_dialogue(predicate, choices, breaks, ticks)
+local function reachability_failure(since_tick)
+  if not since_tick then return nil end
+  for _, message in ipairs(gc.read("messages", { since_tick = since_tick, limit = 20 })) do
+    local text = string.lower(message.text or "")
+    if string.find(text, "can't reach", 1, true) or
+      string.find(text, "can't get there", 1, true) then
+      return message
+    end
+  end
+  return nil
+end
+
+local function finish_dialogue(predicate, choices, breaks, ticks, started_tick)
   local progressed = false
   local closed_ticks = 0
   local receipts = {}
@@ -110,6 +270,15 @@ local function finish_dialogue(predicate, choices, breaks, ticks)
     elseif progressed then
       closed_ticks = closed_ticks + 1
       if closed_ticks >= 2 then return receipts end
+    else
+      local failure = reachability_failure(started_tick)
+      if failure then
+        return nil, {
+          status = "rejected",
+          result = "interaction_unreachable",
+          message = failure,
+        }
+      end
     end
   end
   return nil, { status = "timed_out", result = "dialogue_progress_timeout", varp = varp() }
@@ -117,15 +286,17 @@ end
 
 local function talk(id, world, predicate, choices, breaks)
   local allow_breaks = breaks ~= false
-  local near = approach(world, 3, allow_breaks)
-  if near.status ~= "arrived" then return near end
+  local target, approach_failure = reach_npc(id, world, allow_breaks)
+  if not target then return approach_failure end
+  local started_tick = gc.read("runtime").game_tick
   local clicked = gc.await {
     action = { type = "npc.interact", id = id, action = "Talk-to", within = 12 },
     breaks = allow_breaks,
     timeout = { game_ticks = 40 },
   }
   if clicked.status ~= "dispatched" then return clicked end
-  local dialogue, failure = finish_dialogue(predicate, choices, allow_breaks, 100)
+  local dialogue, failure = finish_dialogue(
+    predicate, choices, allow_breaks, 100, started_tick)
   if not dialogue then return failure end
   return {
     status = "complete",
@@ -185,6 +356,8 @@ return {
   approach = approach,
   quantity = quantity,
   carried = carried,
+  npc = npc,
+  cross_door = cross_door,
   varp = varp,
   varbit = varbit,
   finish_dialogue = finish_dialogue,

@@ -15,6 +15,7 @@ import party.iroiro.luajava.lua54.Lua54;
 final class GenericClientLuaScript implements AutoCloseable
 {
 	private static final long RESUME_BUDGET_NANOS = 20_000_000L;
+	private static final long SOURCE_LOAD_BUDGET_NANOS = 100_000_000L;
 	private static final int HOOK_INSTRUCTION_INTERVAL = 1_000;
 	private static final int DEFAULT_RANDOM_ACTION_TIMEOUT_TICKS = 8;
 	private static final int DEFAULT_NPC_ACTION_TIMEOUT_TICKS = 20;
@@ -269,7 +270,7 @@ final class GenericClientLuaScript implements AutoCloseable
 
 		try
 		{
-			beginBudget();
+			beginBudget(SOURCE_LOAD_BUDGET_NANOS);
 			lua.load(source);
 			lua.pCall(0, 1);
 			checkBudget();
@@ -952,8 +953,13 @@ final class GenericClientLuaScript implements AutoCloseable
 
 	private void beginBudget()
 	{
+		beginBudget(RESUME_BUDGET_NANOS);
+	}
+
+	private void beginBudget(long budgetNanos)
+	{
 		budgetExceeded = false;
-		deadlineNanos = System.nanoTime() + RESUME_BUDGET_NANOS;
+		deadlineNanos = System.nanoTime() + budgetNanos;
 	}
 
 	private void checkBudget()

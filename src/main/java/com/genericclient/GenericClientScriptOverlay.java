@@ -24,10 +24,14 @@ final class GenericClientScriptOverlay extends Overlay
 	private static final Font BODY = new Font(Font.SANS_SERIF, Font.PLAIN, 10);
 
 	private final Supplier<GenericClientActiveScript> scriptSupplier;
+	private final Supplier<String> activitySupplier;
 
-	GenericClientScriptOverlay(Supplier<GenericClientActiveScript> scriptSupplier)
+	GenericClientScriptOverlay(
+		Supplier<GenericClientActiveScript> scriptSupplier,
+		Supplier<String> activitySupplier)
 	{
 		this.scriptSupplier = scriptSupplier;
+		this.activitySupplier = activitySupplier;
 		setPosition(OverlayPosition.TOP_LEFT);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
 		setPriority(PRIORITY_HIGH);
@@ -37,17 +41,18 @@ final class GenericClientScriptOverlay extends Overlay
 	public Dimension render(Graphics2D graphics)
 	{
 		GenericClientActiveScript script = scriptSupplier.get();
-		if (script == null || !script.isRunning())
-		{
-			return null;
-		}
-
-		String title = compact(script.getName(), 24);
-		String runtime = formatRuntime(script.getRuntimeMillis());
-		List<GenericClientOverlayRow> rows = script.getOverlayRows();
+		boolean running = script != null && script.isRunning();
+		String title = running ? compact(script.getName(), 24) : "GenericClient";
+		String activity = displayActivity(activitySupplier.get());
+		String meta = running
+			? activity + " · " + formatRuntime(script.getRuntimeMillis())
+			: activity;
+		List<GenericClientOverlayRow> rows = running
+			? script.getOverlayRows()
+			: java.util.Collections.emptyList();
 		FontMetrics titleMetrics = graphics.getFontMetrics(TITLE);
 		FontMetrics bodyMetrics = graphics.getFontMetrics(BODY);
-		int width = titleMetrics.stringWidth(title) + bodyMetrics.stringWidth(runtime) + 44;
+		int width = titleMetrics.stringWidth(title) + bodyMetrics.stringWidth(meta) + 44;
 		for (GenericClientOverlayRow row : rows)
 		{
 			width = Math.max(width,
@@ -72,7 +77,7 @@ final class GenericClientScriptOverlay extends Overlay
 			copy.drawString(title, 21, 17);
 			copy.setFont(BODY);
 			copy.setColor(MUTED);
-			copy.drawString(runtime, width - bodyMetrics.stringWidth(runtime) - 9, 17);
+			copy.drawString(meta, width - bodyMetrics.stringWidth(meta) - 9, 17);
 
 			int baseline = 33;
 			for (GenericClientOverlayRow row : rows)
@@ -112,5 +117,11 @@ final class GenericClientScriptOverlay extends Overlay
 			return "Script";
 		}
 		return value.length() <= maximum ? value : value.substring(0, maximum - 1) + "…";
+	}
+
+	private static String displayActivity(String activity)
+	{
+		String value = activity == null || activity.trim().isEmpty() ? "idle" : activity.trim();
+		return Character.toUpperCase(value.charAt(0)) + value.substring(1);
 	}
 }

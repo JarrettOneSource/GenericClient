@@ -33,6 +33,8 @@ final class GenericClientNpcInput
 	private static final int CAMERA_SETTLED_UNITS = 64;
 	private static final long CAMERA_POLL_MILLIS = 40L;
 	private static final long CAMERA_SETTLE_TIMEOUT_MILLIS = 3_000L;
+	private static final long SCENE_RETRY_MILLIS = 600L;
+	private static final int MAX_SCENE_RETRIES = 2;
 
 	private final Client client;
 	private final ClientThread clientThread;
@@ -133,7 +135,7 @@ final class GenericClientNpcInput
 			name, id, action, within, requestedSelection);
 		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
 			retryWithCamera(
-				resolver, receipt, name, id, within, activityContext, 0));
+				resolver, receipt, name, id, within, activityContext, 0, 0));
 	}
 
 	private CompletableFuture<Map<String, Object>> retryWithCamera(
@@ -143,10 +145,20 @@ final class GenericClientNpcInput
 		Integer id,
 		int within,
 		GenericClientActivityContext activityContext,
-		int cameraAttempt)
+		int cameraAttempt,
+		int sceneAttempt)
 	{
-		if (!isCameraRetryable(receipt.get("result")) ||
-			cameraAttempt >= CAMERA_YAW_OFFSETS.length)
+		Object result = receipt.get("result");
+		if (!isCameraRetryable(result))
+		{
+			if (isSceneRetryable(result) && sceneAttempt < MAX_SCENE_RETRIES)
+			{
+				return retryAfterSceneSettles(
+					resolver, receipt, name, id, within, activityContext, sceneAttempt);
+			}
+			return CompletableFuture.completedFuture(receipt);
+		}
+		if (cameraAttempt >= CAMERA_YAW_OFFSETS.length)
 		{
 			return CompletableFuture.completedFuture(receipt);
 		}
@@ -154,18 +166,63 @@ final class GenericClientNpcInput
 		{
 			if (!faced)
 			{
+				if (sceneAttempt < MAX_SCENE_RETRIES)
+				{
+					return retryAfterSceneSettles(
+						resolver, receipt, name, id, within, activityContext, sceneAttempt);
+				}
 				return CompletableFuture.completedFuture(receipt);
 			}
 			return menuInput.interact(resolver, activityContext)
 				.thenCompose(next -> retryWithCamera(
-					resolver, next, name, id, within, activityContext, cameraAttempt + 1));
+					resolver, next, name, id, within, activityContext,
+					cameraAttempt + 1, sceneAttempt));
 		});
+	}
+
+	private CompletableFuture<Map<String, Object>> retryAfterSceneSettles(
+		GenericClientMenuInput.TargetResolver resolver,
+		Map<String, Object> previousReceipt,
+		String name,
+		Integer id,
+		int within,
+		GenericClientActivityContext activityContext,
+		int sceneAttempt)
+	{
+		CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
+		int nextAttempt = sceneAttempt + 1;
+		reporter.accept("NPC_SCENE_RETRY_SCHEDULED attempt=" + nextAttempt +
+			" result=" + previousReceipt.get("result"));
+		executor.schedule(() ->
+			menuInput.interact(resolver, activityContext)
+				.thenCompose(next -> retryWithCamera(
+					resolver, next, name, id, within, activityContext, 0, nextAttempt))
+				.whenComplete((receipt, error) ->
+				{
+					if (error == null)
+					{
+						result.complete(receipt);
+					}
+					else
+					{
+						result.completeExceptionally(error);
+					}
+				}),
+			SCENE_RETRY_MILLIS,
+			TimeUnit.MILLISECONDS);
+		return result;
 	}
 
 	static boolean isCameraRetryable(Object result)
 	{
 		return "npc_not_visible".equals(result) ||
 			"hover_has_no_matching_action".equals(result);
+	}
+
+	static boolean isSceneRetryable(Object result)
+	{
+		return "matching_npc_not_found".equals(result) ||
+			"client_not_logged_in".equals(result);
 	}
 
 	private CompletableFuture<Boolean> faceNpc(

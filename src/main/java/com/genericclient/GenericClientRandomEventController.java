@@ -59,6 +59,7 @@ final class GenericClientRandomEventController
 
 	private final SolverLookup solverLookup;
 	private final Runtime runtime;
+	private final TalkAction talkAction;
 	private final Consumer<String> alert;
 	private final Consumer<String> reporter;
 	private final Clock clock;
@@ -72,7 +73,7 @@ final class GenericClientRandomEventController
 		Consumer<String> alert,
 		Consumer<String> reporter)
 	{
-		this(solverLookup, runtime, alert, reporter, Clock.systemUTC());
+		this(solverLookup, runtime, null, alert, reporter, Clock.systemUTC());
 	}
 
 	GenericClientRandomEventController(
@@ -82,8 +83,30 @@ final class GenericClientRandomEventController
 		Consumer<String> reporter,
 		Clock clock)
 	{
+		this(solverLookup, runtime, null, alert, reporter, clock);
+	}
+
+	GenericClientRandomEventController(
+		SolverLookup solverLookup,
+		Runtime runtime,
+		TalkAction talkAction,
+		Consumer<String> alert,
+		Consumer<String> reporter)
+	{
+		this(solverLookup, runtime, talkAction, alert, reporter, Clock.systemUTC());
+	}
+
+	GenericClientRandomEventController(
+		SolverLookup solverLookup,
+		Runtime runtime,
+		TalkAction talkAction,
+		Consumer<String> alert,
+		Consumer<String> reporter,
+		Clock clock)
+	{
 		this.solverLookup = solverLookup;
 		this.runtime = runtime;
+		this.talkAction = talkAction;
 		this.alert = alert;
 		this.reporter = reporter;
 		this.clock = clock;
@@ -212,6 +235,7 @@ final class GenericClientRandomEventController
 
 	private void interruptionFinished(String eventKey, String result, Throwable error)
 	{
+		Integer npcIdToTalk = null;
 		synchronized (this)
 		{
 			if (!matchesActive(eventKey))
@@ -230,6 +254,15 @@ final class GenericClientRandomEventController
 			{
 				current.state = "attention_required";
 				current.solverStatus = "unregistered";
+				if (talkAction == null)
+				{
+					current.autoTalkStatus = "unavailable";
+				}
+				else
+				{
+					current.autoTalkStatus = "starting";
+					npcIdToTalk = current.npcId;
+				}
 			}
 			else if ("solver_starting".equals(current.state))
 			{
@@ -239,6 +272,57 @@ final class GenericClientRandomEventController
 					" script=" + current.solverScript + " result=" + result);
 			}
 			publishCurrent();
+		}
+		if (npcIdToTalk != null)
+		{
+			startAutoTalk(eventKey, npcIdToTalk);
+		}
+	}
+
+	private void startAutoTalk(String eventKey, int npcId)
+	{
+		reporter.accept("RANDOM_EVENT_AUTO_TALK_START event=" + eventKey + " npc_id=" + npcId);
+		try
+		{
+			talkAction.talk(npcId).whenComplete((receipt, error) ->
+				autoTalkFinished(eventKey, receipt, error));
+		}
+		catch (RuntimeException exception)
+		{
+			autoTalkFinished(eventKey, null, exception);
+		}
+	}
+
+	private void autoTalkFinished(
+		String eventKey,
+		Map<String, Object> receipt,
+		Throwable error)
+	{
+		synchronized (this)
+		{
+			if (!matchesActive(eventKey))
+			{
+				return;
+			}
+			if (error != null)
+			{
+				current.autoTalkStatus = "failed";
+				current.autoTalkResult = rootMessage(error);
+			}
+			else
+			{
+				Object status = receipt == null ? null : receipt.get("status");
+				Object result = receipt == null ? null : receipt.get("result");
+				current.autoTalkStatus = "dispatched".equals(status)
+					? "dispatched"
+					: "rejected";
+				Object detail = result == null ? status : result;
+				current.autoTalkResult = detail == null ? "no_receipt" : String.valueOf(detail);
+			}
+			publishCurrent();
+			reporter.accept("RANDOM_EVENT_AUTO_TALK_FINISHED event=" + eventKey +
+				" status=" + current.autoTalkStatus +
+				" result=" + current.autoTalkResult);
 		}
 	}
 
@@ -378,6 +462,12 @@ final class GenericClientRandomEventController
 		String find(int npcId);
 	}
 
+	@FunctionalInterface
+	interface TalkAction
+	{
+		CompletableFuture<Map<String, Object>> talk(int npcId);
+	}
+
 	interface Runtime
 	{
 		CompletableFuture<String> interrupt(String eventKey, String solverScript);
@@ -403,6 +493,8 @@ final class GenericClientRandomEventController
 		private long despawnedTick = -1L;
 		private String state;
 		private String solverStatus;
+		private String autoTalkStatus = "not_needed";
+		private String autoTalkResult;
 		private String lastError;
 		private String resolution;
 		private Instant completedAt;
@@ -479,6 +571,8 @@ final class GenericClientRandomEventController
 			value.put("despawned_tick", despawnedTick < 0L ? null : despawnedTick);
 			value.put("solver_script", solverScript);
 			value.put("solver_status", solverStatus);
+			value.put("auto_talk_status", autoTalkStatus);
+			value.put("auto_talk_result", autoTalkResult);
 			value.put("last_error", lastError);
 			value.put("resolution", resolution);
 			value.put("completed_at", completedAt == null ? null : completedAt.toString());

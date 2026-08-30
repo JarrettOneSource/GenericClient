@@ -26,6 +26,15 @@ local function orbs_on_ground()
   }) > 0
 end
 
+local function crumbled_wall_observed()
+  return #gc.read("objects", {
+    id = config.objects.crumbled_wall,
+    action = "Climb-over",
+    within = 32,
+    limit = 3,
+  }) > 0
+end
+
 local function resolve(state)
   if state.quests.tree_gnome_village.state == "finished" then return "complete" end
   if state.skills.magic.level < 29 or not state.player or state.player.max_hitpoints < 20 then
@@ -58,7 +67,10 @@ local function resolve(state)
   if state.varp == 5 then
     if carried(state, config.items.first_orb) > 0 then return "return_first_orb" end
     if in_zone(world, config.zones.tower_upstairs) then return "search_orb_chest" end
-    return "enter_orb_tower"
+    if in_zone(world, config.zones.tower_ground) or crumbled_wall_observed() then
+      return "enter_orb_tower"
+    end
+    return "report_ballista"
   end
   if state.varp == 6 then return "return_first_orb" end
   if state.varp == 7 then

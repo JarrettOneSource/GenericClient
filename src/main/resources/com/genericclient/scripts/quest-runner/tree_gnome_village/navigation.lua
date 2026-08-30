@@ -111,13 +111,42 @@ local function dynamic_object_action(name, action, predicate, breaks)
 end
 
 local function climb_tower_ladder()
-  return interact.object_action(
-    config.objects.tower_ladder,
-    "Climb-up",
-    config.points.crumbled_wall,
-    function() return gc.read("player").world.plane == 1 end,
-    false,
-    16)
+  if gc.read("dialogue").type == "continue" then
+    local drained, failure = interact.finish_dialogue(
+      function() return true end, {}, true, 30)
+    if not drained then return failure end
+  end
+  local ladder = interact.object(config.objects.tower_ladder, "Climb-up", 16)
+  if not ladder then
+    return {
+      status = "rejected",
+      result = "tower_ladder_not_observed",
+      nearby = gc.read("objects", { within = 16, limit = 40 }),
+    }
+  end
+  local clicked = gc.await {
+    action = {
+      type = "object.interact",
+      id = config.objects.tower_ladder,
+      action = "Climb-up",
+      world = ladder.world,
+      within = 16,
+    },
+    breaks = true,
+    timeout = { game_ticks = 40 },
+  }
+  if clicked.status ~= "dispatched" then return clicked end
+  if not interact.wait_for(function()
+    return gc.read("player").world.plane == 1
+  end, 40) then
+    return {
+      status = "timed_out",
+      result = "tower_ladder_result_unverified",
+      receipt = clicked,
+      messages = gc.read("messages", { limit = 20 }),
+    }
+  end
+  return { status = "complete", result = "tower_ladder_climbed", receipt = clicked }
 end
 
 local function enter_orb_tower()
@@ -127,37 +156,79 @@ local function enter_orb_tower()
   end
   if state.in_zone(world, config.zones.tower_ground) then return climb_tower_ladder() end
 
-  local reached = interact.walk(config.points.crumbled_wall, 2, false, 900)
+  local reached = interact.walk(config.points.crumbled_wall, 2, true, 900)
   if reached.status ~= "arrived" then return reached end
   local crossed = interact.object_action(
     config.objects.crumbled_wall,
     "Climb-over",
     config.points.crumbled_wall,
     function() return state.in_zone(gc.read("player").world, config.zones.tower_ground) end,
-    false,
+    true,
     12)
   if crossed.status ~= "complete" then return crossed end
   return climb_tower_ladder()
 end
 
 local function search_orb_chest()
-  for _, id in ipairs({ config.objects.chest_closed, config.objects.chest_open }) do
-    local target = interact.object(id, "Search", 16)
-    if target then
-      return interact.object_action(
-        id,
-        "Search",
-        target.world,
-        function() return interact.carried(config.items.first_orb) > 0 end,
-        false,
-        16)
+  if interact.carried(config.items.first_orb) > 0 then
+    return { status = "complete", result = "orb_already_carried" }
+  end
+
+  local closed = interact.object(config.objects.chest_closed, "Open", 16)
+  if closed then
+    local opened = gc.await {
+      action = {
+        type = "object.interact",
+        id = config.objects.chest_closed,
+        action = "Open",
+        world = closed.world,
+        within = 16,
+      },
+      breaks = true,
+      timeout = { game_ticks = 40 },
+    }
+    if opened.status ~= "dispatched" then return opened end
+    if not interact.wait_for(function()
+      return interact.object(config.objects.chest_open, "Search", 16) ~= nil
+    end, 30) then
+      return {
+        status = "timed_out",
+        result = "orb_chest_open_unverified",
+        receipt = opened,
+      }
     end
   end
-  return {
-    status = "rejected",
-    result = "orb_chest_not_observed",
-    nearby = gc.read("objects", { within = 20, limit = 30 }),
+
+  local open = interact.object(config.objects.chest_open, "Search", 16)
+  if not open then
+    return {
+      status = "rejected",
+      result = "open_orb_chest_not_observed",
+      nearby = gc.read("objects", { within = 20, limit = 30 }),
+    }
+  end
+  local searched = gc.await {
+    action = {
+      type = "object.interact",
+      id = config.objects.chest_open,
+      action = "Search",
+      world = open.world,
+      within = 16,
+    },
+    breaks = true,
+    timeout = { game_ticks = 40 },
   }
+  if searched.status ~= "dispatched" then return searched end
+  if not interact.wait_for(function()
+    return interact.carried(config.items.first_orb) > 0
+  end, 40) then
+    return {
+      status = "timed_out",
+      result = "orb_chest_search_unverified",
+      receipt = searched,
+    }
+  end
+  return { status = "complete", result = "first_orb_obtained", receipt = searched }
 end
 
 local function leave_orb_tower()
@@ -166,7 +237,7 @@ local function leave_orb_tower()
       "Ladder",
       "Climb-down",
       function() return gc.read("player").world.plane == 0 end,
-      false)
+      true)
     if down.status ~= "complete" then return down end
   end
   if state.in_zone(gc.read("player").world, config.zones.tower_ground) then
@@ -180,12 +251,12 @@ local function leave_orb_tower()
           world = door.world,
           within = 20,
         },
-        breaks = false,
+        breaks = true,
         timeout = { game_ticks = 40 },
       }
       if opened.status ~= "dispatched" then return opened end
     end
-    local outside = interact.walk(config.points.tower_exit, 1, false, 120)
+    local outside = interact.walk(config.points.tower_exit, 1, true, 120)
     if outside.status ~= "arrived" then return outside end
   end
   return { status = "complete", result = "orb_tower_left" }
@@ -200,7 +271,14 @@ end
 local function reach_warlord()
   local left = leave_village_through_maze()
   if left.status ~= "complete" then return left end
-  local walked = interact.walk(config.points.warlord, 8, true, 900)
+  if interact.distance(gc.read("player").world, config.points.warlord) > 400 and
+    travel.has_dueling_ring() then
+    local teleported = travel.teleport_to_castle_wars(true)
+    if teleported.status ~= "complete" then
+      return { status = "warlord_transport_failed", receipt = teleported }
+    end
+  end
+  local walked = interact.walk(config.points.warlord, 2, true, 900)
   if walked.status ~= "arrived" then return walked end
   return { status = "complete", result = "warlord_area_reached", receipt = walked }
 end
@@ -208,9 +286,16 @@ end
 local function escape_hostile_area()
   local teleported = travel.teleport_to_castle_wars(false)
   if teleported.status == "complete" then return teleported end
-  local walked = interact.walk(config.points.warlord_cast, 0, false, 120)
+  local necklace = travel.teleport_to_barbarian_outpost(false)
+  if necklace.status == "complete" then return necklace end
+  local walked = interact.walk(config.points.warlord_fallback, 2, false, 120)
   if walked.status == "arrived" then return walked end
-  return { status = "escape_failed", teleport = teleported, walk = walked }
+  return {
+    status = "escape_failed",
+    ring = teleported,
+    necklace = necklace,
+    walk = walked,
+  }
 end
 
 return {

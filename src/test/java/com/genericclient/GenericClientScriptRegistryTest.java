@@ -23,8 +23,12 @@ public class GenericClientScriptRegistryTest
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(
 			temporaryFolder.newFolder("scripts").toPath());
 
-		assertEquals(9, registry.list().size());
+		assertEquals(12, registry.list().size());
 		assertEquals("Account Auditor", registry.get("account-auditor").getName());
+		assertEquals("AIO Agility Trainer", registry.get("aio-agility").getName());
+		assertTrue(registry.readExecutableSource("aio-agility").contains("agility_xp_unverified"));
+		assertTrue(Files.isRegularFile(
+			temporaryFolder.getRoot().toPath().resolve("scripts/aio-agility/courses/gnome_stronghold.lua")));
 		assertEquals("AIO Melee Trainer", registry.get("aio-melee").getName());
 		assertEquals("AIO Magic Trainer", registry.get("aio-magic").getName());
 		assertTrue(registry.readSource("aio-magic").contains("combat.cast"));
@@ -42,8 +46,20 @@ public class GenericClientScriptRegistryTest
 		assertTrue(registry.readExecutableSource("quest-runner").contains("glarial_tomb_exit_ladder_not_observed"));
 		assertTrue(registry.readExecutableSource("quest-runner").contains("warlord_safety_failed"));
 		assertTrue(registry.readExecutableSource("quest-runner").contains("ballista_hit_verified"));
+		assertTrue(registry.readExecutableSource("quest-runner")
+			.contains("fight_arena_encounter_complete"));
+		assertTrue(registry.readExecutableSource("quest-runner")
+			.contains("grand_tree_start_verified"));
+		assertTrue(registry.readExecutableSource("quest-runner")
+			.contains("hazelmere_translation_verified"));
+		assertTrue(registry.readExecutableSource("quest-runner")
+			.contains("glough_warning_verified"));
 		assertTrue(Files.isRegularFile(
 			temporaryFolder.getRoot().toPath().resolve("scripts/quest-runner/tree_gnome_village/state.lua")));
+		assertTrue(Files.isRegularFile(
+			temporaryFolder.getRoot().toPath().resolve("scripts/quest-runner/fight_arena/state.lua")));
+		assertTrue(Files.isRegularFile(
+			temporaryFolder.getRoot().toPath().resolve("scripts/quest-runner/the_grand_tree/state.lua")));
 		assertFalse(registry.readModuleSources("quest-runner").get("waterfall_config")
 			.contains("3867"));
 		assertTrue(registry.readSource("aio-melee").contains("combat.set_style"));
@@ -54,6 +70,11 @@ public class GenericClientScriptRegistryTest
 			registry.findRandomEventSolver(NpcID.MACRO_COUNTCHECK_SURFACE).getId());
 		assertEquals("count-check",
 			registry.findRandomEventSolver(NpcID.MACRO_COUNTCHECK_UNDERWATER).getId());
+		assertEquals("drunken-dwarf",
+			registry.findRandomEventSolver(NpcID.MACRO_DWARF).getId());
+		assertEquals("mime",
+			registry.findRandomEventSolver(NpcID.MACRO_MIME_INVITATION).getId());
+		assertTrue(registry.readSource("mime").contains("EMOTES[actor.animation]"));
 		assertEquals("pinball", registry.findRandomEventSolver(NpcID.PINBALL_INVITATION).getId());
 		assertTrue(registry.readSource("pinball").contains("VARBITS.score"));
 		assertEquals("Walker", registry.get("walker").getName());
@@ -106,7 +127,7 @@ public class GenericClientScriptRegistryTest
 
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
 
-		assertEquals(10, registry.list().size());
+		assertEquals(13, registry.list().size());
 		assertEquals("Custom", registry.get("custom").getName());
 		assertTrue(registry.readExecutableSource("quest-runner")
 			.contains("local approach = walk(pillar.world, 3, 120)"));

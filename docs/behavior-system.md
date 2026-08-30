@@ -149,6 +149,11 @@ world if the client logged out naturally or deliberately. A completed long
 break resets both behavior processes and suppresses the first post-return micro
 roll.
 
+The waiting semantic menu action resolves its target again after the restored
+client is live. A completed long break gives canvas and widget geometry up to
+five seconds to settle, so inventory, equipment, NPC, object, and widget actions
+do not dispatch against pre-logout bounds.
+
 Manually ending a long break follows the same completion path: it cancels the
 remaining timer, restores the Jagex-backed session when needed, resets long
 pressure, suppresses the first micro roll, and only then resumes the waiting

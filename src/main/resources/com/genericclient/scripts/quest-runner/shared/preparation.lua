@@ -1,18 +1,22 @@
 local state_api = gc.require("shared_state")
+local travel = gc.require("shared_travel")
 local witch_config = gc.require("witch_config")
 local waterfall_config = gc.require("waterfall_config")
 local tree_gnome_config = gc.require("tree_gnome_config")
+local fight_arena_config = gc.require("fight_arena_config")
 
 local configs = {
   witchs_house = witch_config,
   waterfall = waterfall_config,
   tree_gnome_village = tree_gnome_config,
+  fight_arena = fight_arena_config,
 }
 
 local ge = { x = 3165, y = 3491, plane = 0 }
 local banks = {
   { x = 2443, y = 3083, plane = 0 },
   { x = 2946, y = 3368, plane = 0 },
+  { x = 3094, y = 3492, plane = 0 },
   { x = 3092, y = 3245, plane = 0 },
   ge,
 }
@@ -20,6 +24,7 @@ local banks = {
 local bank_objects = {
   { id = 4483, action = "Use" },
 }
+local games_necklace_ids = { 3853, 3855, 3857, 3859, 3861, 3863, 3865, 3867 }
 
 local function overlay(quest, phase)
   gc.overlay {
@@ -41,10 +46,66 @@ local function ensure_at_ge(quest)
   if state_api.distance(gc.read("player").world, ge) <= 8 then
     return true
   end
+  if travel.has_necklace() then
+    overlay(quest, "teleport_to_burthorpe")
+    local teleported = travel.teleport_to_burthorpe(true)
+    if teleported.status ~= "complete" then
+      return nil, { status = "ge_transport_failed", receipt = teleported }
+    end
+  end
   overlay(quest, "travel_to_ge")
   local receipt = walk(ge, 8, true)
   if receipt.status ~= "arrived" then
     return nil, { status = "ge_travel_failed", receipt = receipt }
+  end
+  return true
+end
+
+local function maximum_spend(missing)
+  local total = 0
+  for _, item in ipairs(missing) do
+    if item.purchase == false then
+      return nil, { status = "untradeable_supply_missing", item = item }
+    end
+    total = total + item.quantity * item.maximum_unit_price
+  end
+  return total
+end
+
+local function available_games_necklace(state)
+  for _, id in ipairs(games_necklace_ids) do
+    if state_api.total_owned(state, id) > 0 then return id end
+  end
+  return nil
+end
+
+local function stage_ge_trip(state, missing, quest)
+  local necklace = available_games_necklace(state)
+  if not necklace then return false end
+  local coins, spend_error = maximum_spend(missing)
+  if not coins then return nil, spend_error end
+
+  local items = {}
+  for _, item in ipairs(state.inventory.items or {}) do
+    if item.tradeable == false then
+      items[#items + 1] = { id = item.id, quantity = item.quantity }
+    end
+  end
+  items[#items + 1] = { id = necklace, quantity = 1 }
+  items[#items + 1] = { id = 995, quantity = coins }
+  overlay(quest, "prepare_ge_transport")
+  local staged = gc.await {
+    action = {
+      type = "bank.loadout",
+      items = items,
+      minimum_free_slots = 20,
+      close = true,
+    },
+    breaks = true,
+    timeout = { game_ticks = 240 },
+  }
+  if staged.status ~= "complete" then
+    return nil, { status = "ge_transport_loadout_failed", receipt = staged }
   end
   return true
 end
@@ -128,18 +189,13 @@ local function open_bank()
 end
 
 local function acquire_missing(missing, quest)
-  local maximum_spend = 0
-  for _, item in ipairs(missing) do
-    if item.purchase == false then
-      return nil, { status = "untradeable_supply_missing", item = item }
-    end
-    maximum_spend = maximum_spend + item.quantity * item.maximum_unit_price
-  end
+  local spend, spend_error = maximum_spend(missing)
+  if not spend then return nil, spend_error end
   overlay(quest, "withdraw_coins")
   local coins = gc.await {
     action = {
       type = "bank.loadout",
-      items = { { id = 995, quantity = maximum_spend } },
+      items = { { id = 995, quantity = spend } },
       minimum_free_slots = 27,
       close = true,
     },
@@ -216,11 +272,15 @@ local function prepare_items(quest, restock, loadout, exact)
       return nil, { status = "supplies_missing", items = missing }
     end
     if state_api.distance(gc.read("player").world, ge) > 8 then
-      gc.await {
-        action = { type = "ui.close" },
-        activity = "banking",
-        breaks = true,
-      }
+      local staged, stage_error = stage_ge_trip(state, missing, quest)
+      if staged == nil then return nil, stage_error end
+      if not staged then
+        gc.await {
+          action = { type = "ui.close" },
+          activity = "banking",
+          breaks = true,
+        }
+      end
       local at_ge, ge_error = ensure_at_ge(quest)
       if not at_ge then return nil, ge_error end
       bank, bank_error = open_bank()

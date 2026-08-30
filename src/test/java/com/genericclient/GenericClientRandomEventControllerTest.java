@@ -125,6 +125,40 @@ public class GenericClientRandomEventControllerTest
 	}
 
 	@Test
+	public void unknownEventAutoTalksAfterInterruptAndRemainsLatched()
+	{
+		RuntimeStub runtime = new RuntimeStub();
+		List<Integer> talkedTo = new ArrayList<>();
+		GenericClientRandomEventController controller = new GenericClientRandomEventController(
+			id -> null,
+			runtime,
+			npcId ->
+			{
+				talkedTo.add(npcId);
+				return CompletableFuture.completedFuture(Map.of(
+					"status", "dispatched",
+					"result", "npc_interaction_dispatched"));
+			},
+			message -> { },
+			message -> { },
+			CLOCK);
+		Player player = player(null);
+		NPC genie = npc(
+			NpcID.MACRO_GENI, "Genie", 4, new WorldPoint(3200, 3200, 0), new String[]{"Talk-to"});
+
+		controller.onInteractingChanged(player, new InteractingChanged(genie, player), 10L);
+
+		Map<String, Object> status = controller.status();
+		assertEquals(List.of(NpcID.MACRO_GENI), talkedTo);
+		assertTrue((Boolean) status.get("active"));
+		assertTrue((Boolean) status.get("attention_required"));
+		assertEquals("unregistered", status.get("solver_status"));
+		assertEquals("dispatched", status.get("auto_talk_status"));
+		assertEquals("npc_interaction_dispatched", status.get("auto_talk_result"));
+		assertFalse(runtime.released);
+	}
+
+	@Test
 	public void solverFaultKeepsTheEventBlocked()
 	{
 		RuntimeStub runtime = new RuntimeStub();

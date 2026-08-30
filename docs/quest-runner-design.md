@@ -1,10 +1,8 @@
 # Quest Runner design
 
-Status: reusable interaction framework and Witch's House are live-proven.
-Each quest stays isolated, and the runner includes the complete Waterfall phase
-graph. Waterfall is live-proven end to end, including recovery, long-break
-resume, the final ritual, exact-ID chalice interaction, rewards, and normalized
-completion.
+Status: four modular quest definitions are live-proven end to end: Witch's
+House, Waterfall Quest, Tree Gnome Village, and Fight Arena. The Grand Tree is
+live-proven through its post-Glough checkpoint at varp 40.
 
 ## Decision
 
@@ -39,9 +37,14 @@ quest-runner.lua
   |
   +-- quest-runner/witchs_house/
   |     config, reducer, quest interactions, garden, combat, completion
-  |
-  `-- quest-runner/waterfall/
-        config, reducer, quest interactions
+  +-- quest-runner/waterfall/
+  |     config, reducer, navigation, preparation, ritual, tomb
+  +-- quest-runner/tree_gnome_village/
+  |     config, reducer, interactions, navigation, combat, runner
+  +-- quest-runner/fight_arena/
+  |     config, reducer, interactions, navigation, combat, runner
+  `-- quest-runner/the_grand_tree/
+        config, reducer, interactions, navigation, quest, runner
                          |
                          | gc.read / gc.await
                          v
@@ -94,6 +97,7 @@ Only observations required by the first two quests are added:
 | `vars` | Requested raw varp values from the tick's copied varp array. IDs are supplied by Lua and bounded to 32 per read. |
 | `objects` | Nearby scene objects filtered by ID/name/action/radius, including kind, WorldPoint, distance, and live actions. Same-ID objects at different points remain distinct. |
 | `dialogue` | Closed, Continue, or choice state; visible text, speaker, and ordered option text/index. |
+| `instance` | Map one canonical template WorldPoint into every matching tile in the current dynamic scene, preserving chunk rotation. |
 | `player` | Existing fields plus current/max HP, run energy, run-enabled state, and world destination. |
 
 Normalized quest completion remains `gc.read("quests")`. Raw varps route
@@ -192,16 +196,19 @@ price or reserve failure stops with a receipt for review.
 
 ## Acceptance state
 
-The framework interaction, snapshot, registry-migration, and Lua-host tests are
-implemented. Witch's House reached normalized `finished` state and varp 226
-value 7 on genericBoss; the audited reward produced 25 Hitpoints at 8,184 XP.
-The garden route, both safespots, all four NPC transitions, forced food at 3 HP,
-ball recovery, Burthorpe teleport, and final Boy dialogue were observed live.
+The framework interaction, snapshot, registry, walker, instance-mapping, and
+Lua-host surfaces are exercised by the four completed quests. Fight Arena added
+the strongest recovery receipt: after a death at Bouncer, the runner restocked,
+used the arena's re-entry dialogue, mapped the canonical safespot into the new
+private scene, killed Bouncer, crossed the second Khazard instance through its
+`Quick-escape` door, and reached normalized `finished` state. The terminal
+account snapshot recorded Attack 40, Hitpoints 28, Magic 32, and Thieving 14.
 
-Waterfall now has phase-specific preparation, navigation, tomb, equipment, and
-ritual handlers plus reducer coverage. It still requires full package
-verification and bounded live evidence before the runner may progress the
-account.
+The Grand Tree added live evidence for resumable open dialogue, low-combat quest
+confirmation, static-map door staging, Castle Wars return routing, repeated
+translation choices, same-ID ladder approaches, hostile-floor safety
+preservation, and post-break semantic target reacquisition. Its current stable
+stop is varp 40 immediately after warning Glough.
 
 Quest-specific evidence and exact phase tables live in
 [`witchs-house-quest-runner.md`](witchs-house-quest-runner.md) and

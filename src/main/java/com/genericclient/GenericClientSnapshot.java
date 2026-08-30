@@ -284,6 +284,9 @@ final class GenericClientSnapshot
 				return sceneCollision.inspect(
 					worldPoint(query == null ? null : query.get("from"), getPlayerWorldPoint()),
 					worldPoint(query == null ? null : query.get("to"), null));
+			case "instance":
+				return sceneCollision.inspectInstance(
+					worldPoint(query == null ? null : query.get("template"), null));
 			case "widgets":
 				return widgets.read(query);
 			case "vars":
@@ -442,8 +445,8 @@ final class GenericClientSnapshot
 		int bestDistance = Integer.MAX_VALUE;
 		for (GenericClientQuestSnapshot.ObjectSnapshot object : quest.getObjects())
 		{
-			if (!"wall".equals(object.getKind()) || object.getPlane() != to.getPlane() ||
-				traversalAction(object.getActions()) == null)
+			String action = traversalAction(object.getActions());
+			if (object.getPlane() != to.getPlane() || !isTraversalObject(object, action))
 			{
 				continue;
 			}
@@ -457,6 +460,26 @@ final class GenericClientSnapshot
 			}
 		}
 		return best;
+	}
+
+	private static boolean isTraversalObject(
+		GenericClientQuestSnapshot.ObjectSnapshot object,
+		String action)
+	{
+		if (action == null)
+		{
+			return false;
+		}
+		if ("wall".equals(object.getKind()))
+		{
+			return true;
+		}
+		if (!"game".equals(object.getKind()) || !"Open".equalsIgnoreCase(action))
+		{
+			return false;
+		}
+		String name = object.getName().toLowerCase(java.util.Locale.ROOT);
+		return name.contains("door") || name.contains("gate");
 	}
 
 	private static boolean spansEdge(

@@ -252,6 +252,93 @@ public class GenericClientEmergencyControllerTest
 	}
 
 	@Test
+	public void pausesAndResumesCompositeInputAroundContinuingHeal()
+	{
+		AtomicInteger pauses = new AtomicInteger();
+		AtomicInteger resumes = new AtomicInteger();
+		AtomicInteger consumptions = new AtomicInteger();
+		GenericClientEmergencyController controller = new GenericClientEmergencyController(
+			(itemId, action) ->
+			{
+				assertEquals(1, pauses.get());
+				assertEquals(0, resumes.get());
+				consumptions.incrementAndGet();
+				return CompletableFuture.completedFuture(dispatched());
+			},
+			escape -> CompletableFuture.completedFuture(escapeStarted()),
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			new GenericClientEmergencyController.InputControl()
+			{
+				@Override
+				public CompletableFuture<?> pause(String reason)
+				{
+					assertEquals("emergency_consumable", reason);
+					pauses.incrementAndGet();
+					return CompletableFuture.completedFuture(null);
+				}
+
+				@Override
+				public CompletableFuture<?> resume(String reason)
+				{
+					assertEquals("emergency_consumable", reason);
+					resumes.incrementAndGet();
+					return CompletableFuture.completedFuture(null);
+				}
+			},
+			reason -> CompletableFuture.completedFuture(null),
+			message -> { });
+		controller.configure(
+			2,
+			Collections.singletonList(
+				new GenericClientEmergencyController.Consumable(1234, "Eat", 6)),
+			null,
+			true,
+			false);
+
+		controller.publishGameTick(snapshotWithHitpoints(4));
+
+		assertEquals(1, pauses.get());
+		assertEquals(1, consumptions.get());
+		assertEquals(1, resumes.get());
+		assertFalse((Boolean) controller.status().get("recovering"));
+	}
+
+	@Test
+	public void clearCancelsAnActiveRecoveryAndIgnoresItsLateCompletion()
+	{
+		CompletableFuture<Map<String, Object>> escape = new CompletableFuture<>();
+		AtomicInteger stops = new AtomicInteger();
+		GenericClientEmergencyController controller = new GenericClientEmergencyController(
+			(itemId, action) -> CompletableFuture.completedFuture(rejected()),
+			ignored -> escape,
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason ->
+			{
+				stops.incrementAndGet();
+				return CompletableFuture.completedFuture(null);
+			},
+			message -> { });
+		controller.configure(
+			6,
+			Collections.singletonList(
+				new GenericClientEmergencyController.Consumable(1993, "Drink", 11)),
+			new GenericClientEmergencyController.Escape(
+				new net.runelite.api.coords.WorldPoint(3225, 3218, 0), 3),
+			false,
+			false);
+		controller.publishGameTick(snapshotWithHitpoints(6));
+
+		assertTrue((Boolean) controller.status().get("recovering"));
+		controller.clear().join();
+		assertFalse((Boolean) controller.status().get("recovering"));
+		assertEquals("unarmed", controller.status().get("last_event"));
+		assertEquals(2, stops.get());
+
+		escape.complete(escapeStarted());
+		assertEquals("unarmed", controller.status().get("last_event"));
+	}
+
+	@Test
 	public void keepsTheBreakBlockingLuaUntilEmergencyFoodIsDispatched()
 	{
 		CompletableFuture<Map<String, Object>> food = new CompletableFuture<>();

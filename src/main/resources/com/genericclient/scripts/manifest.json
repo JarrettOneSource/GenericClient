@@ -2,6 +2,19 @@
   "schema": "genericclient_scripts",
   "scripts": [
     {
+      "id": "aio-agility",
+      "name": "AIO Agility Trainer",
+      "description": "Train Agility to an exact target with resumable courses, travel recovery, and obstacle receipts.",
+      "file": "aio-agility.lua",
+      "modules": {
+        "config": "aio-agility/config.lua",
+        "progress": "aio-agility/progress.lua",
+        "travel": "aio-agility/travel.lua",
+        "gnome_course": "aio-agility/courses/gnome_stronghold.lua",
+        "runner": "aio-agility/runner.lua"
+      }
+    },
+    {
         "id": "aio-magic",
         "name": "AIO Magic Trainer",
         "description": "Train Magic to an exact target with GE restocking, verified loadouts, spell selection, and recovery receipts.",
@@ -41,6 +54,20 @@
       "random_events": [12551, 12552]
     },
     {
+      "id": "drunken-dwarf",
+      "name": "Drunken Dwarf",
+      "description": "Talk to the Drunken Dwarf and accept his food and drink.",
+      "file": "drunken-dwarf.lua",
+      "random_events": [322]
+    },
+    {
+      "id": "mime",
+      "name": "Mime",
+      "description": "Accept the Mime show and copy each observed performance until its reward is verified.",
+      "file": "mime.lua",
+      "random_events": [6753]
+    },
+    {
       "id": "pinball",
       "name": "Pinball",
       "description": "Play Flippa's pinball game from the live target and score state.",
@@ -63,6 +90,19 @@
           "tree_gnome_quest": "quest-runner/tree_gnome_village/quest.lua",
           "tree_gnome_runner": "quest-runner/tree_gnome_village/runner.lua",
           "tree_gnome_state": "quest-runner/tree_gnome_village/state.lua",
+          "fight_arena_combat": "quest-runner/fight_arena/combat.lua",
+          "fight_arena_config": "quest-runner/fight_arena/config.lua",
+          "fight_arena_interactions": "quest-runner/fight_arena/interactions.lua",
+          "fight_arena_navigation": "quest-runner/fight_arena/navigation.lua",
+          "fight_arena_quest": "quest-runner/fight_arena/quest.lua",
+          "fight_arena_runner": "quest-runner/fight_arena/runner.lua",
+          "fight_arena_state": "quest-runner/fight_arena/state.lua",
+          "grand_tree_config": "quest-runner/the_grand_tree/config.lua",
+          "grand_tree_interactions": "quest-runner/the_grand_tree/interactions.lua",
+          "grand_tree_navigation": "quest-runner/the_grand_tree/navigation.lua",
+          "grand_tree_quest": "quest-runner/the_grand_tree/quest.lua",
+          "grand_tree_runner": "quest-runner/the_grand_tree/runner.lua",
+          "grand_tree_state": "quest-runner/the_grand_tree/state.lua",
           "witch_combat": "quest-runner/witchs_house/combat.lua",
           "witch_completion": "quest-runner/witchs_house/completion.lua",
           "witch_config": "quest-runner/witchs_house/config.lua",

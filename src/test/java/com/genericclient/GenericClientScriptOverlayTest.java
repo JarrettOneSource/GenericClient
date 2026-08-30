@@ -2,7 +2,6 @@ package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.awt.Dimension;
@@ -17,14 +16,18 @@ import org.junit.Test;
 public class GenericClientScriptOverlayTest
 {
 	@Test
-	public void hidesWithoutARunningScript()
+	public void rendersIdleActivityWithoutARunningScript()
 	{
-		GenericClientScriptOverlay overlay = new GenericClientScriptOverlay(GenericClientActiveScript::none);
+		GenericClientScriptOverlay overlay = new GenericClientScriptOverlay(
+			GenericClientActiveScript::none,
+			() -> "idle");
 		BufferedImage image = new BufferedImage(240, 100, BufferedImage.TYPE_INT_ARGB);
 		Graphics2D graphics = image.createGraphics();
 		try
 		{
-			assertNull(overlay.render(graphics));
+			Dimension size = overlay.render(graphics);
+			assertNotNull(size);
+			assertEquals(25, size.height);
 		}
 		finally
 		{
@@ -42,7 +45,9 @@ public class GenericClientScriptOverlayTest
 			new GenericClientActiveScript(
 				"walker", "Walker", "Walk somewhere.", "WAITING", 65_000L,
 				Collections.emptyList(), Collections.emptyMap(), Collections.emptyList(), rows));
-		GenericClientScriptOverlay overlay = new GenericClientScriptOverlay(script::get);
+		GenericClientScriptOverlay overlay = new GenericClientScriptOverlay(
+			script::get,
+			() -> "travel");
 		BufferedImage image = new BufferedImage(260, 100, BufferedImage.TYPE_INT_ARGB);
 		Graphics2D graphics = image.createGraphics();
 		Dimension size;
