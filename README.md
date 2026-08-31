@@ -50,6 +50,32 @@ During a long break, a compact **Break** banner appears above the connection
 status in the dashboard sidebar. Its × button ends that break immediately and
 restores a logged-out session before script execution resumes.
 
+## Linux fleet dashboard
+
+The external Harness serves one loopback page for all supervised GenericClient
+processes. It discovers atomic instance descriptors, validates PID and endpoint
+identity, streams changed fleet state, reports proportional memory and CPU,
+proxies cached screenshots, and requires an explicit instance ID for every
+mutation.
+
+```bash
+./gradlew shadowJar
+runtime_dir=$(mktemp -d /tmp/genericclient-fleet.XXXXXX)
+
+npm --prefix harness run dashboard -- \
+  --runtime "$runtime_dir" \
+  --port 3765
+```
+
+Open `http://127.0.0.1:3765`, then launch dense instances from the page or with
+`node harness/src/cli.mjs launch-dense --runtime "$runtime_dir" --instance client-01`.
+The server is loopback-only and does not expose client control endpoints or a
+raw RPC proxy. Dense Linux instances are displayless Xvfb clients with a
+low-rate software canvas, not `java.awt.headless=true` processes. See
+[`docs/linux-harness-poc.md`](docs/linux-harness-poc.md) for operation and live
+proof boundaries and [`docs/harness-dashboard.md`](docs/harness-dashboard.md)
+for the web contract.
+
 ## Lua scripts
 
 GenericClient creates an empty external script registry at:

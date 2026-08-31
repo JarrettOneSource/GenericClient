@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-import { execFile, spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { callInstance } from "./client.mjs";
+import { createDashboardRuntime } from "./dashboard-runtime.mjs";
 import { readProcessMemory, summarizeFleet } from "./memory.mjs";
+import { ProcessSupervisor } from "./process-supervisor.mjs";
 import { InstanceRegistry } from "./registry.mjs";
 
 const execute = promisify(execFile);
@@ -25,6 +25,12 @@ export async function run(argv, io = console) {
     options.directory || path.join(runtimeDirectory, "instances"),
   );
   const registry = new InstanceRegistry(instanceDirectory);
+  const supervisor = new ProcessSupervisor({
+    runtimeDirectory,
+    instanceDirectory,
+    repositoryDirectory,
+    harnessDirectory,
+  });
 
   let result;
   switch (command) {
@@ -41,19 +47,56 @@ export async function run(argv, io = console) {
       result = await bridgeProbe(Boolean(options.wine));
       break;
     case "launch-dense":
-      result = launchDense(runtimeDirectory, instanceDirectory, options);
+      result = supervisor.start({
+        instance_id: options.instance,
+        jar: options.jar,
+        heap: options.heap,
+        archive: options.archive,
+        archive_output: options["archive-output"],
+        runelite_profile: options.profile,
+      });
       break;
     case "stop":
-      result = await stopInstance(registry, options.instance || positional[0]);
+      result = await stopInstance(registry, supervisor, options.instance || positional[0]);
       break;
     case "status": {
       const instance = await registry.resolve(options.instance || positional[0]);
       result = await callInstance(instance, "status");
       break;
     }
+    case "serve": {
+      const host = loopbackHost(options.host || "127.0.0.1");
+      const port = portInteger(options.port || "3765");
+      const pollIntervalMs = positiveInteger(options.poll || "1000", "poll");
+      const screenshotTtlMs = positiveInteger(
+        options["screenshot-ttl"] || "10000",
+        "screenshot-ttl",
+      );
+      const dashboard = createDashboardRuntime({
+        runtimeDirectory,
+        instanceDirectory,
+        repositoryDirectory,
+        harnessDirectory,
+        host,
+        port,
+        pollIntervalMs,
+        screenshotTtlMs,
+      });
+      const address = await dashboard.start();
+      installShutdownHandlers(dashboard);
+      result = {
+        schema: "genericclient_dashboard_server.v1",
+        ...address,
+        runtime_directory: runtimeDirectory,
+        instance_directory: instanceDirectory,
+        poll_interval_millis: pollIntervalMs,
+        screenshot_ttl_millis: screenshotTtlMs,
+      };
+      break;
+    }
     default:
       throw new Error(
-        "Usage: cli.mjs <instances|wait|memory|probe-bridge|launch-dense|stop|status> [options]",
+        "Usage: cli.mjs <instances|wait|memory|probe-bridge|launch-dense|stop|status|serve> [options]",
       );
   }
   io.log(JSON.stringify(result, null, 2));
@@ -95,68 +138,12 @@ async function memoryReceipt(registry) {
   return { ...summarizeFleet(samples), rejected };
 }
 
-function launchDense(runtimeDirectory, instanceDirectory, options) {
-  const instanceId = options.instance || randomUUID();
-  const jar = path.resolve(options.jar || path.join(repositoryDirectory, "build/libs/GenericClient.jar"));
-  const logDirectory = path.join(runtimeDirectory, "logs");
-  mkdirSync(logDirectory, { recursive: true });
-  mkdirSync(instanceDirectory, { recursive: true });
-  const logPath = path.join(logDirectory, `${instanceId}.log`);
-  const logFd = openSync(logPath, "a", 0o600);
-  const bootstrap = path.join(harnessDirectory, "bin", "genericclient-bootstrap");
-  const env = {
-    ...process.env,
-    GENERICCLIENT_INSTANCE_ID: instanceId,
-    GENERICCLIENT_RUNTIME_DIR: runtimeDirectory,
-    GENERICCLIENT_INSTANCE_DIRECTORY: instanceDirectory,
-    GENERICCLIENT_JAR: jar,
-  };
-  if (options.heap) {
-    env.GENERICCLIENT_HEAP_SIZE = options.heap;
-  }
-  if (options.archive) {
-    env.GENERICCLIENT_SHARED_ARCHIVE = path.resolve(options.archive);
-  }
-  if (options["archive-output"]) {
-    env.GENERICCLIENT_ARCHIVE_AT_EXIT = path.resolve(options["archive-output"]);
-  }
-  const executable = process.env.DISPLAY ? bootstrap : "xvfb-run";
-  const args = process.env.DISPLAY ? [] : ["-a", bootstrap];
-  const child = spawn(executable, args, {
-    detached: true,
-    env,
-    stdio: ["ignore", logFd, logFd],
-  });
-  closeSync(logFd);
-  child.unref();
-  return {
-    instance_id: instanceId,
-    supervisor_pid: child.pid,
-    descriptor_directory: instanceDirectory,
-    log_path: logPath,
-    jar,
-  };
-}
-
-async function stopInstance(registry, instanceId) {
+async function stopInstance(registry, supervisor, instanceId) {
   if (!instanceId) {
     throw new Error("stop requires --instance <id>");
   }
   const instance = await registry.resolve(instanceId);
-  process.kill(instance.pid, "SIGTERM");
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(instance.pid, 0);
-      await sleep(100);
-    } catch (error) {
-      if (error?.code === "ESRCH") {
-        return { instance_id: instanceId, pid: instance.pid, stopped: true };
-      }
-      throw error;
-    }
-  }
-  throw new Error(`PID ${instance.pid} did not stop within 10 seconds`);
+  return supervisor.stop(instance);
 }
 
 async function bridgeProbe(useWine) {
@@ -230,6 +217,39 @@ function positiveInteger(value, name) {
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
+}
+
+function portInteger(value) {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 65_535) {
+    throw new Error("port must be an integer from 0 through 65535");
+  }
+  return parsed;
+}
+
+function loopbackHost(value) {
+  if (!["127.0.0.1", "::1", "localhost"].includes(value)) {
+    throw new Error("host must be 127.0.0.1, ::1, or localhost");
+  }
+  return value;
+}
+
+function installShutdownHandlers(dashboard) {
+  let closing = false;
+  const close = async () => {
+    if (closing) {
+      return;
+    }
+    closing = true;
+    try {
+      await dashboard.close();
+    } catch (error) {
+      console.error(JSON.stringify({ ok: false, error: error.message }));
+      process.exitCode = 1;
+    }
+  };
+  process.once("SIGINT", close);
+  process.once("SIGTERM", close);
 }
 
 function sleep(milliseconds) {

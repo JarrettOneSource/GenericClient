@@ -109,7 +109,8 @@ public class GenericClientAutomationSchedulerTest
 			assertEquals("low", runtime.state.getRuleId());
 
 			scheduler.setAttentionRequired(true, "second_random_event");
-			waitFor(() -> runtime.stops.get() == 1);
+			waitFor(() -> runtime.stops.get() == 1 &&
+				"attention_required".equals(scheduler.status().get("mode")));
 			assertEquals("attention_required", scheduler.status().get("mode"));
 			assertFalse(runtime.state.isRunning());
 		}

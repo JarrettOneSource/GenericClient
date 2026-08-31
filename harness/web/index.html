@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en" data-connection="connecting">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0f0d">
+  <title>GenericClient Fleet</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <div class="page-grid" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="GenericClient fleet dashboard">
+      <span class="brand-mark">GC</span>
+      <span class="brand-copy">
+        <strong>Fleet</strong>
+        <small>Linux harness</small>
+      </span>
+    </a>
+    <div class="topbar-actions">
+      <div class="connection-pill" id="connection-pill" role="status" aria-live="polite">
+        <span class="connection-light" aria-hidden="true"></span>
+        <span id="connection-label">Connecting</span>
+      </div>
+      <button class="button button-primary" id="open-start" type="button">
+        <span aria-hidden="true">＋</span> Launch instance
+      </button>
+    </div>
+  </header>
+
+  <main class="dashboard-shell">
+    <section class="fleet-heading" aria-labelledby="fleet-title">
+      <div>
+        <p class="eyebrow">Live control surface</p>
+        <h1 id="fleet-title">Instance fleet</h1>
+      </div>
+      <p class="fleet-clock">
+        <span id="fleet-generation">Waiting for first snapshot</span>
+        <span class="sequence" id="fleet-sequence">SEQ —</span>
+      </p>
+    </section>
+
+    <section class="summary-rail" aria-label="Fleet summary">
+      <div class="summary-cell summary-total">
+        <span class="summary-label">Instances</span>
+        <strong id="summary-total">—</strong>
+        <small id="summary-running">Awaiting registry</small>
+      </div>
+      <div class="summary-cell">
+        <span class="summary-label">Healthy</span>
+        <strong id="summary-healthy">—</strong>
+        <small id="summary-degraded">— degraded</small>
+      </div>
+      <div class="summary-cell summary-attention">
+        <span class="summary-label">Attention</span>
+        <strong id="summary-attention">—</strong>
+        <small id="summary-breaking">— on break</small>
+      </div>
+      <div class="summary-cell">
+        <span class="summary-label">Scripts</span>
+        <strong id="summary-scripting">—</strong>
+        <small id="summary-logged-in">— logged in</small>
+      </div>
+      <div class="summary-cell">
+        <span class="summary-label">Fleet PSS</span>
+        <strong id="summary-pss">—</strong>
+        <small id="summary-uss">— private</small>
+      </div>
+      <div class="summary-cell">
+        <span class="summary-label">CPU</span>
+        <strong id="summary-cpu">—</strong>
+        <small id="summary-rejected">— rejected</small>
+      </div>
+    </section>
+
+    <section class="registry-warning" id="registry-warning" aria-labelledby="registry-warning-title" hidden>
+      <div>
+        <p class="eyebrow warning-eyebrow">Registry warning</p>
+        <h2 id="registry-warning-title">Rejected descriptors</h2>
+      </div>
+      <ul id="rejected-list"></ul>
+    </section>
+
+    <section class="fleet-toolbar" aria-label="Fleet display status">
+      <p><span class="pulse-dot" aria-hidden="true"></span><span id="stream-status">Opening event stream</span></p>
+      <p class="mode-key"><span>MODE</span> dense-x11 = displayless Xvfb, software render</p>
+    </section>
+
+    <section class="instance-grid" id="instance-grid" aria-label="GenericClient instances"></section>
+
+    <section class="empty-state" id="empty-state" hidden>
+      <div class="empty-orbit" aria-hidden="true"><span>0</span></div>
+      <p class="eyebrow">Registry clear</p>
+      <h2>No clients are running</h2>
+      <p>Launch a dense Linux instance here. It will join the fleet when its local control endpoint is healthy.</p>
+      <button class="button button-primary" id="empty-start" type="button">Launch first instance</button>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span>GenericClient Harness</span>
+    <span>Local control · explicit instance routing</span>
+  </footer>
+
+  <template id="instance-card-template">
+    <article class="instance-card">
+      <div class="card-signal" aria-hidden="true"></div>
+      <header class="card-header">
+        <div class="identity">
+          <span class="instance-index js-index">00</span>
+          <div>
+            <h2 class="js-name">Instance</h2>
+            <p class="js-id">instance-id</p>
+          </div>
+        </div>
+        <span class="state-chip js-state">Starting</span>
+      </header>
+
+      <button class="frame-button" type="button" data-action="details" aria-label="Open instance details">
+        <span class="frame-wrap">
+          <img class="instance-frame js-frame" alt="" loading="lazy">
+          <span class="frame-fallback">
+            <span>FRAME UNAVAILABLE</span>
+            <small>Open details to retry</small>
+          </span>
+          <span class="frame-meta frame-mode js-mode">dense-x11</span>
+          <span class="frame-meta frame-pid js-pid">PID —</span>
+        </span>
+      </button>
+
+      <div class="card-body">
+        <div class="activity-line">
+          <span class="activity-marker" aria-hidden="true"></span>
+          <div>
+            <span class="label">Activity</span>
+            <strong class="js-activity">Idle</strong>
+          </div>
+          <span class="js-location">No player location</span>
+        </div>
+
+        <dl class="metric-grid">
+          <div><dt>PSS</dt><dd class="js-pss">—</dd></div>
+          <div><dt>Private</dt><dd class="js-uss">—</dd></div>
+          <div><dt>CPU</dt><dd class="js-cpu">—</dd></div>
+          <div><dt>Uptime</dt><dd class="js-uptime">—</dd></div>
+        </dl>
+
+        <p class="card-warning js-warning" hidden></p>
+
+        <div class="card-actions">
+          <button class="button button-quiet js-session" type="button" data-action="session">Session</button>
+          <button class="button button-quiet js-end-break" type="button" data-action="end-break" hidden>End break</button>
+          <button class="button button-quiet" type="button" data-action="details">Inspect</button>
+          <button class="icon-button danger-button" type="button" data-action="stop" aria-label="Stop instance" title="Stop instance">■</button>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <dialog class="shell-dialog details-dialog" id="details-dialog" aria-labelledby="details-title">
+    <div class="dialog-topline"></div>
+    <header class="dialog-header">
+      <div>
+        <p class="eyebrow">Instance inspector</p>
+        <h2 id="details-title">Instance</h2>
+        <p class="dialog-subtitle" id="details-subtitle">instance-id</p>
+      </div>
+      <button class="close-button" id="close-details" type="button" aria-label="Close details">×</button>
+    </header>
+    <div class="details-layout">
+      <section class="details-primary">
+        <div class="detail-frame-wrap">
+          <img id="detail-frame" alt="Selected GenericClient frame">
+          <div class="detail-frame-tools">
+            <span id="detail-frame-status">Cached frame</span>
+            <button class="button button-quiet" id="refresh-frame" type="button">Refresh frame</button>
+          </div>
+        </div>
+
+        <dl class="detail-facts" id="detail-facts"></dl>
+
+        <section class="detail-section">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Automation</p>
+              <h3>Controls</h3>
+            </div>
+            <span id="detail-script-state" class="state-chip">Idle</span>
+          </div>
+          <div class="control-cluster" id="detail-controls">
+            <button class="button button-quiet" type="button" data-command="session.login">Log in</button>
+            <button class="button button-quiet" type="button" data-command="session.logout">Log out</button>
+            <button class="button button-quiet" type="button" data-command="behavior.break.end">End break</button>
+            <button class="button button-quiet" type="button" data-command="scripts.stop">Stop script</button>
+            <button class="button button-quiet" type="button" data-command="automation.pause">Pause scheduler</button>
+            <button class="button button-quiet" type="button" data-command="automation.resume">Resume scheduler</button>
+            <button class="button button-quiet attention-button" type="button" data-command="random_event.acknowledge">Acknowledge event</button>
+            <button class="button button-quiet attention-button" type="button" data-command="random_event.complete">Complete event</button>
+          </div>
+          <form class="action-form" id="script-action-form">
+            <label for="script-action">Active script action</label>
+            <div>
+              <input id="script-action" name="action" placeholder="action id" autocomplete="off">
+              <button class="button button-quiet" type="submit">Dispatch</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="detail-section">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Catalog</p>
+              <h3>Available scripts</h3>
+            </div>
+          </div>
+          <ul class="script-list" id="script-list"></ul>
+        </section>
+      </section>
+
+      <aside class="details-secondary">
+        <section class="detail-section detail-section-compact">
+          <p class="eyebrow">Recent activity</p>
+          <h3>Client log</h3>
+          <ol class="event-log" id="event-log"></ol>
+        </section>
+        <section class="detail-section detail-section-compact">
+          <p class="eyebrow">State surfaces</p>
+          <h3>Runtime detail</h3>
+          <details open>
+            <summary>Behavior</summary>
+            <pre id="behavior-json"></pre>
+          </details>
+          <details>
+            <summary>Automation</summary>
+            <pre id="automation-json"></pre>
+          </details>
+          <details>
+            <summary>Safety &amp; random events</summary>
+            <pre id="safety-json"></pre>
+          </details>
+          <details>
+            <summary>Normalized record</summary>
+            <pre id="detail-json"></pre>
+          </details>
+        </section>
+        <button class="button stop-button" id="detail-stop" type="button">Stop this instance</button>
+      </aside>
+    </div>
+  </dialog>
+
+  <dialog class="shell-dialog start-dialog" id="start-dialog" aria-labelledby="start-title">
+    <div class="dialog-topline"></div>
+    <header class="dialog-header">
+      <div>
+        <p class="eyebrow">Process supervisor</p>
+        <h2 id="start-title">Launch dense instance</h2>
+        <p class="dialog-subtitle">Native Linux JVM · Xvfb · low-rate software render</p>
+      </div>
+      <button class="close-button" id="close-start" type="button" aria-label="Close launch form">×</button>
+    </header>
+    <form id="start-form">
+      <div class="form-grid">
+        <label class="field field-wide">
+          <span>Instance ID</span>
+          <input name="instance_id" required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,127}" placeholder="client-03" autocomplete="off">
+          <small>Stable identity used for every card, command, and process receipt.</small>
+        </label>
+        <label class="field">
+          <span>Maximum heap</span>
+          <input name="heap" required pattern="[0-9]+[mMgG]" value="384m" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>RuneLite profile <em>optional</em></span>
+          <input name="runelite_profile" placeholder="profile name" autocomplete="off">
+        </label>
+        <label class="field field-wide">
+          <span>GenericClient JAR <em>optional</em></span>
+          <input name="jar" placeholder="Default: build/libs/GenericClient.jar" autocomplete="off">
+        </label>
+        <details class="advanced-fields field-wide">
+          <summary>AppCDS options</summary>
+          <div class="form-grid nested-grid">
+            <label class="field field-wide">
+              <span>Shared archive</span>
+              <input name="archive" placeholder="/path/to/dense.jsa" autocomplete="off">
+            </label>
+            <label class="field field-wide">
+              <span>Write archive on exit</span>
+              <input name="archive_output" placeholder="/path/to/new-dense.jsa" autocomplete="off">
+            </label>
+          </div>
+        </details>
+      </div>
+      <p class="form-note">The instance inherits the Harness runtime directory. It appears here only after its descriptor, PID, identity, and local health endpoint agree.</p>
+      <footer class="dialog-actions">
+        <button class="button button-quiet" id="cancel-start" type="button">Cancel</button>
+        <button class="button button-primary" type="submit">Launch instance</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div class="toast-region" id="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>

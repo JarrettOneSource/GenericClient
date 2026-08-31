@@ -22,6 +22,7 @@ the official Launcher.
 | Independent control | Two clients answer status and screenshot requests independently; stopping one does not stop the other. |
 | Memory evidence | Linux `smaps_rollup` receipts report RSS, PSS, USS, anonymous/file/shared proportional memory, and the marginal PSS of the second client. |
 | Shared runtime eligibility | Both clients use the same JRE and GenericClient JAR inode; an AppCDS archive is attempted only when it is compatible with the exact runtime. |
+| Fleet operator surface | One loopback web page discovers all healthy instances, streams changed status over SSE, proxies cached screenshots, reports Linux PSS/USS/CPU, and routes lifecycle or domain commands through explicit instance IDs. |
 
 ## Live-login work deliberately deferred
 
@@ -124,6 +125,81 @@ with an isolated home. It reached `LOGIN_SCREEN`, reported `dense=false`, bound
 an ephemeral endpoint, and removed its descriptor on shutdown. Dense-mode
 changes therefore did not replace or break the normal client path.
 
+### Run the fleet dashboard
+
+Build the JAR, then start the Harness server against the same runtime directory
+used by every supervised client:
+
+```bash
+./gradlew shadowJar
+
+npm --prefix harness run dashboard -- \
+  --runtime "$runtime_dir" \
+  --port 3765
+```
+
+Open `http://127.0.0.1:3765`. The page works with an empty registry and adds or
+removes cards as clients register and exit. Each card shows a cached game
+frame, identity, lifecycle, game state, activity, PSS, USS, CPU, and uptime.
+The inspector exposes recent client activity, normalized behavior/automation/
+safety state, the installed script catalog, and only the Harness command
+allowlist.
+
+The server binds loopback only because the first version has mutating controls
+and no user authentication. Use an SSH or private-network tunnel rather than
+binding it to a public interface. The browser never receives a client's
+ephemeral control URL and has no raw RPC route.
+
+Useful server options are:
+
+```text
+--runtime <directory>        fleet runtime root
+--directory <directory>      descriptor directory override
+--host <loopback>            127.0.0.1, ::1, or localhost
+--port <0-65535>             HTTP port; 0 selects an ephemeral test port
+--poll <milliseconds>        serialized fleet sample interval
+--screenshot-ttl <millis>    per-instance PNG cache lifetime
+```
+
+`GET /api/events` carries only changed fleet snapshots plus heartbeat events;
+the browser does not poll instance status. Screenshots remain out-of-band and
+are refreshed explicitly because capturing and PNG encoding have a real client
+cost. The complete route and state contract is in
+[`harness-dashboard.md`](harness-dashboard.md).
+
+The 2026-08-31 live acceptance run launched `dash-a` and `dash-b` through the
+HTTP lifecycle API with separate JVM PIDs. Both appeared as healthy
+`dense-x11` clients at `LOGIN_SCREEN`; the fleet snapshot reported two healthy
+instances, no rejected descriptors, and Linux PSS/USS/CPU samples. Forced
+screenshots for both were independent 765x503 RGBA PNGs with different SHA-256
+digests. An SSE subscriber observed the fleet transition from
+`[dash-a, dash-b]` to `[dash-b]` after the API stopped `dash-a`; `dash-b` kept
+its PID, health, state, and screenshot. Starting `dash-c` through the same API
+restored a two-client healthy fleet.
+
+Headless Chrome rendered the live page at 1440x1100 and 420x900. A DevTools
+runtime check found two instance cards, a live SSE connection, a working
+instance inspector with a 765-pixel frame and nine normalized facts, a working
+launch dialog with focused identity input, and no JavaScript runtime
+exceptions.
+
+### What dense headless means
+
+`dense-x11` is displayless, but it is not Java true-headless. Each process still
+creates the injected Jagex client, AWT event queue, RuneLite canvas, and a
+software-rendered frame under Xvfb. Presentation is reduced to approximately
+one frame per second while the 20 ms client cycle, game ticks, deferred events,
+client-thread work, snapshots, and synthetic input retain their normal
+ordering. This is the current reliability-preserving mode and is suitable for
+the multi-client Harness PoC.
+
+Running with `java.awt.headless=true` cannot host the current RuneLite/Jagex
+canvas. A materially leaner next mode should gate expensive final raster and
+presentation work inside the injected client while preserving state updates
+and on-demand frames. An AWT-free protocol-native client is a separate client
+implementation with a much larger revision, authentication, cache, script, and
+semantic maintenance burden; it is not a near-term extension of this Harness.
+
 ### Launch two clients
 
 The accepted two-client run registered:
@@ -198,6 +274,9 @@ comparison is still required before treating AppCDS as a capacity improvement.
   environment were proven with non-secret probe values.
 - Each dense instance currently owns one Xvfb process. A shared or sharded Xvfb
   experiment may reduce the marginal footprint further.
+- `dense-x11` is not `java.awt.headless=true`; it intentionally retains the AWT
+  canvas and low-rate software renderer so screenshots and client semantics
+  remain reliable.
 - Dense callbacks intentionally omit normal RuneLite overlays, infoboxes,
   Discord, telemetry, Plugin Hub, and the sidebar.
 - Dense callback access to RuneLite's package-private client-thread drains is
