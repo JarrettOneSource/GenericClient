@@ -77,6 +77,16 @@ test("does not cache failed or invalid captures", async () => {
   await assert.rejects(() => cache.get("alpha"), /MIME/);
   await assert.rejects(() => cache.get("alpha"), /MIME/);
   assert.equal(calls, 2);
+
+  const corrupt = cacheWith({
+    callInstance: async () => ({
+      mime_type: "image/png",
+      image_base64: Buffer.from("not a PNG").toString("base64"),
+      width: 1,
+      height: 1,
+    }),
+  });
+  await assert.rejects(() => corrupt.get("alpha"), /invalid PNG payload/);
 });
 
 function cacheWith(overrides = {}) {
@@ -93,7 +103,7 @@ function cacheWith(overrides = {}) {
 }
 
 function screenshot(seed) {
-  const buffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, seed]);
+  const buffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, seed]);
   return {
     mime_type: "image/png",
     image_base64: buffer.toString("base64"),

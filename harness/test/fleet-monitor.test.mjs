@@ -45,6 +45,7 @@ test("suppresses timestamp-only changes and emits semantic state changes", async
     snapshot(1, "LOGIN_SCREEN", 100),
     snapshot(2, "LOGIN_SCREEN", 200),
     snapshot(3, "LOGGED_IN", 300),
+    snapshot(4, "LOGGED_IN", 400, ["replacement"]),
   ];
   const monitor = new FleetMonitor({
     controller: { snapshot: async () => samples.shift() },
@@ -56,9 +57,10 @@ test("suppresses timestamp-only changes and emits semantic state changes", async
   await monitor.refresh();
   await monitor.refresh();
   await monitor.refresh();
+  await monitor.refresh();
 
-  assert.deepEqual(delivered, [1, 3]);
-  assert.equal(monitor.latest.sequence, 3);
+  assert.deepEqual(delivered, [1, 3, 4]);
+  assert.equal(monitor.latest.sequence, 4);
 });
 
 test("serial polling recovers after errors and never overlaps samples", async () => {
@@ -100,6 +102,35 @@ test("serial polling recovers after errors and never overlaps samples", async ()
   monitor.close();
 });
 
+test("manual refreshes share the same serialized sampling queue", async () => {
+  const releases = [];
+  let active = 0;
+  let calls = 0;
+  const monitor = new FleetMonitor({
+    controller: {
+      snapshot: async () => {
+        calls++;
+        active++;
+        assert.equal(active, 1);
+        await new Promise((resolve) => releases.push(resolve));
+        active--;
+        return snapshot(calls, "LOGIN_SCREEN");
+      },
+    },
+  });
+
+  const first = monitor.refresh();
+  const second = monitor.refresh();
+  await waitFor(() => releases.length === 1);
+  assert.equal(calls, 1);
+  releases.shift()();
+  await waitFor(() => releases.length === 1);
+  assert.equal(calls, 2);
+  releases.shift()();
+  await Promise.all([first, second]);
+  assert.equal(active, 0);
+});
+
 test("unsubscribe and close release listeners and pending timers", async () => {
   const cleared = [];
   const monitor = new FleetMonitor({
@@ -121,13 +152,14 @@ test("unsubscribe and close release listeners and pending timers", async () => {
   assert.equal(monitor.status().subscriber_count, 0);
 });
 
-function snapshot(sequence, gameState, generatedAt = sequence * 10) {
+function snapshot(sequence, gameState, generatedAt = sequence * 10, pendingLaunches = []) {
   return {
     schema: "genericclient_fleet.v1",
     sequence,
     generated_at_epoch_millis: generatedAt,
     summary: { total_instances: 1 },
     instances: [{ instance_id: "one", game_state: gameState }],
+    pending_launches: pendingLaunches,
     rejected: [],
   };
 }

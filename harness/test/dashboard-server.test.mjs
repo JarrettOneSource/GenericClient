@@ -60,7 +60,7 @@ test("exposes fleet health and explicitly routed instance lifecycle APIs", async
     fixture.controller.calls.map((call) => call.operation),
     ["get", "start", "command", "stop"],
   );
-  assert.equal(fixture.monitor.refreshCalls, 2);
+  assert.equal(fixture.monitor.refreshCalls, 3);
 });
 
 test("bounds and validates JSON mutations and maps domain failures", async (context) => {

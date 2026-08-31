@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
 export class ScreenshotCache {
   constructor(
     {
@@ -58,8 +60,9 @@ export class ScreenshotCache {
     const result = await this.callInstance(descriptor, "screenshot.capture", {}, 20_000);
     validateScreenshot(result);
     const buffer = Buffer.from(result.image_base64, "base64");
-    if (buffer.length === 0) {
-      throw new Error("GenericClient returned an empty screenshot");
+    if (buffer.length < PNG_SIGNATURE.length ||
+        !buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+      throw new Error("GenericClient returned an invalid PNG payload");
     }
     const entry = Object.freeze({
       instance_id: instanceId,

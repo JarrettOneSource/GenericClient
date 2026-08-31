@@ -123,6 +123,9 @@ function acceptFleet(fleet) {
   if (!fleet || fleet.schema !== "genericclient_fleet.v1" || !Array.isArray(fleet.instances)) {
     throw new Error("unsupported fleet snapshot");
   }
+  if (state.fleet && Number.isFinite(fleet.sequence) && fleet.sequence < state.fleet.sequence) {
+    return;
+  }
   state.fleet = fleet;
   renderSummary(fleet);
   renderRejected(fleet.rejected || []);
@@ -134,8 +137,9 @@ function acceptFleet(fleet) {
     if (selected) {
       renderDetails(selected);
     } else {
+      const departedId = state.selectedId;
       elements.detailsDialog.close();
-      showToast(`Instance ${state.selectedId} left the fleet`);
+      showToast(`Instance ${departedId} left the fleet`);
     }
   }
 }
@@ -317,6 +321,7 @@ function renderFacts(instance) {
 }
 
 function renderControlAvailability(instance) {
+  const automationAvailable = Boolean(instance.automation?.available);
   for (const button of elements.detailControls.querySelectorAll("button[data-command]")) {
     const command = button.dataset.command;
     button.hidden =
@@ -326,8 +331,10 @@ function renderControlAvailability(instance) {
       command === "scripts.stop" && !instance.controls?.can_stop_script ||
       command === "random_event.acknowledge" && !instance.controls?.can_acknowledge_random_event ||
       command === "random_event.complete" && !instance.controls?.can_acknowledge_random_event ||
-      command === "automation.pause" && Boolean(instance.automation?.paused) ||
-      command === "automation.resume" && !instance.automation?.paused;
+      command === "automation.pause" &&
+        (!automationAvailable || Boolean(instance.automation?.paused)) ||
+      command === "automation.resume" &&
+        (!automationAvailable || !instance.automation?.paused);
   }
   elements.scriptActionForm.hidden = !instance.scripting;
 }

@@ -23,19 +23,26 @@ export class FleetController {
       callInstance = defaultCallInstance,
       readProcessMemory = defaultReadProcessMemory,
       now = () => Date.now(),
+      launchReservationMs = 120_000,
     },
   ) {
+    if (!Number.isSafeInteger(launchReservationMs) || launchReservationMs <= 0) {
+      throw new Error("launchReservationMs must be a positive integer");
+    }
     this.registry = registry;
     this.supervisor = supervisor;
     this.metricsSampler = metricsSampler;
     this.callInstance = callInstance;
     this.readProcessMemory = readProcessMemory;
     this.now = now;
+    this.launchReservationMs = launchReservationMs;
+    this.pendingLaunches = new Map();
     this.sequence = 0;
   }
 
   async snapshot() {
     const scanned = await this.registry.scan();
+    this.#reconcileLaunches(scanned.instances);
     this.metricsSampler?.forgetMissing(scanned.instances.map((instance) => instance.pid));
     const instances = await Promise.all(
       scanned.instances.map((instance) => this.#normalizeInstance(instance)),
@@ -44,8 +51,9 @@ export class FleetController {
       schema: "genericclient_fleet.v1",
       sequence: ++this.sequence,
       generated_at_epoch_millis: this.now(),
-      summary: summarize(instances, scanned.rejected),
+      summary: summarize(instances, scanned.rejected, this.pendingLaunches.size),
       instances: instances.sort((left, right) => left.instance_id.localeCompare(right.instance_id)),
+      pending_launches: [...this.pendingLaunches.keys()].sort(),
       rejected: scanned.rejected,
     };
     return snapshot;
@@ -65,13 +73,27 @@ export class FleetController {
 
   async start(spec = {}) {
     const requestedId = spec.instance_id || spec.instance;
-    if (requestedId) {
+    if (!requestedId) {
+      throw new Error("instance_id is required");
+    }
+    this.#reconcileLaunches([]);
+    if (this.pendingLaunches.has(requestedId)) {
+      throw new Error(`GenericClient instance '${requestedId}' launch is already pending`);
+    }
+    const reservation = this.now() + this.launchReservationMs;
+    this.pendingLaunches.set(requestedId, reservation);
+    try {
       const { instances } = await this.registry.scan();
       if (instances.some((instance) => instance.instance_id === requestedId)) {
         throw new Error(`GenericClient instance '${requestedId}' is already running`);
       }
+      return this.supervisor.start({ ...spec, instance_id: requestedId });
+    } catch (error) {
+      if (this.pendingLaunches.get(requestedId) === reservation) {
+        this.pendingLaunches.delete(requestedId);
+      }
+      throw error;
     }
-    return this.supervisor.start(spec);
   }
 
   async stop(instanceId) {
@@ -169,6 +191,16 @@ export class FleetController {
       },
     };
   }
+
+  #reconcileLaunches(instances) {
+    const active = new Set(instances.map((instance) => instance.instance_id));
+    const now = this.now();
+    for (const [instanceId, expiresAt] of this.pendingLaunches) {
+      if (active.has(instanceId) || expiresAt <= now) {
+        this.pendingLaunches.delete(instanceId);
+      }
+    }
+  }
 }
 
 function settledValue(result, label, warnings) {
@@ -199,7 +231,7 @@ function normalizeMemory(memory) {
   };
 }
 
-function summarize(instances, rejected) {
+function summarize(instances, rejected, pendingLaunches) {
   const memory = {
     rss_bytes: 0,
     pss_bytes: 0,
@@ -222,7 +254,7 @@ function summarize(instances, rejected) {
   return {
     healthy: instances.filter((instance) => instance.health === "healthy").length,
     degraded: instances.filter((instance) => instance.health === "degraded").length,
-    starting: instances.filter((instance) =>
+    starting: pendingLaunches + instances.filter((instance) =>
       instance.game_state === "STARTING" || instance.lifecycle === "created").length,
     attention_required: instances.filter((instance) => instance.attention_required).length,
     logged_in: instances.filter((instance) => instance.logged_in).length,

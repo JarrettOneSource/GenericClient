@@ -68,7 +68,7 @@ descriptors contain routing and lifecycle metadata only.
   injected client.
 - `GameTick`, `PostClientTick`, deferred events, and `ClientThread` work retain
   stock ordering.
-- Dense rendering changes presentation frequency, not state progression.
+- Dense mode suppresses ordinary canvas presentation, not state progression.
 - Mutating control always resolves an explicit `instance_id` when more than one
   client is live.
 - A descriptor is never trusted until both PID and endpoint health agree.
@@ -194,11 +194,12 @@ also preserves legitimately black clients by returning the second blank frame.
 
 `dense-x11` is displayless, but it is not Java true-headless. Each process still
 creates the injected Jagex client, AWT event queue, RuneLite canvas, and a
-software-rendered frame under Xvfb. Presentation is reduced to approximately
-one frame per second while the 20 ms client cycle, game ticks, deferred events,
-client-thread work, snapshots, and synthetic input retain their normal
-ordering. This is the current reliability-preserving mode and is suitable for
-the multi-client Harness PoC.
+software-rendered frame under Xvfb. The dense callback forwards completed
+buffers to on-demand screenshot listeners but suppresses ordinary canvas
+presentation. It does not yet gate the injected client's raster cadence. The
+20 ms client cycle, game ticks, deferred events, client-thread work, snapshots,
+and synthetic input retain their normal ordering. This is the current
+reliability-preserving mode and is suitable for the multi-client Harness PoC.
 
 Running with `java.awt.headless=true` cannot host the current RuneLite/Jagex
 canvas. A materially leaner next mode should gate expensive final raster and
@@ -282,8 +283,8 @@ comparison is still required before treating AppCDS as a capacity improvement.
 - Each dense instance currently owns one Xvfb process. A shared or sharded Xvfb
   experiment may reduce the marginal footprint further.
 - `dense-x11` is not `java.awt.headless=true`; it intentionally retains the AWT
-  canvas and low-rate software renderer so screenshots and client semantics
-  remain reliable.
+  canvas and software renderer so screenshots and client semantics remain
+  reliable. A measured render gate is still future work.
 - Dense callbacks intentionally omit normal RuneLite overlays, infoboxes,
   Discord, telemetry, Plugin Hub, and the sidebar.
 - Dense callback access to RuneLite's package-private client-thread drains is

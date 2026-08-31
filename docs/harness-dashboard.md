@@ -37,7 +37,7 @@ The dashboard uses exact mode names:
 | Mode | Meaning |
 | --- | --- |
 | `stock` | Normal RuneLite presentation and plugin startup. |
-| `dense-x11` | Current dense runtime: native Linux JVM, minimal RuneLite graph, AWT canvas under Xvfb, software rendering limited to approximately 1 FPS. |
+| `dense-x11` | Current dense runtime: native Linux JVM, minimal RuneLite graph, AWT canvas under Xvfb, software renderer retained, and ordinary canvas presentation suppressed. |
 | `render-gated` | Reserved for a later injected-client draw gate. |
 | `protocol-native` | Reserved for a future AWT-free client kernel. |
 
@@ -48,6 +48,7 @@ The dashboard uses exact mode names:
 One snapshot contains:
 
 - generation timestamp and monotonically increasing sequence;
+- reserved launch identities that have not registered a healthy endpoint yet;
 - healthy and rejected instance counts;
 - logged-in, starting, attention-required, breaking, and scripting counts;
 - total PSS, USS, RSS, swap, and sampled CPU;

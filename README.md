@@ -70,8 +70,9 @@ npm --prefix harness run dashboard -- \
 Open `http://127.0.0.1:3765`, then launch dense instances from the page or with
 `node harness/src/cli.mjs launch-dense --runtime "$runtime_dir" --instance client-01`.
 The server is loopback-only and does not expose client control endpoints or a
-raw RPC proxy. Dense Linux instances are displayless Xvfb clients with a
-low-rate software canvas, not `java.awt.headless=true` processes. See
+raw RPC proxy. Dense Linux instances are displayless Xvfb clients that retain
+the software renderer while suppressing normal canvas presentation; they are
+not `java.awt.headless=true` processes. See
 [`docs/linux-harness-poc.md`](docs/linux-harness-poc.md) for operation and live
 proof boundaries and [`docs/harness-dashboard.md`](docs/harness-dashboard.md)
 for the web contract.

@@ -137,6 +137,54 @@ test("starts stops and refreshes through explicit lifecycle methods", async () =
   assert.deepEqual(await controller.stop("running"), { instance_id: "running", stopped: true });
   assert.deepEqual(calls.map((call) => call.action), ["start", "stop"]);
   await assert.rejects(() => controller.stop(), /instance_id is required/);
+  await assert.rejects(() => controller.start({ heap: "384m" }), /instance_id is required/);
+});
+
+test("reserves launch identity until registration and rejects overlapping starts", async () => {
+  let releaseScan;
+  const firstScan = new Promise((resolve) => {
+    releaseScan = resolve;
+  });
+  let scans = 0;
+  const starts = [];
+  let now = 1_000;
+  const controller = new FleetController({
+    registry: {
+      scan: async () => {
+        scans++;
+        if (scans === 1) {
+          return firstScan;
+        }
+        return { instances: [], rejected: [] };
+      },
+    },
+    supervisor: {
+      start: (spec) => {
+        starts.push(spec);
+        return { instance_id: spec.instance_id };
+      },
+    },
+    metricsSampler: { forgetMissing() {} },
+    now: () => now,
+    launchReservationMs: 100,
+  });
+
+  const first = controller.start({ instance_id: "race-safe", heap: "384m" });
+  await assert.rejects(
+    () => controller.start({ instance_id: "race-safe", heap: "384m" }),
+    /launch is already pending/,
+  );
+  releaseScan({ instances: [], rejected: [] });
+  assert.equal((await first).instance_id, "race-safe");
+  assert.equal(starts.length, 1);
+
+  const pending = await controller.snapshot();
+  assert.deepEqual(pending.pending_launches, ["race-safe"]);
+  assert.equal(pending.summary.starting, 1);
+  now = 1_101;
+  const expired = await controller.snapshot();
+  assert.deepEqual(expired.pending_launches, []);
+  assert.equal(expired.summary.starting, 0);
 });
 
 test("routes only allowlisted commands to one explicit instance", async () => {

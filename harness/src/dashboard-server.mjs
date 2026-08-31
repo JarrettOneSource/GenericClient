@@ -162,6 +162,7 @@ export class DashboardServer {
         requireMethod(request, ["POST"]);
         const spec = await readJsonObject(request, this.bodyLimitBytes);
         const result = await this.controller.start(spec);
+        await this.#refreshAfterMutation();
         sendJson(response, 202, { ok: true, result });
         return;
       }

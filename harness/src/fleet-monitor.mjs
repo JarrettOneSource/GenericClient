@@ -27,6 +27,7 @@ export class FleetMonitor {
     this.lastPollEpochMillis = null;
     this.lastEventEpochMillis = null;
     this.lastError = null;
+    this.refreshTail = Promise.resolve();
   }
 
   async start() {
@@ -45,7 +46,13 @@ export class FleetMonitor {
     return this.latest;
   }
 
-  async refresh() {
+  refresh() {
+    const request = this.refreshTail.then(() => this.#refreshNow());
+    this.refreshTail = request.catch(() => {});
+    return request;
+  }
+
+  async #refreshNow() {
     try {
       const snapshot = await this.controller.snapshot();
       const fingerprint = semanticFingerprint(snapshot);
@@ -138,6 +145,7 @@ function semanticFingerprint(snapshot) {
   return JSON.stringify({
     summary: snapshot?.summary,
     instances: snapshot?.instances,
+    pending_launches: snapshot?.pending_launches,
     rejected: snapshot?.rejected,
   });
 }
