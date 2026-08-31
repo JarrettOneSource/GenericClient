@@ -61,7 +61,7 @@ when that is not appropriate.
 
 GenericClient never selects `Dismiss` as a framework fallback.
 
-The bundled Mime solver accepts the show, records the Mime's last recognized
+The GenericClientScripts Mime solver accepts the show, records the Mime's last recognized
 animation until the response panel appears, and clicks the matching performance.
 It repeats until the Mime despawns and the emote-unlock message is observed. The
 answer must be selected from the last animation before the panel opens; reacting
@@ -70,7 +70,7 @@ The first live receipt completed five correctly observed rounds, unlocked the
 Lean emote, and returned the player to `(2487, 3420, 0)` on the interrupted
 Gnome Stronghold course before the runner resumed.
 
-The bundled Molly solver owns Postie Pete NPC `6738`. Molly's client ID encodes
+The GenericClientScripts Molly solver owns Postie Pete NPC `6738`. Molly's client ID encodes
 her outfit and colour, so the solver maps it to the matching suspect ID instead
 of comparing pixels. It opens the crane panel, follows the moving suspect from
 live world coordinates, grabs only on a shared tile, and requires the capture
@@ -148,7 +148,7 @@ The solver aligned the three dials, confirmed the chest, observed the reward
 message `Your reward is: 1 x Gold bar.`, completed the event with reason
 `capt_arnav_reward_observed`, and resumed the interrupted Quest Runner.
 
-The bundled `capt-arnav` solver is registered for NPC `5426`. It handles the
+The GenericClientScripts `capt-arnav` solver is registered for NPC `5426`. It handles the
 exact affirmative dialogue `Yes, I'll help you unlock your chest.`, reads the
 three copied dial varbits (`9585`, `9593`, `9594`) and immutable widget labels,
 rotates each four-state dial with `ui.click`, and requires the reward chat
@@ -164,7 +164,7 @@ the current-post mapping: tree `0`, iron `1`, coal `2`, fishing `3`, and essence
 `4`. GenericClient tagged ten correct posts, observed score `10` and completion
 `1`, exited through object `9293`, received `2 x Diamond`, and resumed AIO Magic.
 
-The bundled `pinball` solver is registered for NPC `6744`. It uses those copied
+The GenericClientScripts `pinball` solver is registered for NPC `6744`. It uses those copied
 varbits and observed scene objects, so it is independent of camera angle,
 screen coordinates, and instance placement. Event dialogue, post tags, and the
 exit all bypass breaks as one time-sensitive interruption; the solver returns
@@ -179,7 +179,7 @@ the quest, completed the event's automatic account check, observed the exact
 Continue page, and resumed from the same maze state. No reward exists for that
 outcome, and GenericClient did not attempt to create an account-security PIN.
 
-The bundled `count-check` solver owns surface NPC `12551` and underwater NPC
+The GenericClientScripts `count-check` solver owns surface NPC `12551` and underwater NPC
 `12552`. It accepts the account-check choice when one is shown, handles the
 automatic random-event dialogue, and treats either the pass or fail message
 plus NPC departure as the completion receipt. A successful security check can
@@ -191,7 +191,7 @@ fully processed event.
 On 2026-08-30 GenericClient interrupted The Grand Tree return route for Rick
 Turpentine NPC `375`, auto-opened his dialogue, observed the exact reward receipt
 `Your reward is: 1 x Uncut sapphire.`, and resumed the retained quest inputs.
-The bundled solver drains his Continue dialogue and requires that reward message
+The GenericClientScripts solver drains his Continue dialogue and requires that reward message
 plus NPC departure before returning `COMPLETED`.
 
 ## Evil Bob evidence
@@ -205,7 +205,7 @@ the pot changed it to raw fish `6200`, feeding it produced the `catnap` chat
 receipt, and the portal returned the account to the hangar. The event reward
 raised Fishing from level 1 to level 7 and the retained quest resumed.
 
-The bundled `evil-bob` solver owns surface NPC `390`. Its island module accepts
+The GenericClientScripts `evil-bob` solver owns surface NPC `390`. Its island module accepts
 the exact observed invitation, obtains the event net, asks the servant before
 each attempt, and tries one representative object from each of the four observed
 shore groups. Wrong fish `6206` is destroyed and the servant is consulted again,

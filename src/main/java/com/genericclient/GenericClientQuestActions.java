@@ -89,10 +89,14 @@ final class GenericClientQuestActions
 					within(action, type),
 					activityContext);
 			case "dialogue.continue":
-				return dialogueInput.continueDialogue(activityContext);
+				return dialogueInput.continueDialogue(
+					activityContext,
+					optionalBoolean(action, "reading", true, type));
 			case "dialogue.choose":
 				return dialogueInput.choose(
-					requiredText(action, "text", type), activityContext);
+					requiredText(action, "text", type),
+					activityContext,
+					optionalBoolean(action, "reading", true, type));
 			case "bank.loadout":
 				return bankInput.loadout(
 					bankRequirements(action),

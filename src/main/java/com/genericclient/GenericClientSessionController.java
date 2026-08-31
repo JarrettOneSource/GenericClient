@@ -28,6 +28,7 @@ final class GenericClientSessionController implements AutoCloseable
 {
 	private static final long DEFAULT_POLL_MILLIS = 250L;
 	private static final long DEFAULT_TIMEOUT_MILLIS = 20_000L;
+	private static final long LOGIN_WORLD_SETTLE_MILLIS = 1_000L;
 	private static final int[] LOGOUT_BUTTONS =
 	{
 		InterfaceID.Logout.LOGOUT,
@@ -64,6 +65,7 @@ final class GenericClientSessionController implements AutoCloseable
 
 	private CompletableFuture<String> activeOperation;
 	private boolean loginClickIssued;
+	private long loginWorldSettleDeadline;
 	private int loginScreenAttempt;
 	private int logoutEscapeAttempts;
 	private boolean closed;
@@ -242,6 +244,7 @@ final class GenericClientSessionController implements AutoCloseable
 			activeOperation = new CompletableFuture<>();
 			operation = activeOperation;
 			loginScreenAttempt = 0;
+			loginWorldSettleDeadline = 0L;
 		}
 		reporter.accept("SESSION_LOGIN_STARTED");
 		long deadline = System.currentTimeMillis() + timeoutMillis;
@@ -344,6 +347,7 @@ final class GenericClientSessionController implements AutoCloseable
 			if (loginClickIssued)
 			{
 				loginClickIssued = false;
+				loginWorldSettleDeadline = System.currentTimeMillis() + LOGIN_WORLD_SETTLE_MILLIS;
 				schedule(() -> dismissClickToPlay(deadline), 500L);
 			}
 			else
@@ -406,6 +410,11 @@ final class GenericClientSessionController implements AutoCloseable
 							}
 							if (Boolean.TRUE.equals(ready))
 							{
+								if (System.currentTimeMillis() < loginWorldSettleDeadline)
+								{
+									schedule(() -> dismissClickToPlay(deadline), pollMillis);
+									return;
+								}
 								completeActive("SESSION_LOGGED_IN");
 								return;
 							}
@@ -450,19 +459,45 @@ final class GenericClientSessionController implements AutoCloseable
 			failActive("Timed out dismissing click-to-play");
 			return;
 		}
-		view.worldReady().whenComplete((ready, error) ->
+		view.visibleWidget(CLICK_TO_PLAY_WIDGETS).whenComplete((play, playError) ->
 		{
-			if (error != null)
+			if (playError != null)
 			{
-				failActive(error.getMessage());
+				failActive(playError.getMessage());
 				return;
 			}
-			if (Boolean.TRUE.equals(ready))
+			if (play != null)
 			{
-				completeActive("SESSION_LOGGED_IN_AND_PLAYING");
+				schedule(() -> waitForWorldReady(deadline), pollMillis);
 				return;
 			}
-			schedule(() -> waitForWorldReady(deadline), pollMillis);
+			view.visibleWidget(WELCOME_ROOT_WIDGETS).whenComplete((root, rootError) ->
+			{
+				if (rootError != null)
+				{
+					failActive(rootError.getMessage());
+					return;
+				}
+				if (root != null)
+				{
+					schedule(() -> waitForWorldReady(deadline), pollMillis);
+					return;
+				}
+				view.worldReady().whenComplete((ready, error) ->
+				{
+					if (error != null)
+					{
+						failActive(error.getMessage());
+						return;
+					}
+					if (Boolean.TRUE.equals(ready))
+					{
+						completeActive("SESSION_LOGGED_IN_AND_PLAYING");
+						return;
+					}
+					schedule(() -> waitForWorldReady(deadline), pollMillis);
+				});
+			});
 		});
 	}
 

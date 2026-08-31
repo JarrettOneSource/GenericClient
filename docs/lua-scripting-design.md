@@ -28,7 +28,7 @@ Manifest entries may also declare named module files. For those scripts the
 registry composes a private, cached `gc.require(name)` loader before the entry
 file runs. It can load only that entry's declared UTF-8 Lua files, rejects
 unknown/circular/nil-returning modules, and never exposes `package`, `io`, or a
-filesystem path to Lua. Small scripts remain one file; the bundled AIO Magic and
+filesystem path to Lua. Small scripts remain one file; the external AIO Magic and
 Quest Runner scripts use modules to keep configuration, progress/state, and
 supply policy separate from orchestration.
 
@@ -87,8 +87,8 @@ overlay, bounded A* planning, verified same-plane obstacle actions, and the
 route lifecycle needed by this automation. Its implementation status and limits are documented in
 [`walker-design.md`](walker-design.md). The later Magic and quest slices added
 the object, inventory, equipment, dialogue, bank, GE, spell, and emergency actions they actually
-exercise; their current contract is in
-[`quest-runner-design.md`](quest-runner-design.md).
+exercise; their current contract is in the external
+[`quest-runner-design.md`](https://github.com/Pernasua/GenericClientScripts/blob/main/docs/quest-runner-design.md).
 
 ### Live verification
 

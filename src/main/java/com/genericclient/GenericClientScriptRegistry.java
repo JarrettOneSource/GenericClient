@@ -5,8 +5,6 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
 import com.google.gson.annotations.SerializedName;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -28,126 +26,9 @@ final class GenericClientScriptRegistry
 {
 	private static final String SCHEMA = "genericclient_scripts";
 	private static final String MANIFEST_FILE = "manifest.json";
-	private static final String RESOURCE_DIRECTORY = "/com/genericclient/scripts/";
 	private static final Pattern SCRIPT_ID = Pattern.compile("[a-z0-9][a-z0-9_-]*");
 	private static final Pattern MODULE_FILE =
 		Pattern.compile("[a-z0-9][a-z0-9_/-]*\\.lua");
-	private static final String[] BUNDLED_SCRIPT_FILES =
-	{
-		"account-auditor.lua",
-		"aio-agility.lua",
-		"aio-agility/config.lua",
-		"aio-agility/courses/gnome_stronghold.lua",
-		"aio-agility/progress.lua",
-		"aio-agility/runner.lua",
-		"aio-agility/travel.lua",
-		"aio-melee.lua",
-		"aio-magic.lua",
-		"aio-magic/config.lua",
-		"aio-magic/preparation.lua",
-		"aio-magic/progress.lua",
-		"aio-magic/supplies.lua",
-		"aio-magic/training.lua",
-		"aio-prayer.lua",
-		"aio-prayer/config.lua",
-		"aio-prayer/preparation.lua",
-		"aio-prayer/progress.lua",
-		"aio-prayer/runner.lua",
-		"aio-prayer/training.lua",
-		"capt-arnav.lua",
-		"count-check.lua",
-		"drunken-dwarf.lua",
-		"evil-bob.lua",
-		"evil-bob/island.lua",
-		"mime.lua",
-		"molly.lua",
-		"pinball.lua",
-		"rick-turpentine.lua",
-		"quest-runner.lua",
-		"quest-runner/shared/preparation.lua",
-		"quest-runner/shared/state.lua",
-		"quest-runner/shared/travel.lua",
-		"quest-runner/tree_gnome_village/combat.lua",
-		"quest-runner/tree_gnome_village/config.lua",
-		"quest-runner/tree_gnome_village/interactions.lua",
-		"quest-runner/tree_gnome_village/navigation.lua",
-		"quest-runner/tree_gnome_village/quest.lua",
-		"quest-runner/tree_gnome_village/runner.lua",
-		"quest-runner/tree_gnome_village/state.lua",
-		"quest-runner/fight_arena/combat.lua",
-		"quest-runner/fight_arena/config.lua",
-		"quest-runner/fight_arena/interactions.lua",
-		"quest-runner/fight_arena/navigation.lua",
-		"quest-runner/fight_arena/quest.lua",
-		"quest-runner/fight_arena/runner.lua",
-		"quest-runner/fight_arena/state.lua",
-		"quest-runner/the_grand_tree/config.lua",
-		"quest-runner/the_grand_tree/combat.lua",
-		"quest-runner/the_grand_tree/completion.lua",
-		"quest-runner/the_grand_tree/interactions.lua",
-		"quest-runner/the_grand_tree/navigation.lua",
-		"quest-runner/the_grand_tree/quest.lua",
-		"quest-runner/the_grand_tree/runner.lua",
-		"quest-runner/the_grand_tree/state.lua",
-		"quest-runner/monkey_madness_i/config.lua",
-		"quest-runner/monkey_madness_i/ape_atoll.lua",
-		"quest-runner/monkey_madness_i/garkor.lua",
-		"quest-runner/monkey_madness_i/interactions.lua",
-		"quest-runner/monkey_madness_i/navigation.lua",
-		"quest-runner/monkey_madness_i/puzzle.lua",
-		"quest-runner/monkey_madness_i/preparation.lua",
-		"quest-runner/monkey_madness_i/quest.lua",
-		"quest-runner/monkey_madness_i/runner.lua",
-		"quest-runner/monkey_madness_i/state.lua",
-		"quest-runner/witchs_house/combat.lua",
-		"quest-runner/witchs_house/completion.lua",
-		"quest-runner/witchs_house/config.lua",
-		"quest-runner/witchs_house/experiment.lua",
-		"quest-runner/witchs_house/garden.lua",
-		"quest-runner/witchs_house/quest.lua",
-		"quest-runner/witchs_house/state.lua",
-		"quest-runner/waterfall/config.lua",
-		"quest-runner/waterfall/navigation.lua",
-		"quest-runner/waterfall/preparation.lua",
-		"quest-runner/waterfall/quest.lua",
-		"quest-runner/waterfall/ritual.lua",
-		"quest-runner/waterfall/tomb.lua",
-		"quest-runner/waterfall/state.lua",
-		"walker.lua",
-		"walk-stress.lua"
-	};
-	private static final String[] REMOVED_BUNDLED_SCRIPT_FILES =
-	{
-		"npc-diagnostics.lua",
-		"quest-runner/combat.lua",
-		"quest-runner/completion.lua",
-		"quest-runner/config.lua",
-		"quest-runner/experiment.lua",
-		"quest-runner/garden.lua",
-		"quest-runner/preparation.lua",
-		"quest-runner/state.lua",
-		"quest-runner/travel.lua",
-		"quest-runner/witch.lua"
-	};
-	private static final Set<String> BUNDLED_IDS = Set.of(
-		"account-auditor",
-		"aio-agility",
-		"aio-magic",
-		"aio-melee",
-		"aio-prayer",
-		"capt-arnav",
-		"count-check",
-		"drunken-dwarf",
-		"evil-bob",
-		"lumbridge-varrock",
-		"mime",
-		"molly",
-		"npc-diagnostics",
-		"pinball",
-		"rick-turpentine",
-		"quest-runner",
-		"walk-stress",
-		"walker");
 
 	private final Path directory;
 	private volatile State state;
@@ -156,7 +37,7 @@ final class GenericClientScriptRegistry
 	GenericClientScriptRegistry(Path directory) throws IOException
 	{
 		this.directory = directory;
-		installBundledFiles();
+		installEmptyManifest();
 		reload();
 	}
 
@@ -338,72 +219,13 @@ final class GenericClientScriptRegistry
 		revision++;
 	}
 
-	private void installBundledFiles() throws IOException
+	private void installEmptyManifest() throws IOException
 	{
 		Files.createDirectories(directory);
-		for (String file : REMOVED_BUNDLED_SCRIPT_FILES)
+		if (!Files.exists(directory.resolve(MANIFEST_FILE)))
 		{
-			Files.deleteIfExists(directory.resolve(file));
+			writeManifest(Collections.emptyList());
 		}
-		Path manifestPath = directory.resolve(MANIFEST_FILE);
-		if (!Files.exists(manifestPath))
-		{
-			copyBundledResource(MANIFEST_FILE, false);
-			for (String file : BUNDLED_SCRIPT_FILES)
-			{
-				if (!Files.exists(directory.resolve(file)))
-				{
-					copyBundledResource(file, false);
-				}
-			}
-			return;
-		}
-
-		refreshBundledManifest(readManifest(manifestPath));
-	}
-
-	private void refreshBundledManifest(ManifestFile existing) throws IOException
-	{
-		if (existing.scripts == null)
-		{
-			throw new IOException("Script manifest has no scripts array: " + directory.resolve(MANIFEST_FILE));
-		}
-
-		ManifestFile bundled = readBundledManifest();
-		List<Script> scripts = new ArrayList<>();
-		for (ManifestScript entry : bundled.scripts)
-		{
-			scripts.add(toScript(entry));
-		}
-		for (ManifestScript entry : existing.scripts)
-		{
-			if (entry != null && !BUNDLED_IDS.contains(entry.id))
-			{
-				scripts.add(toScript(entry));
-			}
-		}
-		for (String file : BUNDLED_SCRIPT_FILES)
-		{
-			copyBundledResource(file, true);
-		}
-		scripts.sort(Comparator.comparing(Script::getName, String.CASE_INSENSITIVE_ORDER));
-		writeManifest(scripts);
-	}
-
-	private Script toScript(ManifestScript entry) throws IOException
-	{
-		if (entry == null)
-		{
-			throw new IOException("Script manifest contains a null entry");
-		}
-		validateId(entry.id);
-		return new Script(
-			entry.id,
-			requireText(entry.name, "Script name"),
-			requireText(entry.description, "Script description"),
-			validateFileName(entry.file),
-			validateModules(entry.modules),
-			validateRandomEvents(entry.randomEvents));
 	}
 
 	private static ManifestFile readManifest(Path path) throws IOException
@@ -420,52 +242,6 @@ final class GenericClientScriptRegistry
 		catch (JsonParseException exception)
 		{
 			throw new IOException("Invalid script manifest JSON: " + path, exception);
-		}
-	}
-
-	private static ManifestFile readBundledManifest() throws IOException
-	{
-		try (InputStream input = GenericClientScriptRegistry.class.getResourceAsStream(
-			RESOURCE_DIRECTORY + MANIFEST_FILE))
-		{
-			if (input == null)
-			{
-				throw new IOException("Missing bundled script resource: " + MANIFEST_FILE);
-			}
-			ManifestFile manifest = new Gson().fromJson(
-				new InputStreamReader(input, StandardCharsets.UTF_8),
-				ManifestFile.class);
-			if (manifest == null || manifest.scripts == null)
-			{
-				throw new IOException("Bundled script manifest is empty");
-			}
-			return manifest;
-		}
-		catch (JsonParseException exception)
-		{
-			throw new IOException("Invalid bundled script manifest", exception);
-		}
-	}
-
-	private void copyBundledResource(String file, boolean replace) throws IOException
-	{
-		try (InputStream input = GenericClientScriptRegistry.class.getResourceAsStream(
-			RESOURCE_DIRECTORY + file))
-		{
-			if (input == null)
-			{
-				throw new IOException("Missing bundled script resource: " + file);
-			}
-			Path target = directory.resolve(file);
-			Files.createDirectories(target.getParent());
-			if (replace)
-			{
-				Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING);
-			}
-			else
-			{
-				Files.copy(input, target);
-			}
 		}
 	}
 

@@ -207,7 +207,7 @@ public class GenericClientControlServerTest
 			assertTrue(host.getRecentLogs().contains("INFO refresh"));
 
 			Map<String, Object> listed = post(server, "scripts.list", new LinkedHashMap<>());
-			assertTrue(((java.util.List<?>) listed.get("result")).size() >= 4);
+			assertEquals(1, ((java.util.List<?>) listed.get("result")).size());
 
 			Map<String, Object> behaviorStatus = post(server, "behavior.status", new LinkedHashMap<>());
 			assertEquals("ready", ((Map<String, Object>) behaviorStatus.get("result")).get("state"));

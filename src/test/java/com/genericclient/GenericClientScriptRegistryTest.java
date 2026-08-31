@@ -1,7 +1,6 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.nio.file.Files;
@@ -18,86 +17,16 @@ public class GenericClientScriptRegistryTest
 	public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
 	@Test
-	public void installsAndLoadsTheBundledManifest() throws Exception
+	public void createsAnEmptyManifestForANewInstallation() throws Exception
 	{
+		Path directory = temporaryFolder.newFolder("scripts").toPath();
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(
-			temporaryFolder.newFolder("scripts").toPath());
+			directory);
 
-		assertEquals(16, registry.list().size());
-		assertEquals("Account Auditor", registry.get("account-auditor").getName());
-		assertEquals("AIO Agility Trainer", registry.get("aio-agility").getName());
-		assertTrue(registry.readExecutableSource("aio-agility").contains("agility_xp_unverified"));
-		assertTrue(Files.isRegularFile(
-			temporaryFolder.getRoot().toPath().resolve("scripts/aio-agility/courses/gnome_stronghold.lua")));
-		assertEquals("AIO Melee Trainer", registry.get("aio-melee").getName());
-		assertEquals("AIO Magic Trainer", registry.get("aio-magic").getName());
-		assertEquals("AIO Prayer Trainer", registry.get("aio-prayer").getName());
-		assertTrue(registry.readExecutableSource("aio-prayer").contains("collect_mode = \"bank\""));
-		assertTrue(registry.readSource("aio-magic").contains("combat.cast"));
-		assertTrue(registry.readExecutableSource("aio-magic").contains("Unknown script module"));
-		assertTrue(registry.readExecutableSource("aio-magic").contains("Port Sarim jail corridor"));
-		assertTrue(Files.isRegularFile(
-			temporaryFolder.getRoot().toPath().resolve("scripts/aio-magic/config.lua")));
-		assertEquals("Quest Runner", registry.get("quest-runner").getName());
-		assertTrue(registry.readSource("quest-runner").contains("shed_ready_checkpoint"));
-		assertTrue(registry.readExecutableSource("quest-runner").contains("garden_key_obtained"));
-		assertTrue(registry.readExecutableSource("quest-runner").contains("north_displacement_exhausted"));
-		assertTrue(registry.readExecutableSource("quest-runner").contains("witchs_house_complete"));
-		assertTrue(registry.readExecutableSource("quest-runner").contains("pillar_count_unexpected"));
-		assertTrue(registry.readExecutableSource("quest-runner").contains("equipment.interact"));
-		assertTrue(registry.readExecutableSource("quest-runner").contains("glarial_tomb_exit_ladder_not_observed"));
-		assertTrue(registry.readExecutableSource("quest-runner").contains("warlord_safety_failed"));
-		assertTrue(registry.readExecutableSource("quest-runner").contains("ballista_hit_verified"));
-		assertTrue(registry.readExecutableSource("quest-runner")
-			.contains("fight_arena_encounter_complete"));
-		assertTrue(registry.readExecutableSource("quest-runner")
-			.contains("grand_tree_start_verified"));
-		assertTrue(registry.readExecutableSource("quest-runner")
-			.contains("hazelmere_translation_verified"));
-		assertTrue(registry.readExecutableSource("quest-runner")
-			.contains("glough_warning_verified"));
-		assertTrue(registry.readExecutableSource("quest-runner")
-			.contains("narnode_after_glough_verified"));
-		assertTrue(registry.readExecutableSource("quest-runner")
-			.contains("charlie_investigation_verified"));
-		assertTrue(registry.readExecutableSource("quest-runner")
-			.contains("glough_journal_obtained"));
-		assertTrue(registry.readExecutableSource("quest-runner")
-			.contains("glough_confrontation_verified"));
-		assertTrue(registry.readExecutableSource("quest-runner")
-			.contains("charlie_cell_dialogue_verified"));
-		assertTrue(registry.readExecutableSource("quest-runner")
-			.contains("karamja_glider_verified"));
-		assertTrue(Files.isRegularFile(
-			temporaryFolder.getRoot().toPath().resolve("scripts/quest-runner/tree_gnome_village/state.lua")));
-		assertTrue(Files.isRegularFile(
-			temporaryFolder.getRoot().toPath().resolve("scripts/quest-runner/fight_arena/state.lua")));
-		assertTrue(Files.isRegularFile(
-			temporaryFolder.getRoot().toPath().resolve("scripts/quest-runner/the_grand_tree/state.lua")));
-		assertFalse(registry.readModuleSources("quest-runner").get("waterfall_config")
-			.contains("3867"));
-		assertTrue(registry.readSource("aio-melee").contains("combat.set_style"));
-		assertTrue(registry.readSource("account-auditor").contains("gc.read(\"account\")"));
-		assertEquals("capt-arnav", registry.findRandomEventSolver(5426).getId());
-		assertTrue(registry.readSource("capt-arnav").contains("gc.read(\"widgets\","));
-		assertEquals("count-check",
-			registry.findRandomEventSolver(NpcID.MACRO_COUNTCHECK_SURFACE).getId());
-		assertEquals("count-check",
-			registry.findRandomEventSolver(NpcID.MACRO_COUNTCHECK_UNDERWATER).getId());
-		assertEquals("drunken-dwarf",
-			registry.findRandomEventSolver(NpcID.MACRO_DWARF).getId());
-		assertEquals("mime",
-			registry.findRandomEventSolver(NpcID.MACRO_MIME_INVITATION).getId());
-		assertTrue(registry.readSource("mime").contains("EMOTES[actor.animation]"));
-		assertEquals("molly", registry.findRandomEventSolver(NpcID.GRAB_POSTMAN).getId());
-		assertTrue(registry.readSource("molly").contains("MATCHING_SUSPECT"));
-		assertEquals("pinball", registry.findRandomEventSolver(NpcID.PINBALL_INVITATION).getId());
-		assertTrue(registry.readSource("pinball").contains("VARBITS.score"));
-		assertEquals("rick-turpentine", registry.findRandomEventSolver(NpcID.MACRO_HIGHWAYMAN).getId());
-		assertTrue(registry.readSource("rick-turpentine").contains("reward_message"));
-		assertEquals("Walker", registry.get("walker").getName());
-		assertTrue(registry.readSource("walker").contains("id = \"destination\""));
-		assertTrue(registry.readSource("walker").contains("varrock_center"));
+		assertTrue(registry.list().isEmpty());
+		assertEquals(
+			"{\n  \"schema\": \"genericclient_scripts\",\n  \"scripts\": []\n}\n",
+			Files.readString(directory.resolve("manifest.json")));
 	}
 
 	@Test
@@ -121,44 +50,28 @@ public class GenericClientScriptRegistryTest
 	}
 
 	@Test
-	public void refreshesBundledScriptsAndKeepsCustomScripts() throws Exception
+	public void preservesAnExistingExternalManifest() throws Exception
 	{
-		Path directory = temporaryFolder.newFolder("refresh-scripts").toPath();
+		Path directory = temporaryFolder.newFolder("external-scripts").toPath();
 		Files.writeString(directory.resolve("manifest.json"),
 			"{\n" +
 			"  \"schema\": \"genericclient_scripts\",\n" +
 			"  \"scripts\": [\n" +
-			"    { \"id\": \"quest-runner\", \"name\": \"Quest Runner\", " +
-				"\"description\": \"Stale bundled script\", \"file\": \"quest-runner.lua\" },\n" +
 			"    { \"id\": \"custom\", \"name\": \"Custom\", " +
 				"\"description\": \"Keep me\", \"file\": \"custom.lua\" }\n" +
 			"  ]\n" +
 			"}\n");
-		Files.writeString(directory.resolve("quest-runner.lua"),
-			"return { run = function() return 'stale' end }\n");
-		Files.writeString(directory.resolve("npc-diagnostics.lua"), "return function() end\n");
-		Files.createDirectories(directory.resolve("quest-runner"));
-		Files.writeString(directory.resolve("quest-runner/combat.lua"),
-			"return { execute = function() return 'stale' end }\n");
 		Files.writeString(directory.resolve("custom.lua"),
 			"return { run = function(input) return 'custom' end }\n");
 
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
 
-		assertEquals(17, registry.list().size());
+		assertEquals(1, registry.list().size());
 		assertEquals("Custom", registry.get("custom").getName());
-		assertTrue(registry.readExecutableSource("quest-runner")
-			.contains("local approach = walk(pillar.world, 3, 120)"));
-		assertEquals("capt-arnav", registry.findRandomEventSolver(5426).getId());
-		assertEquals("count-check",
-			registry.findRandomEventSolver(NpcID.MACRO_COUNTCHECK_SURFACE).getId());
-		assertEquals("pinball", registry.findRandomEventSolver(NpcID.PINBALL_INVITATION).getId());
 		assertEquals("return { run = function(input) return 'custom' end }\n",
 			registry.readSource("custom"));
-		assertFalse(Files.exists(directory.resolve("npc-diagnostics.lua")));
-		assertFalse(Files.exists(directory.resolve("quest-runner/combat.lua")));
 		assertTrue(Files.readString(directory.resolve("manifest.json"))
-			.contains("\"schema\": \"genericclient_scripts\""));
+			.contains("\"id\": \"custom\""));
 	}
 
 	@Test

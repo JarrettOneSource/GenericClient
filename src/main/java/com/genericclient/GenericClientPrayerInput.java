@@ -130,7 +130,7 @@ final class GenericClientPrayerInput
 		GenericClientActivityContext activityContext,
 		List<Map<String, Object>> steps)
 	{
-		return clientRead(() -> findPrayerWidget(Setting.PROTECT_FROM_MISSILES, true) != null)
+		return clientRead(() -> visibleWidget(InterfaceID.Prayerbook.CONTAINER) != null)
 			.thenCompose(visible ->
 			{
 				if (visible)
@@ -146,7 +146,7 @@ final class GenericClientPrayerInput
 							return CompletableFuture.completedFuture(false);
 						}
 						return waitFor(
-							() -> findPrayerWidget(Setting.PROTECT_FROM_MISSILES, true) != null);
+							() -> visibleWidget(InterfaceID.Prayerbook.CONTAINER) != null);
 					});
 			});
 	}
@@ -169,20 +169,41 @@ final class GenericClientPrayerInput
 		Widget root = visibleWidget(InterfaceID.Prayerbook.CONTAINER);
 		List<Widget> widgets = new ArrayList<>();
 		collect(root, widgets);
-		String action = enabled ? "Activate" : "Deactivate";
-		for (Widget widget : widgets)
+		return findPrayerActionWidget(
+			widgets,
+			prayer.activeSprite,
+			prayer.disabledSprite,
+			enabled ? "Activate" : "Deactivate");
+	}
+
+	static Widget findPrayerActionWidget(
+		List<Widget> widgets,
+		int activeSprite,
+		int disabledSprite,
+		String action)
+	{
+		for (Widget icon : widgets)
 		{
-			if (clickable(widget) && prayer.matchesSprite(widget.getSpriteId()) &&
-				hasAction(widget, action))
+			int sprite = icon.getSpriteId();
+			if (sprite != activeSprite && sprite != disabledSprite)
 			{
-				return widget;
+				continue;
 			}
-		}
-		for (Widget widget : widgets)
-		{
-			if (clickable(widget) && prayer.matchesSprite(widget.getSpriteId()))
+			for (Widget candidate : widgets)
 			{
-				return widget;
+				if (candidate.getId() == icon.getId() && clickable(candidate) &&
+					hasAction(candidate, action))
+				{
+					return candidate;
+				}
+			}
+			for (Widget candidate = icon.getParent(); candidate != null;
+				candidate = candidate.getParent())
+			{
+				if (clickable(candidate) && hasAction(candidate, action))
+				{
+					return candidate;
+				}
 			}
 		}
 		return null;
@@ -388,11 +409,6 @@ final class GenericClientPrayerInput
 			this.activeSprite = activeSprite;
 			this.disabledSprite = disabledSprite;
 			this.varbit = varbit;
-		}
-
-		private boolean matchesSprite(int sprite)
-		{
-			return sprite == activeSprite || sprite == disabledSprite;
 		}
 
 		private static Setting fromName(String value)

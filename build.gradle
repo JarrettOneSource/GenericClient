@@ -36,7 +36,10 @@ dependencies {
 }
 
 group = 'com.genericclient'
-version = '0.12.0'
+
+tasks.named('jar') {
+	archiveFileName.set('GenericClient-thin.jar')
+}
 
 tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'
@@ -74,5 +77,5 @@ tasks.register('shadowJar', Jar) {
 
 	group = BasePlugin.BUILD_GROUP
 	archiveClassifier.set('shadow')
-	archiveFileName.set("GenericClient-${project.version}-all.jar")
+	archiveFileName.set('GenericClient.jar')
 }

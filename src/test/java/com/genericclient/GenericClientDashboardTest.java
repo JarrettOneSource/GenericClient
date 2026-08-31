@@ -138,10 +138,10 @@ public class GenericClientDashboardTest
 	}
 
 	@Test
-	public void rendersWalkerDestinationsFromTheLuaDescriptor() throws Exception
+	public void rendersInputsFromAnExternalLuaDescriptor() throws Exception
 	{
 		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("walker-ui-scripts").toPath(),
+			temporaryFolder.newFolder("external-ui-scripts").toPath(),
 			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
 			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			reason -> { },
@@ -149,13 +149,23 @@ public class GenericClientDashboardTest
 			message -> { });
 		try
 		{
+			host.saveScript(
+				"travel",
+				"Travel",
+				"Render an external script's destination choices.",
+				"return { inputs = {{ id = 'destination', label = 'Destination', " +
+					"type = 'choice', default = 'grand_exchange', choices = {" +
+					"{ value = 'grand_exchange', label = 'Grand Exchange' }, " +
+					"{ value = 'varrock_center', label = 'Varrock Center' } } }}, " +
+					"run = function(input) return input.destination end }\n")
+				.get(2, java.util.concurrent.TimeUnit.SECONDS);
 			GenericClientScriptsPanel panel = new GenericClientScriptsPanel(host);
 			JComboBox<?> selector = scriptSelector(panel);
-			SwingUtilities.invokeAndWait(() -> selectScript(selector, "walker"));
+			SwingUtilities.invokeAndWait(() -> selectScript(selector, "travel"));
 			waitForLabel(panel, "Destination");
 
 			JComboBox<?> destinations = comboInRow(panel, "Destination");
-			assertEquals(6, destinations.getItemCount());
+			assertEquals(2, destinations.getItemCount());
 			assertEquals("Grand Exchange", destinations.getSelectedItem().toString());
 			assertEquals("Varrock Center", destinations.getItemAt(1).toString());
 		}

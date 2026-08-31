@@ -293,7 +293,7 @@ account at the Grand Exchange. The final waypoint was never re-clicked. The
 comparable pre-fix walk used 15 clicks over 48 ticks and could replace a
 waypoint from four tiles away.
 
-The bundled [`walker.lua`](../src/main/resources/com/genericclient/scripts/walker.lua)
+The external [`walker.lua`](https://github.com/Pernasua/GenericClientScripts/blob/main/scripts/walker.lua)
 keeps its named destination catalog in Lua and exposes it as a dashboard
 dropdown. Its Varrock Center entry targets `{ x = 3210, y = 3424, plane = 0 }`
 with a three-tile arrival radius and a 600-game-tick timeout. The Java plugin

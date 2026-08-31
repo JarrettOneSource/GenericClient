@@ -49,21 +49,34 @@ final class GenericClientDialogueInput
 		this.reporter = reporter;
 	}
 
-	CompletableFuture<Map<String, Object>> continueDialogue(GenericClientActivityContext activityContext)
+	CompletableFuture<Map<String, Object>> continueDialogue(
+		GenericClientActivityContext activityContext,
+		boolean reading)
 	{
+		if (!reading)
+		{
+			return menuInput.interactDirect(this::resolveContinue, activityContext);
+		}
 		return menuInput.interactDirect(
 			this::resolveContinue,
 			activityContext,
 			() -> pacing(visibleContinueText()).toPreInteraction());
 	}
 
-	CompletableFuture<Map<String, Object>> choose(String text, GenericClientActivityContext activityContext)
+	CompletableFuture<Map<String, Object>> choose(
+		String text,
+		GenericClientActivityContext activityContext,
+		boolean reading)
 	{
 		if (text == null || text.trim().isEmpty())
 		{
 			throw new IllegalArgumentException("Dialogue choice text cannot be empty");
 		}
 		String exactText = text.trim();
+		if (!reading)
+		{
+			return menuInput.interactDirect(() -> resolveChoice(exactText), activityContext);
+		}
 		return menuInput.interactDirect(
 			() -> resolveChoice(exactText),
 			activityContext,

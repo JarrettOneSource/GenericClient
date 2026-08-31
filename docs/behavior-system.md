@@ -91,6 +91,10 @@ bounded at nine seconds so existing dialogue action deadlines remain stable.
 Action receipts expose the scale, human-readable style, word count, effective
 WPM, and applied milliseconds.
 
+Time-critical quest prompts can set `reading = false` on `dialogue.continue` or
+`dialogue.choose`. This skips only the reading delay for that exact semantic
+action; it does not change the account profile or disable later dialogue pace.
+
 A composite client interaction evaluates the two independent post-action
 decisions allowed by its activity. For walking, one interaction contains any
 needed camera turn, one recorded-template cursor movement, and the click that

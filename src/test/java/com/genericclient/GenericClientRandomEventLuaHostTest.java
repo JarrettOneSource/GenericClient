@@ -256,6 +256,12 @@ public class GenericClientRandomEventLuaHostTest
 			reason -> { },
 			behavior,
 			message -> { });
+		host.saveScript(
+			"walker",
+			"Walker",
+			"Test script used to exercise standalone-run blocking.",
+			"return { run = function() gc.await { event = 'game.tick' }; return true end }\n")
+			.get(2, TimeUnit.SECONDS);
 		return new HostFixture(host, behavior);
 	}
 

@@ -52,25 +52,22 @@ restores a logged-out session before script execution resumes.
 
 ## Lua scripts
 
-Editable scripts are installed in:
+GenericClient creates an empty external script registry at:
 
 ```text
 ~/.runelite/genericclient/scripts/
 ```
 
-`manifest.json` registers the scripts shown in Automations. Each entry has a
-stable id, display name, description, and Lua filename. Press **Reload
-manifest** after editing it manually.
+Install the maintained script catalog from
+[GenericClientScripts](https://github.com/Pernasua/GenericClientScripts), or
+create scripts through the dashboard or MCP. `manifest.json` registers the
+scripts shown in Automations. Press **Reload manifest** after editing files
+manually.
 
 An optional `random_events` array registers a standalone script as the solver
 for those random-event NPC IDs. GenericClient detects owned events internally,
 interrupts normal automation, and never requires RuneLite's Random Events plugin.
-The bundled Mime solver remembers the last performed animation before each
-answer panel and clicks the matching emote until the reward is verified.
-The Molly solver maps her live appearance ID to the matching suspect, follows
-that suspect with the crane, and requires both capture and reward messages.
-Rick Turpentine's solver accepts his restitution gift and verifies the reward
-message before the interrupted script resumes.
+Solver implementations live in GenericClientScripts.
 The lifecycle and solver template are in
 [`docs/random-events.md`](docs/random-events.md).
 
@@ -92,35 +89,8 @@ Each module returns one Lua value, normally a small table of data and functions.
 GenericClient reads only the declared files; Lua still has no unrestricted
 filesystem or `package` access.
 
-`walk-stress.lua` is a manual three-click stress script that uses the existing ground-tile
-interaction. `walker.lua` exposes a destination dropdown and can walk to the
-Grand Exchange, Varrock, Edgeville, Falador, Draynor, or Lumbridge through the
-same public `walk.to` action.
-
-`account-auditor.lua` produces a read-only skills/items/quests/cash receipt and
-stays available for manual refresh. `aio-melee.lua` trains Attack, Strength, or
-Defence to a declared target, selects the matching combat style, chooses its
-method from live level state, guards low Hitpoints and account caps, supports a
-cooperative stop-after-kill action, disengages at the target, and returns an XP
-receipt. Its currently implemented low-level method is deliberately limited to
-Lumbridge goblins; later methods belong in the same script.
-
-`aio-magic.lua` owns its just-in-time GE restocking, exact bank loadout, staff changes,
-spell selection, emergency HP recovery, and exact target stop. Its first implemented
-method uses the strongest available Strike spell from the Port Sarim jail corridor
-against targetable inmates. It selects offensive staff autocast when the chosen
-spell supports it and retains verified `combat.cast` as the manual fallback. The core walker opens
-the public entrance when required; the locked cell doors are not route targets.
-`aio-agility.lua` trains to an exact target through position-derived course
-states. Its first member-first method is the basic Gnome Stronghold course,
-including segmented travel, Femi's entrance dialogue, mid-course resume,
-level-up handling, and a compact XP/hour/ETA overlay.
-`quest-runner.lua` reduces live quest state into resumable phases. Witch's
-House, Waterfall Quest, Tree Gnome Village, Fight Arena, and The Grand Tree are
-isolated in their own folders and live-proven through normalized completion.
-The Grand Tree proof includes the invasion plans, TUZO watchtower, just-in-time
-combat loadout, Black Demon safespot, post-fight King handoff, Daconia root
-search, and final reward dialogue.
+The catalog README documents its included automations and script-specific
+validation state.
 
 The current scripting interface intentionally contains only:
 
@@ -281,10 +251,9 @@ the synthetic cursor at the active behavior profile's stable idle edge. The
 next action randomizes a different coordinate along that same side before
 generating its return path.
 
-On first 0.11 startup, a version-1 through version-6 manifest is upgraded and its
-bundled scripts are refreshed. Custom entries and files are kept. Custom scripts
-written for 0.8 must change their root return value from a function to
-`{ run = function(input) ... end }`.
+GenericClient never refreshes or replaces external scripts. When no manifest is
+present it creates an empty one; installing or updating a script catalog is an
+explicit operation.
 
 The active design is documented in
 [`docs/lua-scripting-design.md`](docs/lua-scripting-design.md). The packet-driven
@@ -401,11 +370,11 @@ Log lines use the `[GenericClient]` prefix.
 
 Artifacts:
 
-- `build/libs/generic-client-0.12.0.jar`
-- `build/libs/GenericClient-0.12.0-all.jar`
+- `build/libs/GenericClient-thin.jar`
+- `build/libs/GenericClient.jar`
 
 Run the standalone artifact with:
 
 ```bash
-java -ea -jar build/libs/GenericClient-0.12.0-all.jar
+java -ea -jar build/libs/GenericClient.jar
 ```

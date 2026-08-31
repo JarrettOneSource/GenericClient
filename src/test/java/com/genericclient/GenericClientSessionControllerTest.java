@@ -5,9 +5,9 @@ import static org.junit.Assert.assertTrue;
 
 import java.awt.Point;
 import java.awt.Rectangle;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -125,6 +125,44 @@ public class GenericClientSessionControllerTest
 			assertEquals(new Point(382, 251), input.moves.get(0));
 			assertEquals(new Point(385, 330), input.moves.get(1));
 			assertEquals(2, input.clicks.get());
+		}
+	}
+
+	@Test
+	public void waitsForALateClickToPlayScreen() throws Exception
+	{
+		FakeView view = new FakeView();
+		view.gameState = GameState.LOGIN_SCREEN;
+		view.launcherDisplayName = "Player";
+		view.canvasWidth = 765;
+		view.canvasHeight = 503;
+		FakeInput input = new FakeInput();
+		ScheduledExecutorService lateScreen = Executors.newSingleThreadScheduledExecutor();
+		input.onClick = () ->
+		{
+			if (input.clicks.get() == 1)
+			{
+				view.gameState = GameState.LOGGED_IN;
+				view.worldReady = true;
+				lateScreen.schedule(() -> view.widgets.put(
+					InterfaceID.WelcomeScreen.PLAY,
+					new Rectangle(300, 300, 170, 60)), 1_600L, TimeUnit.MILLISECONDS);
+			}
+			else
+			{
+				view.widgets.remove(InterfaceID.WelcomeScreen.PLAY);
+			}
+		};
+
+		try (Fixture fixture = fixture(view, input))
+		{
+			assertEquals("SESSION_LOGGED_IN_AND_PLAYING",
+				fixture.controller.ensureLoggedIn().get(4, TimeUnit.SECONDS));
+			assertEquals(2, input.clicks.get());
+		}
+		finally
+		{
+			lateScreen.shutdownNow();
 		}
 	}
 
@@ -284,7 +322,7 @@ public class GenericClientSessionControllerTest
 		private int canvasWidth = 800;
 		private int canvasHeight = 600;
 		private volatile boolean worldReady;
-		private final Map<Integer, Rectangle> widgets = new HashMap<>();
+		private final Map<Integer, Rectangle> widgets = new ConcurrentHashMap<>();
 
 		@Override
 		public GameState gameState()

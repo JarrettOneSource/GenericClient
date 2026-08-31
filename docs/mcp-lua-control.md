@@ -259,7 +259,7 @@ return gc.read("scene", {
 })
 ```
 
-The core walker uses this same frame as the local authority over its bundled
+The core walker uses this same frame as the local authority for external
 global map. It may execute an accessible same-plane traversal object on the
 exact oriented edge, then verifies the edge or object changed before resuming.
 Explicit locked-door feedback or an unchanged obstacle returns an `unreachable`
@@ -294,7 +294,7 @@ return {
 }
 ```
 
-The bundled Account Auditor uses this frame and stays idle after its first
+The GenericClientScripts Account Auditor uses this frame and stays idle after its first
 snapshot. Run it from Automations, then use its **Refresh** action whenever a
 new receipt is needed. It does not start automatically.
 
@@ -402,6 +402,9 @@ local protection = gc.await {
 The initial surface supports Protect from Magic, Missiles, and Melee. It rejects
 insufficient real Prayer levels or depleted current Prayer points instead of
 clicking a disabled widget.
+
+`dialogue.continue` and `dialogue.choose` accept `reading = false` for an exact
+time-critical prompt. Ordinary dialogue remains paced by the account profile.
 
 Composite workflows return their individual click receipts. `bank.loadout`
 verifies an exact inventory allowlist; `ge.buy` preserves unrelated offers and
@@ -536,6 +539,10 @@ Standalone scripts live in:
 ```text
 ~/.runelite/genericclient/scripts/
 ```
+
+GenericClient creates an empty manifest on first use and never overwrites it.
+The maintained catalog is published separately at
+[GenericClientScripts](https://github.com/Pernasua/GenericClientScripts).
 
 `manifest.json` is the registry shown on the dashboard's Automations page and returned by
 `script_list`:
