@@ -17,13 +17,13 @@ Browser adapters: HTML, HTTP, SSE
                  |
                  v
 FleetController
-  snapshot() / get(id) / start(spec) / stop(id) / command(id, request)
+  snapshot() / get(id) / armLauncher(spec) / start(spec) / stop(id) / command(id, request)
                  |
-       +---------+----------+-------------+
-       |                    |             |
-InstanceRegistry    ProcessSupervisor   Client RPC
-       |                    |             |
-Linux metrics        dense bootstrap   status/actions
+       +---------+----------+----------------+-------------+
+       |                    |                |             |
+InstanceRegistry    ProcessSupervisor  LauncherBroker   Client RPC
+       |                    |                |             |
+Linux metrics      stock/dense bootstrap  Unix handoff  status/actions
 ```
 
 The web server is an adapter over `FleetController`. The existing CLI and the
@@ -37,7 +37,7 @@ The dashboard uses exact mode names:
 | Mode | Meaning |
 | --- | --- |
 | `stock` | Normal RuneLite presentation and plugin startup. |
-| `dense-x11` | Current dense runtime: native Linux JVM, minimal RuneLite graph, AWT canvas under Xvfb, software renderer retained, and ordinary canvas presentation suppressed. |
+| `dense-x11` | Current dense runtime: native Linux JVM, minimal RuneLite graph, AWT canvas under Xvfb, software rendering targeted at approximately 1 FPS, and ordinary canvas presentation suppressed. |
 | `render-gated` | Reserved for a later injected-client draw gate. |
 | `protocol-native` | Reserved for a future AWT-free client kernel. |
 
@@ -69,6 +69,8 @@ PSS/USS/RSS/swap, CPU, uptime, and supported controls.
 | `GET` | `/api/instances/:id` | One normalized instance record. |
 | `GET` | `/api/instances/:id/screenshot` | Cached PNG; `?refresh=1` forces a client frame. |
 | `POST` | `/api/instances` | Start a dense instance from a validated spec. |
+| `POST` | `/api/launcher/requests` | Arm an identity for the next matching official Jagex Launcher Play handoff. |
+| `POST` | `/api/launcher/requests/:id/cancel` | Cancel one pending official-launch request. |
 | `POST` | `/api/instances/:id/stop` | Stop the selected instance. |
 | `POST` | `/api/instances/:id/commands` | Execute one allowlisted domain command. |
 | `GET` | `/health` | Harness health and monitor state. |
@@ -81,6 +83,22 @@ generic raw-RPC web route.
 JSON request bodies are bounded. Instance IDs use the descriptor-safe
 identifier grammar. The server binds `127.0.0.1` by default and emits restrictive
 content-security, frame, MIME, and referrer headers.
+
+## Official launcher ownership
+
+`GenericClient-RuneLite.exe` is a mode-selecting bridge, not a replacement
+account launcher. Without a running Harness it starts `GenericClientLauncher`,
+which registers GenericClient and delegates to ordinary full `RuneLite.main`.
+The first normal client keeps the configured MCP port; another normal client
+falls back to an ephemeral port if that port is occupied.
+
+With the Harness running, the same bridge transfers the launcher-provided
+`JX_*` environment over a mode-0600 Unix socket. Those values stay in memory,
+are allowlisted into the child process, and never enter a descriptor, receipt,
+URL, log, or browser response. An armed request supplies the Harness identity
+and optional RuneLite profile. An ordinary unarmed Play action is also accepted
+and receives a generated identity. Stock RuneLite is the default in both cases;
+dense mode must be explicitly requested.
 
 ## Event cadence
 
@@ -104,8 +122,8 @@ The page contains:
    script/activity, memory, CPU, and lifecycle controls.
 3. Detail drawer with full status, recent receipts/messages, safety, behavior,
    automation, script controls, and refreshed screenshot.
-4. Start dialog for instance ID, heap size, JAR, RuneLite profile, and optional
-   AppCDS archive. The server owns the fleet runtime directory.
+4. Add-client dialog whose primary path arms a normal Jagex Launcher Play
+   handoff and whose advanced path starts a local dense test client.
 5. Empty, reconnecting, degraded, and rejected-descriptor states.
 
 Every mutating control names its instance. Bulk mutation is not part of the
@@ -127,3 +145,6 @@ first dashboard.
    viewport sizes.
 9. Tests, PMD/coverage, MCP tests, Harness tests, and live receipts pass from a
    clean tree based on newest `origin/main`.
+10. With no Harness, the Linux bridge selects full stock RuneLite. With the
+    Harness, the same bridge transfers an official session through the Unix
+    handoff without exposing its values.

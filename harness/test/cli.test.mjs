@@ -27,8 +27,12 @@ test("parses positional flags values and equals options", () => {
 
 test("instances emits a stable empty JSON result", async (context) => {
   const runtime = await temporaryDirectory(context, "genericclient-cli-empty-");
+  const instances = path.join(runtime, "instances");
   const lines = [];
-  const result = await run(["instances", "--runtime", runtime], { log: (line) => lines.push(line) });
+  const result = await run(
+    ["instances", "--runtime", runtime, "--directory", instances],
+    { log: (line) => lines.push(line) },
+  );
 
   assert.deepEqual(result, { instances: [], rejected: [] });
   assert.deepEqual(JSON.parse(lines[0]), result);
@@ -90,11 +94,17 @@ test("stop terminates the explicitly selected healthy instance", async (context)
 
 test("serve starts the loopback dashboard and shuts down cleanly", async (context) => {
   const runtime = await temporaryDirectory(context, "genericclient-cli-dashboard-");
+  const instances = path.join(runtime, "instances");
+  const launcherSocket = path.join(runtime, "launcher", "handoff.sock");
   const child = spawn(process.execPath, [
     path.join(harnessDirectory, "src/cli.mjs"),
     "serve",
     "--runtime",
     runtime,
+    "--directory",
+    instances,
+    "--launcher-socket",
+    launcherSocket,
     "--port",
     "0",
     "--poll",
@@ -117,6 +127,9 @@ test("serve starts the loopback dashboard and shuts down cleanly", async (contex
   assert.ok(receipt.port > 0);
   assert.equal(receipt.poll_interval_millis, 50);
   assert.equal(receipt.screenshot_ttl_millis, 250);
+  assert.equal(receipt.instance_directory, instances);
+  assert.equal(receipt.launcher_socket, launcherSocket);
+  assert.equal(receipt.jagex_launch_mode, "stock");
 
   const health = await fetch(`${receipt.url}/health`);
   assert.equal(health.status, 200);
@@ -144,6 +157,10 @@ test("serve rejects non-loopback and invalid cadence configuration", async () =>
   await assert.rejects(
     () => run(["serve", "--poll", "0"], { log() {} }),
     /poll must be a positive integer/,
+  );
+  await assert.rejects(
+    () => run(["serve", "--jagex-mode", "direct"], { log() {} }),
+    /jagex-mode must be stock or dense/,
   );
 });
 

@@ -52,8 +52,9 @@ restores a logged-out session before script execution resumes.
 
 ## Linux fleet dashboard
 
-The external Harness serves one loopback page for all supervised GenericClient
-processes. It discovers atomic instance descriptors, validates PID and endpoint
+The external Harness serves one loopback page for all GenericClient processes,
+including ordinary clients started by pressing Play in the official Jagex
+Launcher. It discovers atomic instance descriptors, validates PID and endpoint
 identity, streams changed fleet state, reports proportional memory and CPU,
 proxies cached screenshots, and requires an explicit instance ID for every
 mutation.
@@ -67,12 +68,15 @@ npm --prefix harness run dashboard -- \
   --port 3765
 ```
 
-Open `http://127.0.0.1:3765`, then launch dense instances from the page or with
-`node harness/src/cli.mjs launch-dense --runtime "$runtime_dir" --instance client-01`.
+Open `http://127.0.0.1:3765`. The primary **New client** flow arms an identity;
+select the character in the official Jagex Launcher and press Play. If the
+Harness is not running, that same bridge starts full normal RuneLite directly
+with GenericClient and MCP. The advanced dense form remains available for
+displayless local tests.
 The server is loopback-only and does not expose client control endpoints or a
-raw RPC proxy. Dense Linux instances are displayless Xvfb clients that retain
-the software renderer while suppressing normal canvas presentation; they are
-not `java.awt.headless=true` processes. See
+raw RPC proxy. Dense Linux instances are displayless Xvfb clients with a 1 FPS
+render target and suppressed normal canvas presentation; they are not
+`java.awt.headless=true` processes. See
 [`docs/linux-harness-poc.md`](docs/linux-harness-poc.md) for operation and live
 proof boundaries and [`docs/harness-dashboard.md`](docs/harness-dashboard.md)
 for the web contract.

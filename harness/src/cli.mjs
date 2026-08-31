@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 
 import { callInstance } from "./client.mjs";
 import { createDashboardRuntime } from "./dashboard-runtime.mjs";
+import { defaultLauncherSocket } from "./launcher-handoff-path.mjs";
 import { readProcessMemory, summarizeFleet } from "./memory.mjs";
 import { ProcessSupervisor } from "./process-supervisor.mjs";
 import { InstanceRegistry } from "./registry.mjs";
@@ -21,9 +22,9 @@ export async function run(argv, io = console) {
   const runtimeDirectory = path.resolve(
     options.runtime || process.env.GENERICCLIENT_RUNTIME_DIR || path.join(harnessDirectory, "run"),
   );
-  const instanceDirectory = path.resolve(
-    options.directory || path.join(runtimeDirectory, "instances"),
-  );
+  const instanceDirectory = path.resolve(options.directory ||
+    process.env.GENERICCLIENT_INSTANCE_DIRECTORY ||
+    path.join(os.homedir(), ".runelite", "genericclient", "instances"));
   const registry = new InstanceRegistry(instanceDirectory);
   const supervisor = new ProcessSupervisor({
     runtimeDirectory,
@@ -72,6 +73,10 @@ export async function run(argv, io = console) {
         options["screenshot-ttl"] || "10000",
         "screenshot-ttl",
       );
+      const launcherSocket = path.resolve(
+        options["launcher-socket"] || defaultLauncherSocket(),
+      );
+      const launcherMode = jagexMode(options["jagex-mode"] || "stock");
       const dashboard = createDashboardRuntime({
         runtimeDirectory,
         instanceDirectory,
@@ -81,6 +86,8 @@ export async function run(argv, io = console) {
         port,
         pollIntervalMs,
         screenshotTtlMs,
+        launcherSocket,
+        launcherMode,
       });
       const address = await dashboard.start();
       installShutdownHandlers(dashboard);
@@ -91,6 +98,8 @@ export async function run(argv, io = console) {
         instance_directory: instanceDirectory,
         poll_interval_millis: pollIntervalMs,
         screenshot_ttl_millis: screenshotTtlMs,
+        launcher_socket: launcherSocket,
+        jagex_launch_mode: launcherMode === "dense" ? "dense-x11" : "stock",
       };
       break;
     }
@@ -230,6 +239,13 @@ function portInteger(value) {
 function loopbackHost(value) {
   if (!["127.0.0.1", "::1", "localhost"].includes(value)) {
     throw new Error("host must be 127.0.0.1, ::1, or localhost");
+  }
+  return value;
+}
+
+function jagexMode(value) {
+  if (!["stock", "dense"].includes(value)) {
+    throw new Error("jagex-mode must be stock or dense");
   }
   return value;
 }

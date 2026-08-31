@@ -41,3 +41,57 @@ test("bridge surfaces GenericClient errors", async (context) => {
 
   await assert.rejects(() => bridge.call("lua.eval", { code: "return 1" }), /Lua REPL is busy/);
 });
+
+test("bridge resolves one selected Harness instance on every call", async (context) => {
+  const calls = [];
+  const first = await startServer(context, async (request, response) => {
+    calls.push(JSON.parse(await readBody(request)));
+    json(response, 200, { ok: true, result: "first" });
+  });
+  const second = await startServer(context, async (request, response) => {
+    calls.push(JSON.parse(await readBody(request)));
+    json(response, 200, { ok: true, result: "second" });
+  });
+  const endpoints = [first, second];
+  const requestedIds = [];
+  const bridge = new GenericClientBridge({
+    instanceId: "main-client",
+    registry: {
+      resolve: async (instanceId) => {
+        requestedIds.push(instanceId);
+        return { control_url: endpoints.shift() };
+      },
+    },
+  });
+
+  assert.equal(await bridge.call("status"), "first");
+  assert.equal(await bridge.call("status"), "second");
+  assert.deepEqual(requestedIds, ["main-client", "main-client"]);
+  assert.deepEqual(calls, [
+    { method: "status", params: {} },
+    { method: "status", params: {} },
+  ]);
+});
+
+async function startServer(context, handler) {
+  const server = createHttpServer((request, response) => {
+    void handler(request, response);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => server.close());
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+async function readBody(request) {
+  let value = "";
+  request.setEncoding("utf8");
+  for await (const chunk of request) {
+    value += chunk;
+  }
+  return value;
+}
+
+function json(response, status, value) {
+  response.writeHead(status, { "Content-Type": "application/json" });
+  response.end(JSON.stringify(value));
+}

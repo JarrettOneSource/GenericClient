@@ -5,6 +5,17 @@ import { randomUUID } from "node:crypto";
 
 const INSTANCE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const HEAP_SIZE = /^\d+[mMgG]$/;
+const LAUNCHER_ENVIRONMENT_KEYS = Object.freeze([
+  "JX_SESSION_ID",
+  "JX_CHARACTER_ID",
+  "JX_DISPLAY_NAME",
+  "JX_ACCESS_TOKEN",
+  "JX_REFRESH_TOKEN",
+  "DISPLAY",
+  "WAYLAND_DISPLAY",
+  "XAUTHORITY",
+  "DBUS_SESSION_BUS_ADDRESS",
+]);
 
 export class ProcessSupervisor {
   constructor(
@@ -35,16 +46,36 @@ export class ProcessSupervisor {
   }
 
   start(spec = {}) {
-    const normalized = this.normalizeSpec(spec);
+    return this.#start(
+      this.normalizeSpec({ ...spec, launch_mode: "dense", launch_source: "harness_direct" }),
+      {},
+      [],
+    );
+  }
+
+  startFromLauncher({ spec = {}, environment = {}, arguments: clientArguments = [] } = {}) {
+    return this.#start(
+      this.normalizeSpec({
+        ...spec,
+        launch_mode: spec.launch_mode || "stock",
+        launch_source: "jagex_launcher",
+      }),
+      launcherEnvironment(environment),
+      launcherArguments(clientArguments),
+    );
+  }
+
+  #start(normalized, inheritedEnvironment, clientArguments) {
     const logDirectory = path.join(this.runtimeDirectory, "logs");
     mkdirSync(logDirectory, { recursive: true });
     mkdirSync(this.instanceDirectory, { recursive: true });
     const logPath = path.join(logDirectory, `${normalized.instance_id}.log`);
-    const logFd = openSync(logPath, "a", 0o600);
     const bootstrap = path.join(this.harnessDirectory, "bin", "genericclient-bootstrap");
     const env = {
       ...this.environment,
+      ...inheritedEnvironment,
       GENERICCLIENT_INSTANCE_ID: normalized.instance_id,
+      GENERICCLIENT_LAUNCH_MODE: normalized.launch_mode,
       GENERICCLIENT_RUNTIME_DIR: this.runtimeDirectory,
       GENERICCLIENT_INSTANCE_DIRECTORY: this.instanceDirectory,
       GENERICCLIENT_JAR: normalized.jar,
@@ -60,8 +91,15 @@ export class ProcessSupervisor {
       env.GENERICCLIENT_RUNELITE_PROFILE = normalized.runelite_profile;
     }
 
-    const executable = env.DISPLAY ? bootstrap : "xvfb-run";
-    const args = env.DISPLAY ? [] : ["-a", bootstrap];
+    if (normalized.launch_mode === "stock" && !env.DISPLAY) {
+      throw new Error("Stock RuneLite requires DISPLAY from the Jagex Launcher session");
+    }
+    const useVirtualDisplay = normalized.launch_mode === "dense" && !env.DISPLAY;
+    const executable = useVirtualDisplay ? "xvfb-run" : bootstrap;
+    const args = useVirtualDisplay
+      ? ["-a", bootstrap, ...clientArguments]
+      : clientArguments;
+    const logFd = openSync(logPath, "a", 0o600);
     let child;
     try {
       child = this.spawnImpl(executable, args, {
@@ -73,13 +111,14 @@ export class ProcessSupervisor {
       closeSync(logFd);
     }
     if (!Number.isSafeInteger(child?.pid) || child.pid <= 0) {
-      throw new Error("Dense client supervisor did not start");
+      throw new Error(`${normalized.launch_mode} client supervisor did not start`);
     }
     child.unref?.();
     this.launchSpecs.set(normalized.instance_id, normalized);
     return {
       instance_id: normalized.instance_id,
-      mode: "dense-x11",
+      mode: normalized.launch_mode === "dense" ? "dense-x11" : "stock",
+      launch_source: normalized.launch_source,
       supervisor_pid: child.pid,
       descriptor_directory: this.instanceDirectory,
       log_path: logPath,
@@ -122,7 +161,11 @@ export class ProcessSupervisor {
     if (!INSTANCE_ID.test(instanceId)) {
       throw new Error("instance_id must use 1-128 safe identifier characters");
     }
-    const heap = spec.heap || "512m";
+    const launchMode = spec.launch_mode || "dense";
+    if (!["stock", "dense"].includes(launchMode)) {
+      throw new Error("launch_mode must be stock or dense");
+    }
+    const heap = spec.heap || (launchMode === "stock" ? "768m" : "512m");
     if (!HEAP_SIZE.test(heap)) {
       throw new Error("heap must be a size such as 512m or 1g");
     }
@@ -144,8 +187,37 @@ export class ProcessSupervisor {
       archive,
       archive_output: archiveOutput,
       runelite_profile: runeliteProfile,
+      launch_mode: launchMode,
+      launch_source: spec.launch_source === "jagex_launcher"
+        ? "jagex_launcher"
+        : "harness_direct",
     };
   }
+}
+
+function launcherEnvironment(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("launcher environment must be an object");
+  }
+  const selected = {};
+  for (const key of LAUNCHER_ENVIRONMENT_KEYS) {
+    if (value[key] == null || value[key] === "") {
+      continue;
+    }
+    if (typeof value[key] !== "string" || value[key].length > 65_536) {
+      throw new Error(`launcher environment ${key} is invalid`);
+    }
+    selected[key] = value[key];
+  }
+  return selected;
+}
+
+function launcherArguments(value) {
+  if (!Array.isArray(value) || value.length > 100 ||
+      value.some((argument) => typeof argument !== "string" || argument.length > 4_096)) {
+    throw new Error("launcher arguments are invalid");
+  }
+  return [...value];
 }
 
 function optionalExistingPath(value, label, exists) {

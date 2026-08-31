@@ -24,6 +24,7 @@ export class FleetController {
       readProcessMemory = defaultReadProcessMemory,
       now = () => Date.now(),
       launchReservationMs = 120_000,
+      launcherBroker = null,
     },
   ) {
     if (!Number.isSafeInteger(launchReservationMs) || launchReservationMs <= 0) {
@@ -36,6 +37,7 @@ export class FleetController {
     this.readProcessMemory = readProcessMemory;
     this.now = now;
     this.launchReservationMs = launchReservationMs;
+    this.launcherBroker = launcherBroker;
     this.pendingLaunches = new Map();
     this.sequence = 0;
   }
@@ -43,17 +45,26 @@ export class FleetController {
   async snapshot() {
     const scanned = await this.registry.scan();
     this.#reconcileLaunches(scanned.instances);
+    this.launcherBroker?.reconcile(scanned.instances);
     this.metricsSampler?.forgetMissing(scanned.instances.map((instance) => instance.pid));
     const instances = await Promise.all(
       scanned.instances.map((instance) => this.#normalizeInstance(instance)),
     );
+    const launcher = this.launcherStatus();
     const snapshot = {
       schema: "genericclient_fleet.v1",
       sequence: ++this.sequence,
       generated_at_epoch_millis: this.now(),
-      summary: summarize(instances, scanned.rejected, this.pendingLaunches.size),
+      summary: summarize(
+        instances,
+        scanned.rejected,
+        this.pendingLaunches.size,
+        launcher.pending.length,
+        launcher.starting.length,
+      ),
       instances: instances.sort((left, right) => left.instance_id.localeCompare(right.instance_id)),
       pending_launches: [...this.pendingLaunches.keys()].sort(),
+      launcher,
       rejected: scanned.rejected,
     };
     return snapshot;
@@ -102,6 +113,31 @@ export class FleetController {
     }
     const descriptor = await this.registry.resolve(instanceId);
     return this.supervisor.stop(descriptor);
+  }
+
+  async armLauncher(spec) {
+    if (!this.launcherBroker) {
+      throw new Error("Jagex launcher handoff is unavailable");
+    }
+    return this.launcherBroker.arm(spec);
+  }
+
+  cancelLauncher(instanceId) {
+    if (!this.launcherBroker) {
+      throw new Error("Jagex launcher handoff is unavailable");
+    }
+    return this.launcherBroker.cancel(instanceId);
+  }
+
+  launcherStatus() {
+    return this.launcherBroker?.status() || {
+      available: false,
+      transport: null,
+      socket_path: null,
+      default_mode: null,
+      pending: [],
+      starting: [],
+    };
   }
 
   async refresh(instanceId) {
@@ -231,7 +267,13 @@ function normalizeMemory(memory) {
   };
 }
 
-function summarize(instances, rejected, pendingLaunches) {
+function summarize(
+  instances,
+  rejected,
+  pendingLaunches,
+  pendingJagexLaunches,
+  startingJagexLaunches,
+) {
   const memory = {
     rss_bytes: 0,
     pss_bytes: 0,
@@ -254,8 +296,9 @@ function summarize(instances, rejected, pendingLaunches) {
   return {
     healthy: instances.filter((instance) => instance.health === "healthy").length,
     degraded: instances.filter((instance) => instance.health === "degraded").length,
-    starting: pendingLaunches + instances.filter((instance) =>
+    starting: pendingLaunches + startingJagexLaunches + instances.filter((instance) =>
       instance.game_state === "STARTING" || instance.lifecycle === "created").length,
+    awaiting_jagex_play: pendingJagexLaunches,
     attention_required: instances.filter((instance) => instance.attention_required).length,
     logged_in: instances.filter((instance) => instance.logged_in).length,
     breaking: instances.filter((instance) => instance.breaking).length,

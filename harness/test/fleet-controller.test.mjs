@@ -47,6 +47,14 @@ test("normalizes mixed fleets and aggregates health resources and activity", asy
   const fleet = await controller.snapshot();
   assert.equal(fleet.schema, "genericclient_fleet.v1");
   assert.equal(fleet.sequence, 1);
+  assert.deepEqual(fleet.launcher, {
+    available: false,
+    transport: null,
+    socket_path: null,
+    default_mode: null,
+    pending: [],
+    starting: [],
+  });
   assert.deepEqual(forgotten, [[101, 202, 303]]);
   assert.deepEqual(
     fleet.instances.map((instance) => instance.mode),
@@ -71,6 +79,7 @@ test("normalizes mixed fleets and aggregates health resources and activity", asy
     healthy: 1,
     degraded: 1,
     starting: 0,
+    awaiting_jagex_play: 0,
     attention_required: 1,
     logged_in: 1,
     breaking: 1,
@@ -239,6 +248,41 @@ test("routes only allowlisted commands to one explicit instance", async () => {
     /id is required/,
   );
   await assert.rejects(() => controller.command(null, { command: "scripts.stop" }), /instance_id/);
+});
+
+test("delegates Jagex launch requests without accepting launcher credentials", async () => {
+  const calls = [];
+  const launcherBroker = {
+    arm: async (spec) => {
+      calls.push({ operation: "arm", spec });
+      return { instance_id: spec.instance_id, state: "awaiting_jagex_play" };
+    },
+    cancel: (instanceId) => {
+      calls.push({ operation: "cancel", instanceId });
+      return { instance_id: instanceId, cancelled: true };
+    },
+    status: () => ({
+      available: true,
+      transport: "unix",
+      socket_path: "/tmp/launcher.sock",
+      default_mode: "stock",
+      pending: [],
+      starting: [],
+    }),
+    reconcile() {},
+  };
+  const controller = new FleetController({
+    registry: { scan: async () => ({ instances: [], rejected: [] }) },
+    supervisor: {},
+    metricsSampler: null,
+    launcherBroker,
+  });
+
+  assert.equal((await controller.armLauncher({ instance_id: "normal" })).instance_id, "normal");
+  assert.equal(controller.cancelLauncher("normal").cancelled, true);
+  assert.equal(controller.launcherStatus().default_mode, "stock");
+  assert.deepEqual(calls.map((call) => call.operation), ["arm", "cancel"]);
+  assert.equal(JSON.stringify(calls).includes("JX_SESSION_ID"), false);
 });
 
 function descriptor(instanceId, pid, dense, displayName) {

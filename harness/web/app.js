@@ -8,8 +8,13 @@ const elements = {
   cardTemplate: document.querySelector("#instance-card-template"),
   registryWarning: document.querySelector("#registry-warning"),
   rejectedList: document.querySelector("#rejected-list"),
+  launcherStatus: document.querySelector("#launcher-status"),
+  launcherRequests: document.querySelector("#launcher-requests"),
+  launcherRequestsTitle: document.querySelector("#launcher-requests-title"),
+  launcherRequestList: document.querySelector("#launcher-request-list"),
   detailsDialog: document.querySelector("#details-dialog"),
   startDialog: document.querySelector("#start-dialog"),
+  jagexLaunchForm: document.querySelector("#jagex-launch-form"),
   startForm: document.querySelector("#start-form"),
   detailTitle: document.querySelector("#details-title"),
   detailSubtitle: document.querySelector("#details-subtitle"),
@@ -63,6 +68,7 @@ function bindEvents() {
   document.querySelector("#empty-start").addEventListener("click", openStartDialog);
   document.querySelector("#close-start").addEventListener("click", () => elements.startDialog.close());
   document.querySelector("#cancel-start").addEventListener("click", () => elements.startDialog.close());
+  document.querySelector("#cancel-dense-start").addEventListener("click", () => elements.startDialog.close());
   document.querySelector("#close-details").addEventListener("click", () => elements.detailsDialog.close());
   document.querySelector("#refresh-frame").addEventListener("click", (event) => {
     if (state.selectedId) {
@@ -79,6 +85,8 @@ function bindEvents() {
   elements.scriptList.addEventListener("click", handleScriptRun);
   elements.scriptActionForm.addEventListener("submit", handleScriptAction);
   elements.startForm.addEventListener("submit", handleStart);
+  elements.jagexLaunchForm.addEventListener("submit", handleJagexLaunch);
+  elements.launcherRequestList.addEventListener("click", handleLauncherRequestAction);
   elements.detailsDialog.addEventListener("close", () => {
     state.selectedId = null;
   });
@@ -129,6 +137,7 @@ function acceptFleet(fleet) {
   state.fleet = fleet;
   renderSummary(fleet);
   renderRejected(fleet.rejected || []);
+  renderLauncher(fleet.launcher);
   renderCards(fleet.instances);
   elements.generation.textContent = `Snapshot ${formatTimestamp(fleet.generated_at_epoch_millis)}`;
   elements.sequence.textContent = `SEQ ${String(fleet.sequence).padStart(4, "0")}`;
@@ -150,7 +159,11 @@ function renderSummary(fleet) {
   setText(summaryElements.total, summary.total_instances ?? fleet.instances.length);
   setText(summaryElements.healthy, summary.healthy ?? 0);
   setText(summaryElements.degraded, `${summary.degraded ?? 0} degraded`);
-  setText(summaryElements.starting, `${summary.starting ?? 0} starting`);
+  const awaitingPlay = summary.awaiting_jagex_play ?? 0;
+  setText(
+    summaryElements.starting,
+    `${summary.starting ?? 0} starting${awaitingPlay ? ` · ${awaitingPlay} awaiting Play` : ""}`,
+  );
   setText(summaryElements.attention, summary.attention_required ?? 0);
   summaryElements.attentionCell.classList.toggle("has-attention", (summary.attention_required || 0) > 0);
   setText(summaryElements.breaking, `${summary.breaking ?? 0} on break`);
@@ -160,6 +173,48 @@ function renderSummary(fleet) {
   setText(summaryElements.uss, `${formatBytes(memory.uss_bytes)} private`);
   setText(summaryElements.cpu, formatPercent(summary.cpu_percent));
   setText(summaryElements.rejected, `${summary.rejected ?? 0} rejected`);
+}
+
+function renderLauncher(launcher) {
+  const available = Boolean(launcher?.available);
+  const pending = Array.isArray(launcher?.pending) ? launcher.pending : [];
+  const starting = Array.isArray(launcher?.starting) ? launcher.starting : [];
+  elements.launcherStatus.textContent = available
+    ? `${humanize(launcher.default_mode)} handoff ready` +
+      `${pending.length ? ` · ${pending.length} armed` : ""}` +
+      `${starting.length ? ` · ${starting.length} starting` : ""}`
+    : "Jagex handoff unavailable";
+  elements.launcherRequests.hidden = pending.length + starting.length === 0;
+  elements.launcherRequestsTitle.textContent = pending.length && starting.length
+    ? "Official launcher activity"
+    : pending.length
+      ? "Waiting for Jagex Launcher Play"
+      : "Starting Jagex Launcher client";
+  elements.launcherRequestList.replaceChildren();
+  for (const request of pending) {
+    const item = document.createElement("li");
+    const copy = document.createElement("span");
+    const cancel = document.createElement("button");
+    const character = request.expected_display_name
+      ? ` · ${request.expected_display_name}`
+      : " · next Play handoff";
+    copy.textContent = `${request.instance_id}${character} · ${humanize(request.launch_mode)}`;
+    cancel.type = "button";
+    cancel.className = "button button-quiet";
+    cancel.dataset.action = "cancel-launcher-request";
+    cancel.dataset.instanceId = request.instance_id;
+    cancel.textContent = "Cancel";
+    item.append(copy, cancel);
+    elements.launcherRequestList.append(item);
+  }
+  for (const launch of starting) {
+    const item = document.createElement("li");
+    const identity = launch.launcher_display_name
+      ? ` · ${launch.launcher_display_name}`
+      : "";
+    item.textContent = `${launch.instance_id}${identity} · registering ${humanize(launch.launch_mode)}`;
+    elements.launcherRequestList.append(item);
+  }
 }
 
 function renderRejected(rejected) {
@@ -447,14 +502,7 @@ async function handleStart(event) {
   if (!elements.startForm.reportValidity()) {
     return;
   }
-  const form = new FormData(elements.startForm);
-  const spec = {};
-  for (const [key, rawValue] of form) {
-    const value = rawValue.trim();
-    if (value) {
-      spec[key] = value;
-    }
-  }
+  const spec = formSpec(elements.startForm);
   const button = elements.startForm.querySelector("button[type='submit']");
   await withBusy(button, async () => {
     const receipt = await api("/api/instances", { method: "POST", body: spec });
@@ -465,11 +513,55 @@ async function handleStart(event) {
   });
 }
 
+async function handleJagexLaunch(event) {
+  event.preventDefault();
+  if (!elements.jagexLaunchForm.reportValidity()) {
+    return;
+  }
+  const spec = formSpec(elements.jagexLaunchForm);
+  const button = elements.jagexLaunchForm.querySelector("button[type='submit']");
+  await withBusy(button, async () => {
+    const receipt = await api("/api/launcher/requests", { method: "POST", body: spec });
+    elements.startDialog.close();
+    elements.jagexLaunchForm.reset();
+    elements.jagexLaunchForm.elements.launch_mode.value = "stock";
+    showToast(
+      `Armed ${receipt.result.instance_id}. Select the character in Jagex Launcher and press Play.`,
+    );
+  });
+}
+
+async function handleLauncherRequestAction(event) {
+  const button = event.target.closest("button[data-action='cancel-launcher-request']");
+  if (!button) {
+    return;
+  }
+  await withBusy(button, async () => {
+    const instanceId = button.dataset.instanceId;
+    await api(`/api/launcher/requests/${encodeURIComponent(instanceId)}/cancel`, {
+      method: "POST",
+      body: {},
+    });
+    showToast(`Cancelled Jagex launch request ${instanceId}`);
+  });
+}
+
 function openStartDialog() {
   if (!elements.startDialog.open) {
     elements.startDialog.showModal();
-    requestAnimationFrame(() => elements.startForm.elements.instance_id.focus());
+    requestAnimationFrame(() => elements.jagexLaunchForm.elements.instance_id.focus());
   }
+}
+
+function formSpec(form) {
+  const spec = {};
+  for (const [key, rawValue] of new FormData(form)) {
+    const value = rawValue.trim();
+    if (value) {
+      spec[key] = value;
+    }
+  }
+  return spec;
 }
 
 function refreshScreenshot(instanceId, button) {

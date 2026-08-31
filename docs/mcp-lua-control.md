@@ -7,7 +7,8 @@ plugin's loopback bridge.
 ```text
 Codex
   -> GenericClient MCP server (stdio)
-      -> http://127.0.0.1:17343/rpc
+      -> configured URL or healthy instance descriptor
+          -> http://127.0.0.1:<client-port>/rpc
           -> Lua host
               -> snapshots, behavior controller, walker, and synthetic input
 ```
@@ -50,6 +51,24 @@ their MCP configuration through `~/.codex/config.toml`, as described by the
 
 If the RuneLite setting **MCP bridge port** changes, set `GENERICCLIENT_URL` to
 the same port in the MCP server configuration.
+
+The direct URL remains the zero-configuration path for one normally launched
+client: the first process binds `127.0.0.1:17343`. When another normal RuneLite
+process finds that port occupied, GenericClient binds an ephemeral port and
+publishes it in the shared instance registry instead of failing startup.
+
+For a Harness-managed or multi-client setup, configure the MCP process with:
+
+```text
+GENERICCLIENT_INSTANCE_DIRECTORY=/home/user/.runelite/genericclient/instances
+GENERICCLIENT_INSTANCE_ID=main-character
+```
+
+The MCP bridge revalidates that descriptor and resolves its current loopback
+endpoint on every tool call, so it survives a client restart. With exactly one
+healthy descriptor, `GENERICCLIENT_INSTANCE_ID` may be omitted. With several,
+run separately named MCP registrations with one explicit instance ID each;
+there is never a silent global active client.
 
 ## MCP tools
 

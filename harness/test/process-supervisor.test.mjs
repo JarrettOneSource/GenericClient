@@ -37,6 +37,7 @@ test("normalizes a dense launch and returns a detached supervisor receipt", asyn
   assert.equal(launches[0].options.detached, true);
   assert.equal(launches[0].options.env.TEST_ENV, "kept");
   assert.equal(launches[0].options.env.GENERICCLIENT_INSTANCE_ID, "dense-one");
+  assert.equal(launches[0].options.env.GENERICCLIENT_LAUNCH_MODE, "dense");
   assert.equal(launches[0].options.env.GENERICCLIENT_HEAP_SIZE, "1g");
   assert.equal(launches[0].options.env.GENERICCLIENT_RUNELITE_PROFILE, "profile-one");
   assert.equal(supervisor.specFor("dense-one").instance_id, "dense-one");
@@ -58,6 +59,47 @@ test("uses an existing display without adding Xvfb", async (context) => {
   assert.match(launch.executable, /genericclient-bootstrap$/);
   assert.deepEqual(launch.args, []);
   assert.equal(launch.options.env.DISPLAY, ":44");
+});
+
+test("launches a Jagex handoff as stock RuneLite without retaining credentials", async (context) => {
+  const directory = await temporaryDirectory(context);
+  let launch;
+  const supervisor = createSupervisor(directory, {
+    environment: { DISPLAY: ":1", BASE_ENV: "kept" },
+    spawnImpl: (executable, args, options) => {
+      launch = { executable, args, options };
+      return { pid: 2468, unref() {} };
+    },
+    existsImpl: () => true,
+  });
+
+  const receipt = supervisor.startFromLauncher({
+    spec: {
+      instance_id: "jagex-stock",
+      runelite_profile: "main-profile",
+    },
+    environment: {
+      JX_SESSION_ID: "session-secret",
+      JX_CHARACTER_ID: "character-secret",
+      JX_DISPLAY_NAME: "Main Character",
+      DISPLAY: ":22",
+      UNRELATED_SECRET: "ignored",
+    },
+    arguments: ["--safe-mode"],
+  });
+
+  assert.equal(receipt.mode, "stock");
+  assert.equal(receipt.launch_source, "jagex_launcher");
+  assert.equal(receipt.heap, "768m");
+  assert.match(launch.executable, /genericclient-bootstrap$/);
+  assert.deepEqual(launch.args, ["--safe-mode"]);
+  assert.equal(launch.options.env.GENERICCLIENT_LAUNCH_MODE, "stock");
+  assert.equal(launch.options.env.GENERICCLIENT_RUNELITE_PROFILE, "main-profile");
+  assert.equal(launch.options.env.JX_SESSION_ID, "session-secret");
+  assert.equal(launch.options.env.DISPLAY, ":22");
+  assert.equal("UNRELATED_SECRET" in launch.options.env, false);
+  assert.equal(JSON.stringify(receipt).includes("session-secret"), false);
+  assert.equal(JSON.stringify(supervisor.specFor("jagex-stock")).includes("session-secret"), false);
 });
 
 test("stops one explicit process and waits for exit", async (context) => {

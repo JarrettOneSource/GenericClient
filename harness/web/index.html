@@ -25,7 +25,7 @@
         <span id="connection-label">Connecting</span>
       </div>
       <button class="button button-primary" id="open-start" type="button">
-        <span aria-hidden="true">＋</span> Launch instance
+        <span aria-hidden="true">＋</span> New client
       </button>
     </div>
   </header>
@@ -83,9 +83,17 @@
       <ul id="rejected-list"></ul>
     </section>
 
+    <section class="launcher-requests" id="launcher-requests" aria-labelledby="launcher-requests-title" hidden>
+      <div>
+        <p class="eyebrow">Official handoff</p>
+        <h2 id="launcher-requests-title">Waiting for Jagex Launcher Play</h2>
+      </div>
+      <ul id="launcher-request-list"></ul>
+    </section>
+
     <section class="fleet-toolbar" aria-label="Fleet display status">
       <p><span class="pulse-dot" aria-hidden="true"></span><span id="stream-status">Opening event stream</span></p>
-      <p class="mode-key"><span>MODE</span> dense-x11 = displayless Xvfb, software render</p>
+      <p class="launcher-key"><span>JX</span><span id="launcher-status">Connecting handoff</span></p>
     </section>
 
     <section class="instance-grid" id="instance-grid" aria-label="GenericClient instances"></section>
@@ -94,8 +102,8 @@
       <div class="empty-orbit" aria-hidden="true"><span>0</span></div>
       <p class="eyebrow">Registry clear</p>
       <h2>No clients are running</h2>
-      <p>Launch a dense Linux instance here. It will join the fleet when its local control endpoint is healthy.</p>
-      <button class="button button-primary" id="empty-start" type="button">Launch first instance</button>
+      <p>Launch RuneLite normally from the official Jagex Launcher, or start a local dense test client.</p>
+      <button class="button button-primary" id="empty-start" type="button">Add first client</button>
     </section>
   </main>
 
@@ -254,51 +262,99 @@
     <div class="dialog-topline"></div>
     <header class="dialog-header">
       <div>
-        <p class="eyebrow">Process supervisor</p>
-        <h2 id="start-title">Launch dense instance</h2>
-        <p class="dialog-subtitle">Native Linux JVM · Xvfb · presentation suppressed</p>
+        <p class="eyebrow">Official session first</p>
+        <h2 id="start-title">Add a client</h2>
+        <p class="dialog-subtitle">Normal Jagex Launcher RuneLite is the default path</p>
       </div>
       <button class="close-button" id="close-start" type="button" aria-label="Close launch form">×</button>
     </header>
-    <form id="start-form">
-      <div class="form-grid">
-        <label class="field field-wide">
-          <span>Instance ID</span>
-          <input name="instance_id" required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,127}" placeholder="client-03" autocomplete="off">
-          <small>Stable identity used for every card, command, and process receipt.</small>
-        </label>
-        <label class="field">
-          <span>Maximum heap</span>
-          <input name="heap" required pattern="[0-9]+[mMgG]" value="384m" autocomplete="off">
-        </label>
-        <label class="field">
-          <span>RuneLite profile <em>optional</em></span>
-          <input name="runelite_profile" placeholder="profile name" autocomplete="off">
-        </label>
-        <label class="field field-wide">
-          <span>GenericClient JAR <em>optional</em></span>
-          <input name="jar" placeholder="Default: build/libs/GenericClient.jar" autocomplete="off">
-        </label>
-        <details class="advanced-fields field-wide">
-          <summary>AppCDS options</summary>
-          <div class="form-grid nested-grid">
+    <div class="launch-dialog-body">
+      <section class="official-launch">
+        <div class="launch-method-heading">
+          <span class="method-number">01</span>
+          <div>
+            <p class="eyebrow">Recommended · full RuneLite</p>
+            <h3>Jagex Launcher</h3>
+          </div>
+          <span class="state-chip">Stock</span>
+        </div>
+        <p class="launch-method-copy">Arm an identity here, then select that character in the official Jagex Launcher and press Play. The launcher still creates the session; its bridge hands the new process to this Harness without writing credentials.</p>
+        <form id="jagex-launch-form">
+          <div class="form-grid">
             <label class="field field-wide">
-              <span>Shared archive</span>
-              <input name="archive" placeholder="/path/to/dense.jsa" autocomplete="off">
+              <span>Harness instance ID</span>
+              <input name="instance_id" required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,127}" placeholder="main-character" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>Character display name <em>optional</em></span>
+              <input name="expected_display_name" placeholder="Exact launcher name" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>RuneLite profile <em>optional</em></span>
+              <input name="runelite_profile" placeholder="profile name" autocomplete="off">
             </label>
             <label class="field field-wide">
-              <span>Write archive on exit</span>
-              <input name="archive_output" placeholder="/path/to/new-dense.jsa" autocomplete="off">
+              <span>Client presentation</span>
+              <select name="launch_mode">
+                <option value="stock" selected>Full normal RuneLite</option>
+                <option value="dense">Dense Xvfb client</option>
+              </select>
+              <small>The official Launcher supplies the session in either mode. Stock remains the default.</small>
             </label>
           </div>
-        </details>
-      </div>
-      <p class="form-note">The instance inherits the Harness runtime directory. It appears here only after its descriptor, PID, identity, and local health endpoint agree.</p>
-      <footer class="dialog-actions">
-        <button class="button button-quiet" id="cancel-start" type="button">Cancel</button>
-        <button class="button button-primary" type="submit">Launch instance</button>
-      </footer>
-    </form>
+          <footer class="dialog-actions">
+            <button class="button button-quiet" id="cancel-start" type="button">Cancel</button>
+            <button class="button button-primary" type="submit">Arm Jagex launch</button>
+          </footer>
+        </form>
+      </section>
+
+      <details class="dense-launch">
+        <summary>
+          <span class="method-number">02</span>
+          <span><strong>Local dense client</strong><small>Xvfb test path without a new launcher session</small></span>
+        </summary>
+        <form id="start-form">
+          <div class="form-grid">
+            <label class="field field-wide">
+              <span>Instance ID</span>
+              <input name="instance_id" required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,127}" placeholder="dense-test-01" autocomplete="off">
+              <small>Stable identity used for every card, command, and process receipt.</small>
+            </label>
+            <label class="field">
+              <span>Maximum heap</span>
+              <input name="heap" required pattern="[0-9]+[mMgG]" value="384m" autocomplete="off">
+            </label>
+            <label class="field">
+              <span>RuneLite profile <em>optional</em></span>
+              <input name="runelite_profile" placeholder="profile name" autocomplete="off">
+            </label>
+            <label class="field field-wide">
+              <span>GenericClient JAR <em>optional</em></span>
+              <input name="jar" placeholder="Default: build/libs/GenericClient.jar" autocomplete="off">
+            </label>
+            <details class="advanced-fields field-wide">
+              <summary>AppCDS options</summary>
+              <div class="form-grid nested-grid">
+                <label class="field field-wide">
+                  <span>Shared archive</span>
+                  <input name="archive" placeholder="/path/to/dense.jsa" autocomplete="off">
+                </label>
+                <label class="field field-wide">
+                  <span>Write archive on exit</span>
+                  <input name="archive_output" placeholder="/path/to/new-dense.jsa" autocomplete="off">
+                </label>
+              </div>
+            </details>
+          </div>
+          <p class="form-note">Dense mode starts a native JVM directly and cannot create a new Jagex character session. Use it for the displayless Harness path or with a session received from the official launcher.</p>
+          <footer class="dialog-actions">
+            <button class="button button-quiet" id="cancel-dense-start" type="button">Cancel</button>
+            <button class="button button-primary" type="submit">Launch dense test</button>
+          </footer>
+        </form>
+      </details>
+    </div>
   </dialog>
 
   <div class="toast-region" id="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>

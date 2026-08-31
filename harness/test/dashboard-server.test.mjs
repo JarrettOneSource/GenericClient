@@ -92,6 +92,28 @@ test("bounds and validates JSON mutations and maps domain failures", async (cont
   assert.equal((await fetch(`${fixture.url}/api/raw-rpc`)).status, 404);
 });
 
+test("arms and cancels normal Jagex Launcher handoffs through typed routes", async (context) => {
+  const fixture = await startFixture(context);
+  const armed = await postJson(`${fixture.url}/api/launcher/requests`, {
+    instance_id: "normal-client",
+    expected_display_name: "Normal Character",
+    launch_mode: "stock",
+  });
+  assert.equal(armed.status, 202);
+  assert.equal((await armed.json()).result.state, "awaiting_jagex_play");
+  const cancelled = await postJson(
+    `${fixture.url}/api/launcher/requests/normal-client/cancel`,
+    {},
+  );
+  assert.equal(cancelled.status, 200);
+  assert.equal((await cancelled.json()).result.cancelled, true);
+  assert.deepEqual(
+    fixture.controller.calls.slice(-2).map((call) => call.operation),
+    ["arm-launcher", "cancel-launcher"],
+  );
+  assert.equal(fixture.monitor.refreshCalls, 2);
+});
+
 test("serves isolated cached screenshots with validators and forced refresh", async (context) => {
   const fixture = await startFixture(context);
   const first = await fetch(`${fixture.url}/api/instances/alpha/screenshot`);
@@ -187,6 +209,27 @@ function fakeController() {
     async command(instanceId, command) {
       this.calls.push({ operation: "command", instanceId, command });
       return { instance_id: instanceId, command: command.command, result: { accepted: true } };
+    },
+    async armLauncher(spec) {
+      this.calls.push({ operation: "arm-launcher", spec });
+      return {
+        request_id: "request-one",
+        instance_id: spec.instance_id,
+        state: "awaiting_jagex_play",
+      };
+    },
+    cancelLauncher(instanceId) {
+      this.calls.push({ operation: "cancel-launcher", instanceId });
+      return { instance_id: instanceId, cancelled: true };
+    },
+    launcherStatus() {
+      return {
+        available: true,
+        transport: "unix",
+        socket_path: "/tmp/test-launcher.sock",
+        default_mode: "stock",
+        pending: [],
+      };
     },
   };
 }

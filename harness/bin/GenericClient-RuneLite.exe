@@ -2,4 +2,20 @@
 set -euo pipefail
 
 bridge_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if [[ -n "${GENERICCLIENT_BRIDGE_PROBE_OUTPUT:-}" ]]; then
+	exec "${bridge_dir}/genericclient-bootstrap" "$@"
+fi
+
+handoff_client="${bridge_dir}/../src/launcher-handoff-client.mjs"
+if [[ -n "${JX_SESSION_ID:-}" && -n "${JX_CHARACTER_ID:-}" ]] &&
+	command -v node >/dev/null 2>&1 && [[ -f "${handoff_client}" ]]; then
+	if node "${handoff_client}" "$@"; then
+		exit 0
+	else
+		status=$?
+		if [[ ${status} -ne 75 ]]; then
+			exit "${status}"
+		fi
+	fi
+fi
 exec "${bridge_dir}/genericclient-bootstrap" "$@"

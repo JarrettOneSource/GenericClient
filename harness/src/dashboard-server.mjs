@@ -144,6 +144,7 @@ export class DashboardServer {
           ok: true,
           schema: "genericclient_dashboard.v1",
           monitor: this.monitor.status(),
+          launcher: this.controller.launcherStatus(),
         });
         return;
       }
@@ -164,6 +165,23 @@ export class DashboardServer {
         const result = await this.controller.start(spec);
         await this.#refreshAfterMutation();
         sendJson(response, 202, { ok: true, result });
+        return;
+      }
+      if (pathname === "/api/launcher/requests") {
+        requireMethod(request, ["POST"]);
+        const spec = await readJsonObject(request, this.bodyLimitBytes);
+        const result = await this.controller.armLauncher(spec);
+        await this.#refreshAfterMutation();
+        sendJson(response, 202, { ok: true, result });
+        return;
+      }
+      const launcherCancel = parseLauncherCancelRoute(pathname);
+      if (launcherCancel) {
+        requireMethod(request, ["POST"]);
+        await readJsonObject(request, this.bodyLimitBytes, { allowEmpty: true });
+        const result = this.controller.cancelLauncher(launcherCancel.instanceId);
+        await this.#refreshAfterMutation();
+        sendJson(response, 200, { ok: true, result });
         return;
       }
 
@@ -358,6 +376,23 @@ function parseInstanceRoute(pathname) {
     throw new HttpError(400, "Instance ID is invalid");
   }
   return { instanceId, action: match[2] || null };
+}
+
+function parseLauncherCancelRoute(pathname) {
+  const match = pathname.match(/^\/api\/launcher\/requests\/([^/]+)\/cancel$/);
+  if (!match) {
+    return null;
+  }
+  let instanceId;
+  try {
+    instanceId = decodeURIComponent(match[1]);
+  } catch {
+    throw new HttpError(400, "Instance ID encoding is invalid");
+  }
+  if (!INSTANCE_ID_PATTERN.test(instanceId)) {
+    throw new HttpError(400, "Instance ID is invalid");
+  }
+  return { instanceId };
 }
 
 function encodeFleetEvent(snapshot) {

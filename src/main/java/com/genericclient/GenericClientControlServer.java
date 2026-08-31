@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
@@ -80,7 +81,20 @@ final class GenericClientControlServer implements AutoCloseable
 		{
 			throw new IllegalStateException("GenericClient control server is already running");
 		}
-		server = HttpServer.create(new InetSocketAddress("127.0.0.1", requestedPort), 0);
+		try
+		{
+			server = HttpServer.create(new InetSocketAddress("127.0.0.1", requestedPort), 0);
+		}
+		catch (BindException exception)
+		{
+			if (requestedPort == 0)
+			{
+				throw exception;
+			}
+			server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+			reporter.accept("CONTROL_PORT_BUSY requested=" + requestedPort +
+				" fallback=" + server.getAddress().getPort());
+		}
 		executor = Executors.newCachedThreadPool(runnable ->
 		{
 			Thread thread = new Thread(runnable, "GenericClient-Control");

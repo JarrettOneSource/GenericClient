@@ -146,6 +146,7 @@ function semanticFingerprint(snapshot) {
     summary: snapshot?.summary,
     instances: snapshot?.instances,
     pending_launches: snapshot?.pending_launches,
+    launcher: snapshot?.launcher,
     rejected: snapshot?.rejected,
   });
 }

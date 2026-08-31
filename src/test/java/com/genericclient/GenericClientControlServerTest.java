@@ -1,10 +1,13 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 import com.google.gson.Gson;
 import java.net.URI;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -22,6 +25,40 @@ public class GenericClientControlServerTest
 {
 	@Rule
 	public TemporaryFolder temporaryFolder = new TemporaryFolder();
+
+	@Test
+	public void fallsBackToAnEphemeralPortWhenAnotherNormalClientOwnsTheConfiguredPort()
+		throws Exception
+	{
+		ServerSocket occupied = new ServerSocket();
+		occupied.bind(new InetSocketAddress("127.0.0.1", 0));
+		int requestedPort = occupied.getLocalPort();
+		List<String> messages = new java.util.ArrayList<>();
+		GenericClientControlServer server = new GenericClientControlServer(
+			requestedPort,
+			null,
+			null,
+			null,
+			() -> CompletableFuture.completedFuture("SESSION_LOGGED_OUT"),
+			() -> CompletableFuture.completedFuture("SESSION_LOGGED_IN"),
+			Collections::emptyMap,
+			() -> "",
+			text -> CompletableFuture.completedFuture("ACCOUNT_NOTE_UPDATED"),
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			messages::add);
+		try
+		{
+			server.start();
+			assertNotEquals(requestedPort, URI.create(server.getUrl()).getPort());
+			assertTrue(messages.stream().anyMatch(message -> message.startsWith("CONTROL_PORT_BUSY")));
+		}
+		finally
+		{
+			server.close();
+			occupied.close();
+		}
+	}
 
 	@Test
 	@SuppressWarnings("unchecked")

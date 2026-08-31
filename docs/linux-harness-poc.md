@@ -10,6 +10,9 @@ This PoC does not require a Jagex login. The later live-login step should only
 have to replace fake launcher credentials with the environment inherited from
 the official Launcher.
 
+The official Jagex Launcher remains the only session bootstrap. The Harness
+does not mint, store, refresh, or reconstruct launcher credentials.
+
 ## Proof boundaries
 
 | Seam | PoC receipt |
@@ -23,6 +26,7 @@ the official Launcher.
 | Memory evidence | Linux `smaps_rollup` receipts report RSS, PSS, USS, anonymous/file/shared proportional memory, and the marginal PSS of the second client. |
 | Shared runtime eligibility | Both clients use the same JRE and GenericClient JAR inode; an AppCDS archive is attempted only when it is compatible with the exact runtime. |
 | Fleet operator surface | One loopback web page discovers all healthy instances, streams changed status over SSE, proxies cached screenshots, reports Linux PSS/USS/CPU, and routes lifecycle or domain commands through explicit instance IDs. |
+| Normal-launch preservation | When no Harness is running, the Linux bridge starts full stock RuneLite through `GenericClientLauncher`, with GenericClient and the normal MCP port. When the Harness is running, the bridge transfers the official handoff over a private Unix socket and the Harness starts stock RuneLite by default. |
 
 ## Live-login work deliberately deferred
 
@@ -145,6 +149,31 @@ The inspector exposes recent client activity, normalized behavior/automation/
 safety state, the installed script catalog, and only the Harness command
 allowlist.
 
+The default descriptor directory is the same registry used by ordinary
+RuneLite:
+
+```text
+~/.runelite/genericclient/instances/
+```
+
+This gives the operator two compatible paths:
+
+1. Open the official Jagex Launcher normally and press Play. If the Harness is
+   absent, the bridge starts full RuneLite directly. If the Harness is running,
+   it receives the handoff and supervises the same full RuneLite process.
+2. In the web page, arm an instance ID and optional exact display name, then
+   press Play for that character in the official Launcher. Repeating this for
+   more characters creates independently routed instances. The local dense
+   form remains an advanced test path and does not create a Jagex session.
+
+The official Launcher has no documented character-selection CLI on Linux. The
+current Harness owns the secure Play handoff and process association; automating
+the launcher's character picker remains a later adapter that requires an
+installed, signed-in Launcher. Jagex still documents the official Launcher as
+unsupported on Linux, so this project uses Jagex's Windows launcher through
+Wine rather than a third-party account launcher:
+<https://support.runescape.com/hc/en-gb/articles/33992563142673-Downloading-the-Jagex-Launcher-on-Linux>.
+
 The server binds loopback only because the first version has mutating controls
 and no user authentication. Use an SSH or private-network tunnel rather than
 binding it to a public interface. The browser never receives a client's
@@ -159,6 +188,8 @@ Useful server options are:
 --port <0-65535>             HTTP port; 0 selects an ephemeral test port
 --poll <milliseconds>        serialized fleet sample interval
 --screenshot-ttl <millis>    per-instance PNG cache lifetime
+--launcher-socket <path>     private official-launcher handoff socket
+--jagex-mode <stock|dense>   default supervised Play mode; stock is default
 ```
 
 `GET /api/events` carries only changed fleet snapshots plus heartbeat events;
@@ -183,6 +214,24 @@ instance inspector with a 765-pixel frame and nine normalized facts, a working
 launch dialog with focused identity input, and no JavaScript runtime
 exceptions.
 
+After adding official-launch ownership, the Harness armed two simultaneous
+stock requests, rendered both exact and wildcard character associations, and
+reported a stock Unix handoff ready while the fleet was empty. Browser
+inspection confirmed that **New client** opens the normal Jagex form first,
+selects full RuneLite by default, focuses the instance identity, keeps dense
+mode collapsed, and raises no runtime exceptions. A real shell bridge and Wine
+CreateProcess both transferred fake `JX_*` values into an in-memory Harness
+handoff without printing or persisting them. The actual signed-in Launcher
+remains deliberately untested until it is installed and the user is ready to
+log into characters.
+
+The final end-to-end handoff receipt armed `handoff-dense`, invoked the real
+shell bridge with fake session and character values, matched the exact launcher
+display name, started the dense client through the Harness, registered its
+distinct PID and endpoint, and reached `LOGIN_SCREEN`. Searching the complete
+runtime directory found neither fake session nor character value. The browser
+snapshot contained only the allowed display name and normalized instance state.
+
 The post-rebase run also exposed and fixed a first-capture race: one dense
 client initially supplied its all-black initialization buffer. Screenshot
 capture now copies the frame synchronously before asynchronous PNG encoding and
@@ -194,12 +243,13 @@ also preserves legitimately black clients by returning the second blank frame.
 
 `dense-x11` is displayless, but it is not Java true-headless. Each process still
 creates the injected Jagex client, AWT event queue, RuneLite canvas, and a
-software-rendered frame under Xvfb. The dense callback forwards completed
-buffers to on-demand screenshot listeners but suppresses ordinary canvas
-presentation. It does not yet gate the injected client's raster cadence. The
-20 ms client cycle, game ticks, deferred events, client-thread work, snapshots,
-and synthetic input retain their normal ordering. This is the current
-reliability-preserving mode and is suitable for the multi-client Harness PoC.
+software-rendered frame under Xvfb. Dense startup enables low-memory mode and a
+1 FPS unlocked rendering target. The dense callback forwards completed buffers
+to on-demand screenshot listeners but suppresses ordinary canvas presentation.
+The 20 ms client cycle, game ticks, deferred events, client-thread work,
+snapshots, and synthetic input retain their normal ordering. This is the
+current reliability-preserving mode and is suitable for the multi-client
+Harness PoC.
 
 Running with `java.awt.headless=true` cannot host the current RuneLite/Jagex
 canvas. A materially leaner next mode should gate expensive final raster and
@@ -283,8 +333,8 @@ comparison is still required before treating AppCDS as a capacity improvement.
 - Each dense instance currently owns one Xvfb process. A shared or sharded Xvfb
   experiment may reduce the marginal footprint further.
 - `dense-x11` is not `java.awt.headless=true`; it intentionally retains the AWT
-  canvas and software renderer so screenshots and client semantics remain
-  reliable. A measured render gate is still future work.
+  canvas and low-rate software renderer so screenshots and client semantics
+  remain reliable. A measured on-demand render gate is still future work.
 - Dense callbacks intentionally omit normal RuneLite overlays, infoboxes,
   Discord, telemetry, Plugin Hub, and the sidebar.
 - Dense callback access to RuneLite's package-private client-thread drains is

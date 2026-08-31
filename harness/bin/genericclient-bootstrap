@@ -12,10 +12,16 @@ fi
 java_bin=${GENERICCLIENT_JAVA:-$(command -v java)}
 client_jar=${GENERICCLIENT_JAR:-${repo_dir}/build/libs/GenericClient.jar}
 instance_id=${GENERICCLIENT_INSTANCE_ID:-$(tr -d '\n' </proc/sys/kernel/random/uuid)}
+launch_mode=${GENERICCLIENT_LAUNCH_MODE:-stock}
 runtime_dir=${GENERICCLIENT_RUNTIME_DIR:-${harness_dir}/run}
 instance_home=${GENERICCLIENT_INSTANCE_HOME:-${runtime_dir}/homes/${instance_id}}
-descriptor_dir=${GENERICCLIENT_INSTANCE_DIRECTORY:-${runtime_dir}/instances}
-heap_size=${GENERICCLIENT_HEAP_SIZE:-512m}
+if [[ -n "${GENERICCLIENT_HEAP_SIZE:-}" ]]; then
+	heap_size=${GENERICCLIENT_HEAP_SIZE}
+elif [[ "${launch_mode}" == "dense" ]]; then
+	heap_size=512m
+else
+	heap_size=768m
+fi
 
 if [[ ! -x "${java_bin}" ]]; then
 	echo "GenericClient Java executable is unavailable: ${java_bin}" >&2
@@ -26,27 +32,60 @@ if [[ ! -f "${client_jar}" ]]; then
 	exit 66
 fi
 if [[ -z "${DISPLAY:-}" ]]; then
-	echo "GenericClient dense mode requires DISPLAY (use Xvfb)" >&2
+	echo "GenericClient RuneLite requires DISPLAY" >&2
 	exit 69
 fi
-
-mkdir -p "${instance_home}" "${descriptor_dir}"
+if [[ "${launch_mode}" != "stock" && "${launch_mode}" != "dense" ]]; then
+	echo "GENERICCLIENT_LAUNCH_MODE must be stock or dense" >&2
+	exit 64
+fi
 
 jvm_args=(
 	-ea
 	"-Xmx${heap_size}"
-	-Xss1m
-	-XX:ActiveProcessorCount=2
 	-Djava.awt.headless=false
-	"-Duser.home=${instance_home}"
-	-Dgenericclient.dense=true
 	"-Dgenericclient.instanceId=${instance_id}"
-	-Dgenericclient.controlPort=0
-	"-Dgenericclient.instanceDirectory=${descriptor_dir}"
 )
+launcher_class=com.genericclient.GenericClientLauncher
+client_args=("$@")
+
+if [[ "${launch_mode}" == "dense" ]]; then
+	descriptor_dir=${GENERICCLIENT_INSTANCE_DIRECTORY:-${runtime_dir}/instances}
+	mkdir -p "${instance_home}" "${descriptor_dir}"
+	jvm_args+=(
+		-Xss1m
+		-XX:ActiveProcessorCount=2
+		"-Duser.home=${instance_home}"
+		-Dgenericclient.dense=true
+		-Dgenericclient.controlPort=0
+		"-Dgenericclient.instanceDirectory=${descriptor_dir}"
+	)
+	launcher_class=com.genericclient.GenericClientDenseLauncher
+else
+	if [[ -n "${GENERICCLIENT_INSTANCE_DIRECTORY:-}" ]]; then
+		mkdir -p "${GENERICCLIENT_INSTANCE_DIRECTORY}"
+		jvm_args+=("-Dgenericclient.instanceDirectory=${GENERICCLIENT_INSTANCE_DIRECTORY}")
+	fi
+	if [[ -n "${GENERICCLIENT_CONTROL_PORT:-}" ]]; then
+		jvm_args+=("-Dgenericclient.controlPort=${GENERICCLIENT_CONTROL_PORT}")
+	fi
+fi
 
 if [[ -n "${GENERICCLIENT_RUNELITE_PROFILE:-}" ]]; then
-	jvm_args+=("-Dgenericclient.runeliteProfile=${GENERICCLIENT_RUNELITE_PROFILE}")
+	if [[ "${launch_mode}" == "dense" ]]; then
+		jvm_args+=("-Dgenericclient.runeliteProfile=${GENERICCLIENT_RUNELITE_PROFILE}")
+	else
+		has_profile=false
+		for argument in "${client_args[@]}"; do
+			if [[ "${argument}" == --profile || "${argument}" == --profile=* ]]; then
+				has_profile=true
+				break
+			fi
+		done
+		if [[ "${has_profile}" == false ]]; then
+			client_args+=("--profile=${GENERICCLIENT_RUNELITE_PROFILE}")
+		fi
+	fi
 fi
 if [[ -n "${GENERICCLIENT_SHARED_ARCHIVE:-}" ]]; then
 	jvm_args+=("-XX:SharedArchiveFile=${GENERICCLIENT_SHARED_ARCHIVE}" -Xshare:auto -Xlog:cds=info)
@@ -56,6 +95,8 @@ if [[ -n "${GENERICCLIENT_ARCHIVE_AT_EXIT:-}" ]]; then
 	jvm_args+=("-XX:ArchiveClassesAtExit=${GENERICCLIENT_ARCHIVE_AT_EXIT}" -Xlog:cds=info)
 fi
 
-export GLIBC_TUNABLES=${GLIBC_TUNABLES:-glibc.malloc.arena_max=2}
+if [[ "${launch_mode}" == "dense" ]]; then
+	export GLIBC_TUNABLES=${GLIBC_TUNABLES:-glibc.malloc.arena_max=2}
+fi
 exec "${java_bin}" "${jvm_args[@]}" -cp "${client_jar}" \
-	com.genericclient.GenericClientDenseLauncher "$@"
+	"${launcher_class}" "${client_args[@]}"

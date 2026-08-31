@@ -213,13 +213,6 @@ public final class GenericClientPlugin extends Plugin
 			GenericClientBehaviorController.secureRandom(),
 			this::publishResult);
 		cameraOwner = new GenericClientCameraOwner(client);
-		breakOverlay = new GenericClientBreakOverlay(
-			() ->
-			{
-				GenericClientBehaviorController behaviors = behaviorController;
-				return behaviors == null ? null : behaviors.status();
-			},
-			behaviorController::endActiveBreak);
 		gameInput = new GenericClientGameInput(
 			client,
 			clientThread,
@@ -637,17 +630,26 @@ public final class GenericClientPlugin extends Plugin
 		if (breakOverlay != null)
 		{
 			mouseManager.unregisterMouseListener(breakOverlay.getMouseListener());
-			presentationOverlayManager.remove(breakOverlay);
+			if (presentationOverlayManager != null)
+			{
+				presentationOverlayManager.remove(breakOverlay);
+			}
 			breakOverlay = null;
 		}
 		if (scriptOverlay != null)
 		{
-			presentationOverlayManager.remove(scriptOverlay);
+			if (presentationOverlayManager != null)
+			{
+				presentationOverlayManager.remove(scriptOverlay);
+			}
 			scriptOverlay = null;
 		}
 		if (navigationButton != null)
 		{
-			presentationToolbar.removeNavigation(navigationButton);
+			if (presentationToolbar != null)
+			{
+				presentationToolbar.removeNavigation(navigationButton);
+			}
 			navigationButton = null;
 		}
 		presentationOverlayManager = null;
