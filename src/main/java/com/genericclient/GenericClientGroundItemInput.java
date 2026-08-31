@@ -226,30 +226,39 @@ final class GenericClientGroundItemInput
 		{
 			for (int sceneY = minY; sceneY <= maxY; sceneY++)
 			{
-				Tile tile = tiles[plane][sceneX][sceneY];
-				if (tile == null || tile.getItemLayer() == null || tile.getWorldLocation() == null ||
-					(requestedWorld != null && !requestedWorld.equals(tile.getWorldLocation())))
-				{
-					continue;
-				}
-				List<TileItem> groundItems = tile.getGroundItems();
-				if (groundItems == null)
-				{
-					continue;
-				}
-				for (TileItem item : groundItems)
-				{
-					if (item != null && item.getId() == itemId)
-					{
-						result.add(new GroundTarget(tile, item));
-					}
-				}
+				addGroundTargets(
+					tiles[plane][sceneX][sceneY], itemId, requestedWorld, result);
 			}
 		}
 		WorldPoint playerWorld = player.getWorldLocation();
 		result.sort(Comparator.comparingInt(target ->
 			playerWorld.distanceTo(target.tile.getWorldLocation())));
 		return result;
+	}
+
+	private static void addGroundTargets(
+		Tile tile,
+		int itemId,
+		WorldPoint requestedWorld,
+		List<GroundTarget> result)
+	{
+		if (tile == null || tile.getItemLayer() == null || tile.getWorldLocation() == null ||
+			(requestedWorld != null && !requestedWorld.equals(tile.getWorldLocation())))
+		{
+			return;
+		}
+		List<TileItem> groundItems = tile.getGroundItems();
+		if (groundItems == null)
+		{
+			return;
+		}
+		for (TileItem item : groundItems)
+		{
+			if (item != null && item.getId() == itemId)
+			{
+				result.add(new GroundTarget(tile, item));
+			}
+		}
 	}
 
 	static boolean matchesGroundItem(

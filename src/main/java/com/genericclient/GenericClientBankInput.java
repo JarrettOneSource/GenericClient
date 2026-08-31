@@ -198,56 +198,7 @@ final class GenericClientBankInput implements AutoCloseable
 
 	private CompletableFuture<Void> ensureBankItemVisible(int itemId)
 	{
-		return clientRead(() ->
-		{
-			Widget bankItems = visibleWidget(InterfaceID.Bankmain.ITEMS);
-			if (bankItems == null)
-			{
-				return false;
-			}
-			Widget[] children = bankItems.getDynamicChildren();
-			if (children == null || children.length == 0)
-			{
-				children = bankItems.getChildren();
-			}
-			if (children == null)
-			{
-				return false;
-			}
-			for (Widget item : children)
-			{
-				if (item == null || item.isHidden() || item.getItemId() != itemId)
-				{
-					continue;
-				}
-				Rectangle container = bankItems.getBounds();
-				Rectangle itemBounds = item.getBounds();
-				if (container == null || itemBounds == null)
-				{
-					return false;
-				}
-				int bottom = Math.min(container.y + container.height, bankControlsTop());
-				Rectangle viewport = new Rectangle(
-					container.x,
-					container.y,
-					container.width,
-					Math.max(0, bottom - container.y));
-				int current = bankItems.getScrollY();
-				int maximum = Math.max(0, bankItems.getScrollHeight() - bankItems.getHeight());
-				int requested = scrollYForItem(itemBounds, viewport, current, maximum);
-				if (requested == current)
-				{
-					return false;
-				}
-				bankItems.setScrollY(requested);
-				client.setVarcIntValue(VarClientID.BANK_SCROLLPOS, requested);
-				bankItems.revalidateScroll();
-				reporter.accept("BANK_ITEM_SCROLLED id=" + itemId +
-					" from=" + current + " to=" + requested);
-				return true;
-			}
-			return false;
-		}).thenCompose(scrolled ->
+		return clientRead(() -> scrollBankItemIntoView(itemId)).thenCompose(scrolled ->
 		{
 			if (!Boolean.TRUE.equals(scrolled))
 			{
@@ -261,6 +212,62 @@ final class GenericClientBankInput implements AutoCloseable
 			pending.add(future);
 			return settled;
 		});
+	}
+
+	private boolean scrollBankItemIntoView(int itemId)
+	{
+		Widget bankItems = visibleWidget(InterfaceID.Bankmain.ITEMS);
+		if (bankItems == null)
+		{
+			return false;
+		}
+		Widget[] children = bankItems.getDynamicChildren();
+		if (children == null || children.length == 0)
+		{
+			children = bankItems.getChildren();
+		}
+		if (children == null)
+		{
+			return false;
+		}
+		for (Widget item : children)
+		{
+			if (item == null || item.isHidden() || item.getItemId() != itemId)
+			{
+				continue;
+			}
+			return scrollBankItem(bankItems, item, itemId);
+		}
+		return false;
+	}
+
+	private boolean scrollBankItem(Widget bankItems, Widget item, int itemId)
+	{
+		Rectangle container = bankItems.getBounds();
+		Rectangle itemBounds = item.getBounds();
+		if (container == null || itemBounds == null)
+		{
+			return false;
+		}
+		int bottom = Math.min(container.y + container.height, bankControlsTop());
+		Rectangle viewport = new Rectangle(
+			container.x,
+			container.y,
+			container.width,
+			Math.max(0, bottom - container.y));
+		int current = bankItems.getScrollY();
+		int maximum = Math.max(0, bankItems.getScrollHeight() - bankItems.getHeight());
+		int requested = scrollYForItem(itemBounds, viewport, current, maximum);
+		if (requested == current)
+		{
+			return false;
+		}
+		bankItems.setScrollY(requested);
+		client.setVarcIntValue(VarClientID.BANK_SCROLLPOS, requested);
+		bankItems.revalidateScroll();
+		reporter.accept("BANK_ITEM_SCROLLED id=" + itemId +
+			" from=" + current + " to=" + requested);
+		return true;
 	}
 
 	static int scrollYForItem(

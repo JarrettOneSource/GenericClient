@@ -570,6 +570,40 @@ final class GenericClientLuaScript implements AutoCloseable
 
 	private Wait parseWait(Object yieldedValue)
 	{
+		Map<?, ?> request = awaitRequest(yieldedValue);
+		boolean breaksEnabled = breaksEnabled(request);
+		GenericClientActivityContext.Activity requestedActivity = requestedActivity(request);
+
+		Object ticks = request.get("ticks");
+		if (ticks instanceof Number)
+		{
+			return parseTickWait((Number) ticks);
+		}
+
+		Object event = request.get("event");
+		if (event instanceof String)
+		{
+			return parseEventWait((String) event);
+		}
+
+		Object action = request.get("action");
+		if (action instanceof Map)
+		{
+			return parseActionWait(
+				request, (Map<?, ?>) action, breaksEnabled, requestedActivity);
+		}
+
+		Object phase = request.get("phase");
+		if (phase instanceof String)
+		{
+			return parsePhaseWait((String) phase, breaksEnabled, requestedActivity);
+		}
+
+		throw new IllegalArgumentException("Await request must contain ticks, event, action, or phase");
+	}
+
+	private static Map<?, ?> awaitRequest(Object yieldedValue)
+	{
 		if (!(yieldedValue instanceof Map))
 		{
 			throw new IllegalArgumentException("Script yielded an invalid await request");
@@ -579,14 +613,21 @@ final class GenericClientLuaScript implements AutoCloseable
 		{
 			throw new IllegalArgumentException("Script yielded an invalid await envelope");
 		}
+		return (Map<?, ?>) envelope.get("request");
+	}
 
-		Map<?, ?> request = (Map<?, ?>) envelope.get("request");
+	private static boolean breaksEnabled(Map<?, ?> request)
+	{
 		if (request.containsKey("breaks") && !(request.get("breaks") instanceof Boolean))
 		{
 			throw new IllegalArgumentException("breaks must be true or false");
 		}
-		boolean breaksEnabled = !(request.get("breaks") instanceof Boolean) ||
+		return !(request.get("breaks") instanceof Boolean) ||
 			(Boolean) request.get("breaks");
+	}
+
+	private GenericClientActivityContext.Activity requestedActivity(Map<?, ?> request)
+	{
 		GenericClientActivityContext.Activity requestedActivity = currentActivity;
 		if (request.containsKey("activity"))
 		{
@@ -597,184 +638,239 @@ final class GenericClientLuaScript implements AutoCloseable
 			requestedActivity = GenericClientActivityContext.Activity.fromName(
 				(String) request.get("activity"));
 		}
-		if (request.get("ticks") instanceof Number)
+		return requestedActivity;
+	}
+
+	private static Wait parseTickWait(Number value)
+	{
+		int ticks = value.intValue();
+		if (ticks < 1)
 		{
-			int ticks = ((Number) request.get("ticks")).intValue();
-			if (ticks < 1)
-			{
-				throw new IllegalArgumentException("Tick wait must be positive");
-			}
-			return Wait.ticks(ticks);
+			throw new IllegalArgumentException("Tick wait must be positive");
 		}
+		return Wait.ticks(ticks);
+	}
 
-		if (request.get("event") instanceof String)
+	private static Wait parseEventWait(String event)
+	{
+		if (!"game.tick".equals(event))
 		{
-			String event = (String) request.get("event");
-			if (!"game.tick".equals(event))
-			{
-				throw new IllegalArgumentException("Unsupported event: " + event);
-			}
-			return Wait.gameTick();
+			throw new IllegalArgumentException("Unsupported event: " + event);
 		}
+		return Wait.gameTick();
+	}
 
-		if (request.get("action") instanceof Map)
+	private Wait parseActionWait(
+		Map<?, ?> request,
+		Map<?, ?> action,
+		boolean breaksEnabled,
+		GenericClientActivityContext.Activity requestedActivity)
+	{
+		Object typeValue = action.get("type");
+		if (!(typeValue instanceof String))
 		{
-			Map<?, ?> action = (Map<?, ?>) request.get("action");
-			Object typeValue = action.get("type");
-			if (!(typeValue instanceof String))
-			{
-				throw new IllegalArgumentException("Action requires a type string");
-			}
-			String type = (String) typeValue;
-			int timeout = "walk.to".equals(type)
-				? DEFAULT_WALK_ACTION_TIMEOUT_TICKS
-				: "bank.loadout".equals(type)
-					? DEFAULT_BANK_ACTION_TIMEOUT_TICKS
-				: "ge.buy".equals(type)
-					? DEFAULT_GE_ACTION_TIMEOUT_TICKS
-				: "npc.interact".equals(type) || "combat.set_style".equals(type) ||
-					"combat.set_auto_retaliate".equals(type) || isQuestAction(type)
-					? DEFAULT_NPC_ACTION_TIMEOUT_TICKS
-					: DEFAULT_RANDOM_ACTION_TIMEOUT_TICKS;
-			if (request.get("timeout") instanceof Map &&
-				((Map<?, ?>) request.get("timeout")).get("game_ticks") instanceof Number)
-			{
-				timeout = ((Number) ((Map<?, ?>) request.get("timeout")).get("game_ticks")).intValue();
-			}
-			if (timeout < 1)
-			{
-				throw new IllegalArgumentException("Action timeout must be positive");
-			}
+			throw new IllegalArgumentException("Action requires a type string");
+		}
+		String type = (String) typeValue;
+		int timeout = actionTimeout(request, type);
 
-			if ("walk.random".equals(type))
-			{
+		switch (type)
+		{
+			case "walk.random":
 				return Wait.randomAction(
 					++nextRequestId,
 					timeout,
 					activityContext(type, action, breaksEnabled, requestedActivity));
-			}
-			if ("mouse.offscreen".equals(type))
-			{
+			case "mouse.offscreen":
 				return Wait.mouseOffscreen(++nextRequestId, timeout);
-			}
-			if ("walk.to".equals(type))
-			{
-				if (!(action.get("destination") instanceof Map))
+			case "walk.to":
+				return parseWalkAction(action, timeout, breaksEnabled, requestedActivity);
+			case "npc.interact":
+				return parseNpcAction(action, timeout, breaksEnabled, requestedActivity);
+			case "combat.set_style":
+				return parseCombatStyle(action, timeout, breaksEnabled, requestedActivity);
+			case "combat.set_auto_retaliate":
+				return parseAutoRetaliate(action, timeout, breaksEnabled, requestedActivity);
+			default:
+				if (isQuestAction(type))
 				{
-					throw new IllegalArgumentException("walk.to requires a destination table");
+					return Wait.questAction(
+						++nextRequestId,
+						timeout,
+						type,
+						copyAction(action),
+						activityContext(type, action, breaksEnabled, requestedActivity));
 				}
-				Map<?, ?> destination = (Map<?, ?>) action.get("destination");
-				int x = requiredInt(destination, "x");
-				int y = requiredInt(destination, "y");
-				int plane = requiredInt(destination, "plane");
-				if (x < 0 || x > 0x7FFF || y < 0 || y > 0x7FFF || plane < 0 || plane > 3)
-				{
-					throw new IllegalArgumentException("walk.to destination is outside world coordinate bounds");
-				}
-				int within = action.get("within") instanceof Number
-					? ((Number) action.get("within")).intValue()
-					: 1;
-				if (within < 0 || within > 10)
-				{
-					throw new IllegalArgumentException("walk.to within must be between 0 and 10");
-				}
-				if (action.get("run") != null && !(action.get("run") instanceof Boolean))
-				{
-					throw new IllegalArgumentException("walk.to run must be true or false");
-				}
-				boolean useRun = !Boolean.FALSE.equals(action.get("run"));
-				return Wait.walkAction(
-					++nextRequestId,
-					timeout,
-					new WorldPoint(x, y, plane),
-					within,
-					activityContext(type, action, breaksEnabled, requestedActivity),
-					useRun);
-			}
-			if ("npc.interact".equals(type))
-			{
-				Integer id = optionalNonNegativeInt(action, "id", "npc.interact");
-				String name = optionalText(action.get("name"));
-				if (id == null && name == null)
-				{
-					throw new IllegalArgumentException("npc.interact requires id or name");
-				}
-				String option = requiredText(action, "action", "npc.interact");
-				int within = action.get("within") instanceof Number
-					? ((Number) action.get("within")).intValue()
-					: 15;
-				if (within < 1 || within > 32)
-				{
-					throw new IllegalArgumentException("npc.interact within must be between 1 and 32");
-				}
-				return Wait.npcAction(
-					++nextRequestId,
-					timeout,
-					id,
-					name,
-					option,
-					within,
-					activityContext(type, action, breaksEnabled, requestedActivity));
-			}
-			if (isQuestAction(type))
-			{
-				return Wait.questAction(
-					++nextRequestId,
-					timeout,
-					type,
-					copyAction(action),
-					activityContext(type, action, breaksEnabled, requestedActivity));
-			}
-			if ("combat.set_style".equals(type))
-			{
-				Object styleValue = action.get("style");
-				if (!(styleValue instanceof Number))
-				{
-					throw new IllegalArgumentException("combat.set_style requires a numeric style");
-				}
-				int style = ((Number) styleValue).intValue();
-				if (style < 0 || style > 3)
-				{
-					throw new IllegalArgumentException("combat.set_style style must be between 0 and 3");
-				}
-				return Wait.combatStyle(
-					++nextRequestId,
-					timeout,
-					style,
-					activityContext(type, action, breaksEnabled, requestedActivity));
-			}
-			if ("combat.set_auto_retaliate".equals(type))
-			{
-				Object enabledValue = action.get("enabled");
-				if (!(enabledValue instanceof Boolean))
-				{
-					throw new IllegalArgumentException(
-						"combat.set_auto_retaliate requires enabled=true or enabled=false");
-				}
-				return Wait.combatAutoRetaliate(
-					++nextRequestId,
-					timeout,
-					(Boolean) enabledValue,
-					activityContext(type, action, breaksEnabled, requestedActivity));
-			}
-			throw new IllegalArgumentException("Unsupported action: " + type);
+				throw new IllegalArgumentException("Unsupported action: " + type);
 		}
+	}
 
-		if (request.get("phase") instanceof String)
+	private static int actionTimeout(Map<?, ?> request, String type)
+	{
+		int timeout = defaultActionTimeout(type);
+		Object timeoutValue = request.get("timeout");
+		if (timeoutValue instanceof Map)
 		{
-			String phase = ((String) request.get("phase")).trim();
-			if (!phase.matches("[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}"))
+			Object gameTicks = ((Map<?, ?>) timeoutValue).get("game_ticks");
+			if (gameTicks instanceof Number)
 			{
-				throw new IllegalArgumentException(
-					"Phase name must be 1-64 letters, numbers, dots, underscores, or hyphens");
+				timeout = ((Number) gameTicks).intValue();
 			}
-			return Wait.phase(
-				++nextRequestId,
-				phase,
-				GenericClientActivityContext.of(requestedActivity, breaksEnabled));
 		}
+		if (timeout < 1)
+		{
+			throw new IllegalArgumentException("Action timeout must be positive");
+		}
+		return timeout;
+	}
 
-		throw new IllegalArgumentException("Await request must contain ticks, event, action, or phase");
+	private static int defaultActionTimeout(String type)
+	{
+		switch (type)
+		{
+			case "walk.to":
+				return DEFAULT_WALK_ACTION_TIMEOUT_TICKS;
+			case "bank.loadout":
+				return DEFAULT_BANK_ACTION_TIMEOUT_TICKS;
+			case "ge.buy":
+				return DEFAULT_GE_ACTION_TIMEOUT_TICKS;
+			case "npc.interact":
+			case "combat.set_style":
+			case "combat.set_auto_retaliate":
+				return DEFAULT_NPC_ACTION_TIMEOUT_TICKS;
+			default:
+				return isQuestAction(type)
+					? DEFAULT_NPC_ACTION_TIMEOUT_TICKS
+					: DEFAULT_RANDOM_ACTION_TIMEOUT_TICKS;
+		}
+	}
+
+	private Wait parseWalkAction(
+		Map<?, ?> action,
+		int timeout,
+		boolean breaksEnabled,
+		GenericClientActivityContext.Activity requestedActivity)
+	{
+		Object destinationValue = action.get("destination");
+		if (!(destinationValue instanceof Map))
+		{
+			throw new IllegalArgumentException("walk.to requires a destination table");
+		}
+		Map<?, ?> destination = (Map<?, ?>) destinationValue;
+		int x = requiredInt(destination, "x");
+		int y = requiredInt(destination, "y");
+		int plane = requiredInt(destination, "plane");
+		if (x < 0 || x > 0x7FFF || y < 0 || y > 0x7FFF || plane < 0 || plane > 3)
+		{
+			throw new IllegalArgumentException("walk.to destination is outside world coordinate bounds");
+		}
+		int within = action.get("within") instanceof Number
+			? ((Number) action.get("within")).intValue()
+			: 1;
+		if (within < 0 || within > 10)
+		{
+			throw new IllegalArgumentException("walk.to within must be between 0 and 10");
+		}
+		if (action.get("run") != null && !(action.get("run") instanceof Boolean))
+		{
+			throw new IllegalArgumentException("walk.to run must be true or false");
+		}
+		return Wait.walkAction(
+			++nextRequestId,
+			timeout,
+			new WorldPoint(x, y, plane),
+			within,
+			activityContext("walk.to", action, breaksEnabled, requestedActivity),
+			!Boolean.FALSE.equals(action.get("run")));
+	}
+
+	private Wait parseNpcAction(
+		Map<?, ?> action,
+		int timeout,
+		boolean breaksEnabled,
+		GenericClientActivityContext.Activity requestedActivity)
+	{
+		Integer id = optionalNonNegativeInt(action, "id", "npc.interact");
+		String name = optionalText(action.get("name"));
+		if (id == null && name == null)
+		{
+			throw new IllegalArgumentException("npc.interact requires id or name");
+		}
+		String option = requiredText(action, "action", "npc.interact");
+		int within = action.get("within") instanceof Number
+			? ((Number) action.get("within")).intValue()
+			: 15;
+		if (within < 1 || within > 32)
+		{
+			throw new IllegalArgumentException("npc.interact within must be between 1 and 32");
+		}
+		return Wait.npcAction(
+			++nextRequestId,
+			timeout,
+			id,
+			name,
+			option,
+			within,
+			activityContext("npc.interact", action, breaksEnabled, requestedActivity));
+	}
+
+	private Wait parseCombatStyle(
+		Map<?, ?> action,
+		int timeout,
+		boolean breaksEnabled,
+		GenericClientActivityContext.Activity requestedActivity)
+	{
+		Object styleValue = action.get("style");
+		if (!(styleValue instanceof Number))
+		{
+			throw new IllegalArgumentException("combat.set_style requires a numeric style");
+		}
+		int style = ((Number) styleValue).intValue();
+		if (style < 0 || style > 3)
+		{
+			throw new IllegalArgumentException("combat.set_style style must be between 0 and 3");
+		}
+		return Wait.combatStyle(
+			++nextRequestId,
+			timeout,
+			style,
+			activityContext("combat.set_style", action, breaksEnabled, requestedActivity));
+	}
+
+	private Wait parseAutoRetaliate(
+		Map<?, ?> action,
+		int timeout,
+		boolean breaksEnabled,
+		GenericClientActivityContext.Activity requestedActivity)
+	{
+		Object enabledValue = action.get("enabled");
+		if (!(enabledValue instanceof Boolean))
+		{
+			throw new IllegalArgumentException(
+				"combat.set_auto_retaliate requires enabled=true or enabled=false");
+		}
+		return Wait.combatAutoRetaliate(
+			++nextRequestId,
+			timeout,
+			(Boolean) enabledValue,
+			activityContext("combat.set_auto_retaliate", action, breaksEnabled, requestedActivity));
+	}
+
+	private Wait parsePhaseWait(
+		String value,
+		boolean breaksEnabled,
+		GenericClientActivityContext.Activity requestedActivity)
+	{
+		String phase = value.trim();
+		if (!phase.matches("[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}"))
+		{
+			throw new IllegalArgumentException(
+				"Phase name must be 1-64 letters, numbers, dots, underscores, or hyphens");
+		}
+		return Wait.phase(
+			++nextRequestId,
+			phase,
+			GenericClientActivityContext.of(requestedActivity, breaksEnabled));
 	}
 
 	private void dispatchWaitIfReady()

@@ -1,6 +1,7 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.awt.Point;
@@ -92,6 +93,24 @@ public class GenericClientSessionControllerTest
 			assertEquals("SESSION_LOGGED_OUT", fixture.controller.logout().get(2, TimeUnit.SECONDS));
 			assertEquals(1, input.escapes.get());
 			assertEquals(2, input.clicks.get());
+		}
+	}
+
+	@Test
+	public void stopsClosingModalsWhenLogoutControlsNeverAppear() throws Exception
+	{
+		FakeView view = new FakeView();
+		view.gameState = GameState.LOGGED_IN;
+		FakeInput input = new FakeInput();
+
+		try (Fixture fixture = fixture(view, input))
+		{
+			ExecutionException error = assertThrows(
+				ExecutionException.class,
+				() -> fixture.controller.logout().get(2, TimeUnit.SECONDS));
+
+			assertTrue(error.getCause().getMessage().contains("No visible logout tab"));
+			assertEquals(3, input.escapes.get());
 		}
 	}
 

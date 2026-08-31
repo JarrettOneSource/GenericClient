@@ -1,6 +1,8 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import java.awt.Point;
 import java.awt.Rectangle;
@@ -162,11 +164,11 @@ public class GenericClientSnapshotTest
 		GenericClientSnapshot gateSnapshot = sceneSnapshot(flags, withGate);
 		GenericClientSnapshot wallSnapshot = sceneSnapshot(flags, GenericClientQuestSnapshot.empty());
 
-		assertEquals(true, doorSnapshot.canPlanMove(101, 201, 0, 1, 0, true));
-		assertEquals(true, gateSnapshot.canPlanMove(101, 201, 0, 1, 0, true));
-		assertEquals(false, doorSnapshot.canPlanMove(102, 201, 0, 0, 1, true));
-		assertEquals(false, drawersSnapshot.canPlanMove(101, 201, 0, 1, 0, true));
-		assertEquals(false, wallSnapshot.canPlanMove(101, 201, 0, 1, 0, true));
+		assertTrue(doorSnapshot.canPlanMove(101, 201, 0, 1, 0, true));
+		assertTrue(gateSnapshot.canPlanMove(101, 201, 0, 1, 0, true));
+		assertFalse(doorSnapshot.canPlanMove(102, 201, 0, 0, 1, true));
+		assertFalse(drawersSnapshot.canPlanMove(101, 201, 0, 1, 0, true));
+		assertFalse(wallSnapshot.canPlanMove(101, 201, 0, 1, 0, true));
 	}
 
 	private static GenericClientSnapshot sceneSnapshot(
@@ -248,14 +250,14 @@ public class GenericClientSnapshotTest
 
 		assertEquals(44L, runtime.get("game_tick"));
 		assertEquals("Player", player.get("name"));
-		assertEquals(true, account.containsKey("skills"));
-		assertEquals(true, account.containsKey("inventory"));
-		assertEquals(true, account.containsKey("equipment"));
-		assertEquals(true, account.containsKey("bank"));
-		assertEquals(true, account.containsKey("quests"));
-		assertEquals(true, account.containsKey("grand_exchange"));
-		assertEquals(true, account.containsKey("cash"));
-		assertEquals(true, account.containsKey("combat"));
+		assertTrue(account.containsKey("skills"));
+		assertTrue(account.containsKey("inventory"));
+		assertTrue(account.containsKey("equipment"));
+		assertTrue(account.containsKey("bank"));
+		assertTrue(account.containsKey("quests"));
+		assertTrue(account.containsKey("grand_exchange"));
+		assertTrue(account.containsKey("cash"));
+		assertTrue(account.containsKey("combat"));
 	}
 
 	@Test

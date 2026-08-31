@@ -129,7 +129,7 @@ final class GenericClientGameInput implements AutoCloseable
 			behavior,
 			activityContext,
 			() -> beginWalkClickUnlessCancelled(
-				mode, candidates, requestId, cancellationId, activityContext)).thenApply(result ->
+				mode, candidates, requestId, cancellationId)).thenApply(result ->
 			{
 				reporter.accept("WALK_INTERACTION_COMPLETED target=" + result.getTarget() +
 					" clicked=" + result.isClickDispatched() +
@@ -144,8 +144,7 @@ final class GenericClientGameInput implements AutoCloseable
 		SelectionMode mode,
 		List<WorldPoint> candidates,
 		long requestId,
-		long cancellationId,
-		GenericClientActivityContext activityContext)
+		long cancellationId)
 	{
 		if (closed || cancellationSequence.get() != cancellationId ||
 			(mode == SelectionMode.ROUTE && routeRequestSequence.get() != requestId))
@@ -155,7 +154,7 @@ final class GenericClientGameInput implements AutoCloseable
 				mode == SelectionMode.ROUTE ? "WALK_TILE_CLICK_CANCELLED" : "WALK_CLICK_STOPPED",
 				false));
 		}
-		return beginWalkClick(mode, candidates, activityContext);
+		return beginWalkClick(mode, candidates);
 	}
 
 	static CompletableFuture<GenericClientInteractionResult> performWithBehavior(
@@ -187,8 +186,7 @@ final class GenericClientGameInput implements AutoCloseable
 
 	private CompletableFuture<RawWalkResult> beginWalkClick(
 		SelectionMode mode,
-		List<WorldPoint> candidates,
-		GenericClientActivityContext activityContext)
+		List<WorldPoint> candidates)
 	{
 		CompletableFuture<RawWalkResult> result = new CompletableFuture<>();
 		if (!running.compareAndSet(false, true))

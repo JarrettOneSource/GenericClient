@@ -6,6 +6,16 @@ import * as z from "zod/v4";
 import { GenericClientBridge } from "./bridge.mjs";
 
 const VERSION = "local";
+const jsonValue = z.lazy(() =>
+  z.union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.null(),
+    z.array(jsonValue),
+    z.record(z.string(), jsonValue),
+  ]),
+);
 
 function result(value) {
   return {
@@ -291,7 +301,9 @@ export function createServer(bridge = new GenericClientBridge()) {
       description:
         "Validate and atomically replace the active account's complete automation configuration. Rules may combine named schedules with supported skill and complete-cash facts.",
       inputSchema: z.object({
-        config: z.record(z.string(), z.unknown()).describe("Complete genericclient_automation.v1 object."),
+        config: z
+          .record(z.string(), jsonValue)
+          .describe("Complete genericclient_automation.v1 object."),
       }),
       annotations: {
         readOnlyHint: false,

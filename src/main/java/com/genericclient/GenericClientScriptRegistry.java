@@ -156,7 +156,7 @@ final class GenericClientScriptRegistry
 		Path path = directory.resolve(MANIFEST_FILE);
 		ManifestFile manifest = readManifest(path);
 
-		if (manifest == null || !SCHEMA.equals(manifest.schema))
+		if (!SCHEMA.equals(manifest.schema))
 		{
 			throw new IOException("Unsupported script manifest schema: " + path);
 		}
@@ -171,52 +171,64 @@ final class GenericClientScriptRegistry
 		Map<Integer, String> randomEventOwners = new HashMap<>();
 		for (int index = 0; index < manifest.scripts.size(); index++)
 		{
-			ManifestScript entry = manifest.scripts.get(index);
-			if (entry == null)
-			{
-				throw new IOException("Script manifest entry " + index + " is null");
-			}
-			validateId(entry.id);
-			String name = requireText(entry.name, "Script name");
-			String description = requireText(entry.description, "Script description");
-			String file = validateFileName(entry.file);
-			if (!ids.add(entry.id))
-			{
-				throw new IOException("Duplicate script id: " + entry.id);
-			}
-			if (!files.add(file))
-			{
-				throw new IOException("Duplicate script file: " + file);
-			}
-			Map<String, String> modules = validateModules(entry.modules);
-			List<Integer> randomEvents = validateRandomEvents(entry.randomEvents);
-			for (int npcId : randomEvents)
-			{
-				String existing = randomEventOwners.putIfAbsent(npcId, entry.id);
-				if (existing != null)
-				{
-					throw new IOException("Random-event NPC " + npcId +
-						" is already handled by script " + existing);
-				}
-			}
-			Script script = new Script(entry.id, name, description, file, modules, randomEvents);
-			if (!Files.isRegularFile(sourcePath(script)))
-			{
-				throw new IOException("Script file does not exist: " + file);
-			}
-			scripts.add(script);
-			for (String moduleFile : modules.values())
-			{
-				if (!Files.isRegularFile(directory.resolve(moduleFile)))
-				{
-					throw new IOException("Script module does not exist: " + moduleFile);
-				}
-			}
+			scripts.add(readScript(
+				manifest.scripts.get(index), index, ids, files, randomEventOwners));
 		}
 
 		scripts.sort(Comparator.comparing(Script::getName, String.CASE_INSENSITIVE_ORDER));
 		state = buildState(scripts);
 		revision++;
+	}
+
+	private Script readScript(
+		ManifestScript entry,
+		int index,
+		Set<String> ids,
+		Set<String> files,
+		Map<Integer, String> randomEventOwners) throws IOException
+	{
+		if (entry == null)
+		{
+			throw new IOException("Script manifest entry " + index + " is null");
+		}
+		validateId(entry.id);
+		String name = requireText(entry.name, "Script name");
+		String description = requireText(entry.description, "Script description");
+		String file = validateFileName(entry.file);
+		if (!ids.add(entry.id))
+		{
+			throw new IOException("Duplicate script id: " + entry.id);
+		}
+		if (!files.add(file))
+		{
+			throw new IOException("Duplicate script file: " + file);
+		}
+
+		Map<String, String> modules = validateModules(entry.modules);
+		List<Integer> randomEvents = validateRandomEvents(entry.randomEvents);
+		for (int npcId : randomEvents)
+		{
+			String existing = randomEventOwners.putIfAbsent(npcId, entry.id);
+			if (existing != null)
+			{
+				throw new IOException("Random-event NPC " + npcId +
+					" is already handled by script " + existing);
+			}
+		}
+
+		Script script = new Script(entry.id, name, description, file, modules, randomEvents);
+		if (!Files.isRegularFile(sourcePath(script)))
+		{
+			throw new IOException("Script file does not exist: " + file);
+		}
+		for (String moduleFile : modules.values())
+		{
+			if (!Files.isRegularFile(directory.resolve(moduleFile)))
+			{
+				throw new IOException("Script module does not exist: " + moduleFile);
+			}
+		}
+		return script;
 	}
 
 	private void installEmptyManifest() throws IOException

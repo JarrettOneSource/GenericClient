@@ -99,6 +99,7 @@ public class GenericClientControlServerTest
 		{
 			host.publishGameTick(snapshot(9));
 			server.start();
+			assertEquals(400, send(server, "missing.method", new LinkedHashMap<>()).statusCode());
 
 			Map<String, Object> evalParameters = new LinkedHashMap<>();
 			evalParameters.put("code", "return gc.read('player')");

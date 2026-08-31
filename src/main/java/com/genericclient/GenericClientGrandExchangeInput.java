@@ -709,60 +709,77 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		String collectMode,
 		GenericClientActivityContext activityContext)
 	{
-		return menuInput.interact(() ->
+		return menuInput.interact(
+			() -> resolveCollectItem(itemId, collectMode), activityContext);
+	}
+
+	private GenericClientMenuInput.Resolution resolveCollectItem(int itemId, String collectMode)
+	{
+		Widget root = visibleWidget(InterfaceID.GeOffers.DETAILS_COLLECT);
+		Widget item = findItemWidget(root, itemId);
+		if (item == null)
 		{
-			Widget root = visibleWidget(InterfaceID.GeOffers.DETAILS_COLLECT);
-			Widget item = null;
-			for (Widget widget : descendants(root))
+			return GenericClientMenuInput.Resolution.rejected("collect_offer_not_visible");
+		}
+		CollectTarget target = findCollectTarget(root, item, collectMode);
+		if (target.action == null)
+		{
+			reportWidgetTree("collect_offer", root);
+			return GenericClientMenuInput.Resolution.rejected(
+				"collect_offer_has_no_inventory_action");
+		}
+		return targetForWidget(target.widget, target.action, itemId, "collect_offer");
+	}
+
+	private static Widget findItemWidget(Widget root, int itemId)
+	{
+		for (Widget widget : descendants(root))
+		{
+			if (widget.getItemId() == itemId)
 			{
-				if (widget.getItemId() == itemId)
-				{
-					item = widget;
-					break;
-				}
+				return widget;
 			}
-			if (item == null)
+		}
+		return null;
+	}
+
+	private static CollectTarget findCollectTarget(Widget root, Widget item, String collectMode)
+	{
+		Widget target = item;
+		String action = collectAction(target, collectMode);
+		for (Widget parent = item.getParent(); action == null && parent != null;
+			parent = parent.getParent())
+		{
+			target = parent;
+			action = collectAction(target, collectMode);
+			if (parent == root)
 			{
-				return GenericClientMenuInput.Resolution.rejected("collect_offer_not_visible");
+				break;
 			}
-			Widget target = item;
-			String action = collectAction(target, collectMode);
-			for (Widget parent = item.getParent(); action == null && parent != null;
-				parent = parent.getParent())
+		}
+		return action == null
+			? overlappingCollectTarget(root, item, collectMode)
+			: new CollectTarget(target, action);
+	}
+
+	private static CollectTarget overlappingCollectTarget(
+		Widget root,
+		Widget item,
+		String collectMode)
+	{
+		Rectangle itemBounds = item.getBounds();
+		for (Widget candidate : descendants(root))
+		{
+			String action = collectAction(candidate, collectMode);
+			Rectangle bounds = candidate.getBounds();
+			if (action != null && bounds != null && itemBounds != null && bounds.contains(
+				itemBounds.x + itemBounds.width / 2,
+				itemBounds.y + itemBounds.height / 2))
 			{
-				target = parent;
-				action = collectAction(target, collectMode);
-				if (parent == root)
-				{
-					break;
-				}
+				return new CollectTarget(candidate, action);
 			}
-			if (action == null)
-			{
-				Rectangle itemBounds = item.getBounds();
-				for (Widget candidate : descendants(root))
-				{
-					String candidateAction = collectAction(candidate, collectMode);
-					Rectangle candidateBounds = candidate.getBounds();
-					if (candidateAction != null && candidateBounds != null && itemBounds != null &&
-						candidateBounds.contains(
-							itemBounds.x + itemBounds.width / 2,
-							itemBounds.y + itemBounds.height / 2))
-					{
-						target = candidate;
-						action = candidateAction;
-						break;
-					}
-				}
-			}
-			if (action == null)
-			{
-				reportWidgetTree("collect_offer", root);
-			}
-			return action == null
-				? GenericClientMenuInput.Resolution.rejected("collect_offer_has_no_inventory_action")
-				: targetForWidget(target, action, itemId, "collect_offer");
-		}, activityContext);
+		}
+		return new CollectTarget(item, null);
 	}
 
 	static String collectAction(Widget widget, String collectMode)
@@ -1209,11 +1226,8 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 	static boolean matchesActionText(String candidate, String action)
 	{
 		String normalizedCandidate = clean(candidate);
-		if (normalizedCandidate.equalsIgnoreCase(action))
-		{
-			return true;
-		}
-		return "Buy".equalsIgnoreCase(action) &&
+		return normalizedCandidate.equalsIgnoreCase(action) ||
+			"Buy".equalsIgnoreCase(action) &&
 			"Create Buy offer".equalsIgnoreCase(normalizedCandidate);
 	}
 
@@ -1672,6 +1686,18 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 	{
 		closed = true;
 		cancel("input_closed");
+	}
+
+	private static final class CollectTarget
+	{
+		private final Widget widget;
+		private final String action;
+
+		private CollectTarget(Widget widget, String action)
+		{
+			this.widget = widget;
+			this.action = action;
+		}
 	}
 
 	private static final class Preflight

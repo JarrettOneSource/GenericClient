@@ -13,9 +13,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import net.runelite.api.Client;
-import net.runelite.api.DecorativeObject;
 import net.runelite.api.GameObject;
-import net.runelite.api.GroundObject;
 import net.runelite.api.ObjectComposition;
 import net.runelite.api.Player;
 import net.runelite.api.Scene;
@@ -228,46 +226,21 @@ final class GenericClientQuestSnapshot
 
 	private List<Map<String, Object>> queryObjects(Map<?, ?> query)
 	{
-		int within = Math.min(
-			OBJECT_RADIUS,
-			Math.max(0, intValue(query == null ? null : query.get("within"), OBJECT_RADIUS)));
-		int limit = Math.min(
-			MAX_QUERY_RESULTS,
-			Math.max(0, intValue(query == null ? null : query.get("limit"), 50)));
-		if (limit == 0)
+		SceneQuery criteria = SceneQuery.from(query);
+		if (criteria.limit == 0)
 		{
 			return Collections.emptyList();
-		}
-		String action = stringValue(query == null ? null : query.get("action"));
-		String name = null;
-		Integer id = null;
-		if (query != null && query.get("where") instanceof Map)
-		{
-			Map<?, ?> where = (Map<?, ?>) query.get("where");
-			name = stringValue(where.get("name"));
-			if (where.get("id") instanceof Number)
-			{
-				id = ((Number) where.get("id")).intValue();
-			}
-		}
-		if (query != null && query.get("id") instanceof Number)
-		{
-			id = ((Number) query.get("id")).intValue();
 		}
 
 		List<Map<String, Object>> result = new ArrayList<>();
 		for (ObjectSnapshot object : objects)
 		{
-			if (object.distance > within ||
-				(id != null && object.id != id) ||
-				(name != null && !object.name.equalsIgnoreCase(name)) ||
-				(action != null && object.actions.stream()
-					.noneMatch(candidate -> candidate.equalsIgnoreCase(action))))
+			if (!criteria.matches(object))
 			{
 				continue;
 			}
 			result.add(object.toMap());
-			if (result.size() == limit)
+			if (result.size() == criteria.limit)
 			{
 				break;
 			}
@@ -277,38 +250,20 @@ final class GenericClientQuestSnapshot
 
 	private List<Map<String, Object>> queryGroundItems(Map<?, ?> query)
 	{
-		int within = Math.min(
-			OBJECT_RADIUS,
-			Math.max(0, intValue(query == null ? null : query.get("within"), OBJECT_RADIUS)));
-		int limit = Math.min(
-			MAX_QUERY_RESULTS,
-			Math.max(0, intValue(query == null ? null : query.get("limit"), 50)));
-		String name = null;
-		Integer id = null;
-		if (query != null && query.get("where") instanceof Map)
+		SceneQuery criteria = SceneQuery.from(query);
+		if (criteria.limit == 0)
 		{
-			Map<?, ?> where = (Map<?, ?>) query.get("where");
-			name = stringValue(where.get("name"));
-			if (where.get("id") instanceof Number)
-			{
-				id = ((Number) where.get("id")).intValue();
-			}
-		}
-		if (query != null && query.get("id") instanceof Number)
-		{
-			id = ((Number) query.get("id")).intValue();
+			return Collections.emptyList();
 		}
 		List<Map<String, Object>> result = new ArrayList<>();
 		for (GroundItemSnapshot item : groundItems)
 		{
-			if (item.distance > within ||
-				(id != null && item.id != id) ||
-				(name != null && !item.name.equalsIgnoreCase(name)))
+			if (!criteria.matches(item))
 			{
 				continue;
 			}
 			result.add(item.toMap());
-			if (result.size() == limit)
+			if (result.size() == criteria.limit)
 			{
 				break;
 			}
@@ -341,46 +296,13 @@ final class GenericClientQuestSnapshot
 		{
 			for (int sceneY = minY; sceneY <= maxY; sceneY++)
 			{
-				Tile tile = tiles[plane][sceneX][sceneY];
-				if (tile == null)
-				{
-					continue;
-				}
-				addObject(client, playerWorld, tile.getWallObject(), "wall", seen, result);
-				addObject(client, playerWorld, tile.getGroundObject(), "ground", seen, result);
-				addObject(client, playerWorld, tile.getDecorativeObject(), "decorative", seen, result);
-				GameObject[] gameObjects = tile.getGameObjects();
-				if (gameObjects != null)
-				{
-					for (GameObject gameObject : gameObjects)
-					{
-						addObject(client, playerWorld, gameObject, "game", seen, result);
-					}
-				}
-				List<TileItem> tileItems = tile.getGroundItems();
-				if (tileItems == null)
-				{
-					continue;
-				}
-				for (TileItem item : tileItems)
-				{
-					if (item == null || item.getId() < 0)
-					{
-						continue;
-					}
-					WorldPoint world = tile.getWorldLocation();
-					net.runelite.api.ItemComposition composition = client.getItemDefinition(item.getId());
-					groundItems.add(new GroundItemSnapshot(
-						item.getId(),
-						composition == null ? "<unknown>" : Objects.toString(composition.getName(), "<unknown>"),
-						item.getQuantity(),
-						world.getX(),
-						world.getY(),
-						world.getPlane(),
-						playerWorld.distanceTo(world),
-						item.getOwnership(),
-						item.isPrivate()));
-				}
+				captureTile(
+					client,
+					playerWorld,
+					tiles[plane][sceneX][sceneY],
+					seen,
+					result,
+					groundItems);
 			}
 		}
 		result.sort(Comparator
@@ -392,6 +314,64 @@ final class GenericClientQuestSnapshot
 			.comparingInt(GroundItemSnapshot::getDistance)
 			.thenComparingInt(GroundItemSnapshot::getId));
 		return new SceneCapture(result, groundItems);
+	}
+
+	private static void captureTile(
+		Client client,
+		WorldPoint player,
+		Tile tile,
+		Set<TileObject> seen,
+		List<ObjectSnapshot> objects,
+		List<GroundItemSnapshot> groundItems)
+	{
+		if (tile == null)
+		{
+			return;
+		}
+		addObject(client, player, tile.getWallObject(), "wall", seen, objects);
+		addObject(client, player, tile.getGroundObject(), "ground", seen, objects);
+		addObject(client, player, tile.getDecorativeObject(), "decorative", seen, objects);
+		GameObject[] gameObjects = tile.getGameObjects();
+		if (gameObjects != null)
+		{
+			for (GameObject gameObject : gameObjects)
+			{
+				addObject(client, player, gameObject, "game", seen, objects);
+			}
+		}
+		captureGroundItems(client, player, tile, groundItems);
+	}
+
+	private static void captureGroundItems(
+		Client client,
+		WorldPoint player,
+		Tile tile,
+		List<GroundItemSnapshot> result)
+	{
+		List<TileItem> tileItems = tile.getGroundItems();
+		if (tileItems == null)
+		{
+			return;
+		}
+		for (TileItem item : tileItems)
+		{
+			if (item == null || item.getId() < 0)
+			{
+				continue;
+			}
+			WorldPoint world = tile.getWorldLocation();
+			net.runelite.api.ItemComposition composition = client.getItemDefinition(item.getId());
+			result.add(new GroundItemSnapshot(
+				item.getId(),
+				composition == null ? "<unknown>" : Objects.toString(composition.getName(), "<unknown>"),
+				item.getQuantity(),
+				world.getX(),
+				world.getY(),
+				world.getPlane(),
+				player.distanceTo(world),
+				item.getOwnership(),
+				item.isPrivate()));
+		}
 	}
 
 	private static void addObject(
@@ -561,6 +541,66 @@ final class GenericClientQuestSnapshot
 	private static String stringValue(Object value)
 	{
 		return value instanceof String && !((String) value).isEmpty() ? (String) value : null;
+	}
+
+	private static final class SceneQuery
+	{
+		private final int within;
+		private final int limit;
+		private final String action;
+		private final String name;
+		private final Integer id;
+
+		private SceneQuery(int within, int limit, String action, String name, Integer id)
+		{
+			this.within = within;
+			this.limit = limit;
+			this.action = action;
+			this.name = name;
+			this.id = id;
+		}
+
+		private static SceneQuery from(Map<?, ?> query)
+		{
+			int within = Math.min(
+				OBJECT_RADIUS,
+				Math.max(0, intValue(query == null ? null : query.get("within"), OBJECT_RADIUS)));
+			int limit = Math.min(
+				MAX_QUERY_RESULTS,
+				Math.max(0, intValue(query == null ? null : query.get("limit"), 50)));
+			Map<?, ?> where = query != null && query.get("where") instanceof Map
+				? (Map<?, ?>) query.get("where")
+				: Collections.emptyMap();
+			Integer id = where.get("id") instanceof Number
+				? ((Number) where.get("id")).intValue()
+				: null;
+			if (query != null && query.get("id") instanceof Number)
+			{
+				id = ((Number) query.get("id")).intValue();
+			}
+			return new SceneQuery(
+				within,
+				limit,
+				stringValue(query == null ? null : query.get("action")),
+				stringValue(where.get("name")),
+				id);
+		}
+
+		private boolean matches(ObjectSnapshot object)
+		{
+			return object.distance <= within &&
+				(id == null || object.id == id) &&
+				(name == null || object.name.equalsIgnoreCase(name)) &&
+				(action == null || object.actions.stream()
+					.anyMatch(candidate -> candidate.equalsIgnoreCase(action)));
+		}
+
+		private boolean matches(GroundItemSnapshot item)
+		{
+			return item.distance <= within &&
+				(id == null || item.id == id) &&
+				(name == null || item.name.equalsIgnoreCase(name));
+		}
 	}
 
 	static final class ObjectSnapshot

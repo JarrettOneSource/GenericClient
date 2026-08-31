@@ -432,9 +432,7 @@ final class GenericClientAutomationConfig
 			{
 				throw new IllegalArgumentException("Automation condition nesting exceeds 16 levels");
 			}
-			int forms = (all == null ? 0 : 1) + (any == null ? 0 : 1) + (not == null ? 0 : 1) +
-				(schedule == null ? 0 : 1) + (fact == null ? 0 : 1);
-			if (forms != 1)
+			if (formCount() != 1)
 			{
 				throw new IllegalArgumentException("Each condition must contain exactly one condition form");
 			}
@@ -455,14 +453,29 @@ final class GenericClientAutomationConfig
 			}
 			if (schedule != null)
 			{
-				schedule = requireText(schedule, "Schedule condition");
-				if (!schedules.containsKey(schedule))
-				{
-					throw new IllegalArgumentException("Unknown schedule in condition: " + schedule);
-				}
+				validateSchedule(schedules);
 				return;
 			}
+			validateFact();
+		}
 
+		private int formCount()
+		{
+			return (all == null ? 0 : 1) + (any == null ? 0 : 1) + (not == null ? 0 : 1) +
+				(schedule == null ? 0 : 1) + (fact == null ? 0 : 1);
+		}
+
+		private void validateSchedule(Map<String, ScheduleSpec> schedules)
+		{
+			schedule = requireText(schedule, "Schedule condition");
+			if (!schedules.containsKey(schedule))
+			{
+				throw new IllegalArgumentException("Unknown schedule in condition: " + schedule);
+			}
+		}
+
+		private void validateFact()
+		{
 			fact = requireText(fact, "Fact condition");
 			if (!FACT.matcher(fact).matches())
 			{
@@ -475,9 +488,8 @@ final class GenericClientAutomationConfig
 					"Fact condition " + fact + " requires exactly one comparison operator");
 			}
 			JsonElement expected = expected();
-			boolean booleanFact = "cash.bank_known".equals(fact) ||
-				"cash.complete".equals(fact);
-			if (booleanFact && (eq == null && ne == null))
+			boolean booleanFact = isBooleanFact();
+			if (booleanFact && eq == null && ne == null)
 			{
 				throw new IllegalArgumentException("Boolean fact " + fact + " supports only eq or ne");
 			}
@@ -491,6 +503,11 @@ final class GenericClientAutomationConfig
 			{
 				throw new IllegalArgumentException("Numeric comparison for " + fact + " requires a number");
 			}
+		}
+
+		private boolean isBooleanFact()
+		{
+			return "cash.bank_known".equals(fact) || "cash.complete".equals(fact);
 		}
 
 		private static List<Condition> validateChildren(

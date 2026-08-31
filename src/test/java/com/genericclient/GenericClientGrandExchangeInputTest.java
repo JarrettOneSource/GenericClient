@@ -1,7 +1,9 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.awt.Rectangle;
@@ -82,8 +84,7 @@ public class GenericClientGrandExchangeInputTest
 		Widget yes = widget(new Rectangle(307, 201, 40, 32), 0, 0, null, null, "Yes", null);
 		Widget popup = widget(new Rectangle(35, 125, 440, 120), 0, 0, null, null, null, null, yes);
 
-		assertTrue(yes ==
-			GenericClientGrandExchangeInput.findByTextWithin(popup, "Yes", scope));
+		assertSame(yes, GenericClientGrandExchangeInput.findByTextWithin(popup, "Yes", scope));
 	}
 
 	@Test
@@ -121,11 +122,11 @@ public class GenericClientGrandExchangeInputTest
 			offer(GrandExchangeOfferState.BUYING, 5, 0, 675), 700, 10));
 		assertTrue(GenericClientGrandExchangeInput.shouldReplaceZeroFill(
 			offer(GrandExchangeOfferState.BUYING, 5, 0, 700), 700, 10));
-		assertEquals(false, GenericClientGrandExchangeInput.shouldReplaceZeroFill(
+		assertFalse(GenericClientGrandExchangeInput.shouldReplaceZeroFill(
 			offer(GrandExchangeOfferState.BUYING, 5, 1, 700), 700, 10));
-		assertEquals(false, GenericClientGrandExchangeInput.shouldReplaceZeroFill(
+		assertFalse(GenericClientGrandExchangeInput.shouldReplaceZeroFill(
 			offer(GrandExchangeOfferState.BOUGHT, 5, 0, 700), 700, 10));
-		assertEquals(false, GenericClientGrandExchangeInput.shouldReplaceZeroFill(
+		assertFalse(GenericClientGrandExchangeInput.shouldReplaceZeroFill(
 			offer(GrandExchangeOfferState.BUYING, 10, 0, 700), 700, 10));
 	}
 
@@ -136,7 +137,7 @@ public class GenericClientGrandExchangeInputTest
 			offer(GrandExchangeOfferState.BUYING, 10, 0, 700), 700, 10));
 		assertTrue(GenericClientGrandExchangeInput.matchesRequestedOffer(
 			offer(GrandExchangeOfferState.BOUGHT, 5, 700, 700), 700, 10));
-		assertEquals(false, GenericClientGrandExchangeInput.matchesRequestedOffer(
+		assertFalse(GenericClientGrandExchangeInput.matchesRequestedOffer(
 			offer(GrandExchangeOfferState.BOUGHT, 5, 675, 675), 700, 10));
 	}
 

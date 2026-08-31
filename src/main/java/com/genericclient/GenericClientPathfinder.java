@@ -69,76 +69,105 @@ final class GenericClientPathfinder
 			return Result.failed(Status.UNREACHABLE, 0);
 		}
 
-		int startPacked = pack(start.getX(), start.getY(), start.getPlane());
-		Map<Integer, Integer> costs = new HashMap<>();
-		Map<Integer, Integer> parents = new HashMap<>();
-		Set<Integer> closed = new HashSet<>();
-		PriorityQueue<Node> open = new PriorityQueue<>(Comparator
+		return new Search(start, destination, within, edgePolicy, maximumExpandedNodes).run();
+	}
+
+	private final class Search
+	{
+		private final WorldPoint destination;
+		private final int within;
+		private final EdgePolicy edgePolicy;
+		private final int maximumExpandedNodes;
+		private final int startPacked;
+		private final Map<Integer, Integer> costs = new HashMap<>();
+		private final Map<Integer, Integer> parents = new HashMap<>();
+		private final Set<Integer> closed = new HashSet<>();
+		private final PriorityQueue<Node> open = new PriorityQueue<>(Comparator
 			.comparingInt(Node::score)
 			.thenComparingInt(Node::getHeuristic)
 			.thenComparingLong(Node::getSequence));
+		private long sequence;
+		private int expanded;
 
-		long sequence = 0;
-		int initialHeuristic = heuristic(start.getX(), start.getY(), destination, within);
-		costs.put(startPacked, 0);
-		open.add(new Node(startPacked, 0, initialHeuristic, sequence++));
-
-		int expanded = 0;
-		while (!open.isEmpty())
+		private Search(
+			WorldPoint start,
+			WorldPoint destination,
+			int within,
+			EdgePolicy edgePolicy,
+			int maximumExpandedNodes)
 		{
-			Node current = open.poll();
-			Integer bestCost = costs.get(current.position);
-			if (bestCost == null || current.cost != bestCost || !closed.add(current.position))
-			{
-				continue;
-			}
-
-			int x = unpackX(current.position);
-			int y = unpackY(current.position);
-			int plane = unpackPlane(current.position);
-			if (chebyshev(x, y, destination.getX(), destination.getY()) <= within)
-			{
-				return Result.found(reconstruct(current.position, startPacked, parents), expanded);
-			}
-			if (++expanded >= maximumExpandedNodes)
-			{
-				return Result.failed(Status.SEARCH_LIMIT, expanded);
-			}
-
-			for (int[] direction : DIRECTIONS)
-			{
-				int nextX = x + direction[0];
-				int nextY = y + direction[1];
-				boolean staticAllowed = collisionMap.canMove(
-					x, y, plane, direction[0], direction[1]);
-				if (!validCoordinate(nextX, nextY) ||
-					!edgePolicy.canMove(
-						x, y, plane, direction[0], direction[1], staticAllowed))
-				{
-					continue;
-				}
-
-				int next = pack(nextX, nextY, plane);
-				if (closed.contains(next))
-				{
-					continue;
-				}
-
-				int stepCost = direction[0] == 0 || direction[1] == 0 ? 10 : 14;
-				int nextCost = current.cost + stepCost;
-				if (nextCost >= costs.getOrDefault(next, Integer.MAX_VALUE))
-				{
-					continue;
-				}
-
-				costs.put(next, nextCost);
-				parents.put(next, current.position);
-				int nextHeuristic = heuristic(nextX, nextY, destination, within);
-				open.add(new Node(next, nextCost, nextHeuristic, sequence++));
-			}
+			this.destination = destination;
+			this.within = within;
+			this.edgePolicy = edgePolicy;
+			this.maximumExpandedNodes = maximumExpandedNodes;
+			this.startPacked = pack(start.getX(), start.getY(), start.getPlane());
+			costs.put(startPacked, 0);
+			open.add(new Node(
+				startPacked,
+				0,
+				heuristic(start.getX(), start.getY(), destination, within),
+				sequence++));
 		}
 
-		return Result.failed(Status.UNREACHABLE, expanded);
+		private Result run()
+		{
+			while (!open.isEmpty())
+			{
+				Node current = open.poll();
+				Integer bestCost = costs.get(current.position);
+				if (bestCost == null || current.cost != bestCost || !closed.add(current.position))
+				{
+					continue;
+				}
+
+				int x = unpackX(current.position);
+				int y = unpackY(current.position);
+				int plane = unpackPlane(current.position);
+				if (chebyshev(x, y, destination.getX(), destination.getY()) <= within)
+				{
+					return Result.found(reconstruct(current.position, startPacked, parents), expanded);
+				}
+				if (++expanded >= maximumExpandedNodes)
+				{
+					return Result.failed(Status.SEARCH_LIMIT, expanded);
+				}
+				for (int[] direction : DIRECTIONS)
+				{
+					expand(current, x, y, plane, direction);
+				}
+			}
+			return Result.failed(Status.UNREACHABLE, expanded);
+		}
+
+		private void expand(Node current, int x, int y, int plane, int[] direction)
+		{
+			int nextX = x + direction[0];
+			int nextY = y + direction[1];
+			boolean staticAllowed = collisionMap.canMove(x, y, plane, direction[0], direction[1]);
+			if (!validCoordinate(nextX, nextY) || !edgePolicy.canMove(
+				x, y, plane, direction[0], direction[1], staticAllowed))
+			{
+				return;
+			}
+			int next = pack(nextX, nextY, plane);
+			if (closed.contains(next))
+			{
+				return;
+			}
+			int stepCost = direction[0] == 0 || direction[1] == 0 ? 10 : 14;
+			int nextCost = current.cost + stepCost;
+			if (nextCost >= costs.getOrDefault(next, Integer.MAX_VALUE))
+			{
+				return;
+			}
+			costs.put(next, nextCost);
+			parents.put(next, current.position);
+			open.add(new Node(
+				next,
+				nextCost,
+				heuristic(nextX, nextY, destination, within),
+				sequence++));
+		}
 	}
 
 	Result findSegment(

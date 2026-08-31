@@ -259,64 +259,69 @@ final class GenericClientSessionController implements AutoCloseable
 			failActive("Timed out opening the logout panel");
 			return;
 		}
-		view.visibleWidget(LOGOUT_BUTTONS).whenComplete((button, error) ->
+		view.visibleWidget(LOGOUT_BUTTONS).whenComplete(
+			(button, error) -> handleLogoutButton(deadline, button, error));
+	}
+
+	private void handleLogoutButton(long deadline, Rectangle button, Throwable error)
+	{
+		if (error != null)
 		{
-			if (error != null)
-			{
-				failActive(error.getMessage());
-				return;
-			}
-			if (button != null)
-			{
-				clickBounds(button).whenComplete((ignored, clickError) ->
-				{
-					if (clickError != null)
-					{
-						failActive(clickError.getMessage());
-						return;
-					}
-					waitForLoggedOut(deadline);
-				});
-				return;
-			}
-			view.visibleWidget(LOGOUT_TABS).whenComplete((tab, tabError) ->
-			{
-				if (tabError != null)
-				{
-					failActive(tabError.getMessage());
-					return;
-				}
-				if (tab == null)
-				{
-					if (logoutEscapeAttempts >= 3)
-					{
-						failActive("No visible logout tab after closing modal interfaces");
-						return;
-					}
-					logoutEscapeAttempts++;
-					reporter.accept("SESSION_LOGOUT_MODAL_CLOSE attempt=" + logoutEscapeAttempts);
-					input.pressEscape().whenComplete((ignored, escapeError) ->
-					{
-						if (escapeError != null)
-						{
-							failActive(escapeError.getMessage());
-							return;
-						}
-						schedule(() -> openLogoutPanel(deadline), pollMillis);
-					});
-					return;
-				}
-				clickBounds(tab).whenComplete((ignored, clickError) ->
-				{
-					if (clickError != null)
-					{
-						failActive(clickError.getMessage());
-						return;
-					}
-					schedule(() -> openLogoutPanel(deadline), pollMillis);
-				});
-			});
-		});
+			failActive(error.getMessage());
+			return;
+		}
+		if (button != null)
+		{
+			clickBounds(button).whenComplete(
+				(ignored, clickError) -> handleLogoutButtonClick(deadline, clickError));
+			return;
+		}
+		view.visibleWidget(LOGOUT_TABS).whenComplete(
+			(tab, tabError) -> handleLogoutTab(deadline, tab, tabError));
+	}
+
+	private void handleLogoutButtonClick(long deadline, Throwable error)
+	{
+		if (error != null)
+		{
+			failActive(error.getMessage());
+			return;
+		}
+		waitForLoggedOut(deadline);
+	}
+
+	private void handleLogoutTab(long deadline, Rectangle tab, Throwable error)
+	{
+		if (error != null)
+		{
+			failActive(error.getMessage());
+			return;
+		}
+		if (tab != null)
+		{
+			clickBounds(tab).whenComplete(
+				(ignored, clickError) -> continueOpeningLogoutPanel(deadline, clickError));
+			return;
+		}
+		if (logoutEscapeAttempts >= 3)
+		{
+			failActive("No visible logout tab after closing modal interfaces");
+			return;
+		}
+		logoutEscapeAttempts++;
+		reporter.accept("SESSION_LOGOUT_MODAL_CLOSE attempt=" + logoutEscapeAttempts);
+		input.pressEscape().whenComplete(
+			(ignored, escapeError) -> continueOpeningLogoutPanel(deadline, escapeError));
+	}
+
+	private void continueOpeningLogoutPanel(long deadline, Throwable error)
+	{
+		if (error != null)
+		{
+			failActive(error.getMessage());
+			return;
+		}
+		schedule(() -> openLogoutPanel(deadline), pollMillis);
 	}
 
 	private void waitForLoggedOut(long deadline)
@@ -383,73 +388,77 @@ final class GenericClientSessionController implements AutoCloseable
 
 	private void dismissClickToPlay(long deadline)
 	{
-		view.visibleWidget(CLICK_TO_PLAY_WIDGETS).whenComplete((widget, error) ->
+		view.visibleWidget(CLICK_TO_PLAY_WIDGETS).whenComplete(
+			(widget, error) -> handleClickToPlay(deadline, widget, error));
+	}
+
+	private void handleClickToPlay(long deadline, Rectangle widget, Throwable error)
+	{
+		if (error != null)
 		{
-			if (error != null)
-			{
-				failActive(error.getMessage());
-				return;
-			}
-			if (widget == null)
-			{
-				view.visibleWidget(WELCOME_ROOT_WIDGETS).whenComplete((root, rootError) ->
-				{
-					if (rootError != null)
-					{
-						failActive(rootError.getMessage());
-						return;
-					}
-					if (root == null)
-					{
-						view.worldReady().whenComplete((ready, readyError) ->
-						{
-							if (readyError != null)
-							{
-								failActive(readyError.getMessage());
-								return;
-							}
-							if (Boolean.TRUE.equals(ready))
-							{
-								if (System.currentTimeMillis() < loginWorldSettleDeadline)
-								{
-									schedule(() -> dismissClickToPlay(deadline), pollMillis);
-									return;
-								}
-								completeActive("SESSION_LOGGED_IN");
-								return;
-							}
-							clickFallbackAndWait(deadline);
-						});
-						return;
-					}
-					clickFallbackAndWait(deadline);
-				});
-				return;
-			}
-			clickBounds(widget).whenComplete((ignored, clickError) ->
-			{
-				if (clickError != null)
-				{
-					failActive(clickError.getMessage());
-					return;
-				}
-				waitForWorldReady(deadline);
-			});
-		});
+			failActive(error.getMessage());
+			return;
+		}
+		if (widget != null)
+		{
+			clickBounds(widget).whenComplete(
+				(ignored, clickError) -> waitAfterClick(deadline, clickError));
+			return;
+		}
+		view.visibleWidget(WELCOME_ROOT_WIDGETS).whenComplete(
+			(root, rootError) -> handleWelcomeRoot(deadline, root, rootError));
+	}
+
+	private void handleWelcomeRoot(long deadline, Rectangle root, Throwable error)
+	{
+		if (error != null)
+		{
+			failActive(error.getMessage());
+			return;
+		}
+		if (root != null)
+		{
+			clickFallbackAndWait(deadline);
+			return;
+		}
+		view.worldReady().whenComplete(
+			(ready, readyError) -> handleCurrentWorldReadiness(deadline, ready, readyError));
+	}
+
+	private void handleCurrentWorldReadiness(long deadline, Boolean ready, Throwable error)
+	{
+		if (error != null)
+		{
+			failActive(error.getMessage());
+			return;
+		}
+		if (!Boolean.TRUE.equals(ready))
+		{
+			clickFallbackAndWait(deadline);
+			return;
+		}
+		if (System.currentTimeMillis() < loginWorldSettleDeadline)
+		{
+			schedule(() -> dismissClickToPlay(deadline), pollMillis);
+			return;
+		}
+		completeActive("SESSION_LOGGED_IN");
 	}
 
 	private void clickFallbackAndWait(long deadline)
 	{
 		clickPoint(clickToPlayFallbackPoint(view.canvasWidth(), view.canvasHeight()))
-			.whenComplete((ignored, error) ->
-			{
-				if (error != null)
-				{
-					failActive(error.getMessage());
-					return;
-				}
-				waitForWorldReady(deadline);
-			});
+			.whenComplete((ignored, error) -> waitAfterClick(deadline, error));
+	}
+
+	private void waitAfterClick(long deadline, Throwable error)
+	{
+		if (error != null)
+		{
+			failActive(error.getMessage());
+			return;
+		}
+		waitForWorldReady(deadline);
 	}
 
 	private void waitForWorldReady(long deadline)
@@ -459,46 +468,55 @@ final class GenericClientSessionController implements AutoCloseable
 			failActive("Timed out dismissing click-to-play");
 			return;
 		}
-		view.visibleWidget(CLICK_TO_PLAY_WIDGETS).whenComplete((play, playError) ->
+		view.visibleWidget(CLICK_TO_PLAY_WIDGETS).whenComplete(
+			(play, playError) -> handlePlayWhileWaiting(deadline, play, playError));
+	}
+
+	private void handlePlayWhileWaiting(long deadline, Rectangle play, Throwable error)
+	{
+		if (error != null)
 		{
-			if (playError != null)
-			{
-				failActive(playError.getMessage());
-				return;
-			}
-			if (play != null)
-			{
-				schedule(() -> waitForWorldReady(deadline), pollMillis);
-				return;
-			}
-			view.visibleWidget(WELCOME_ROOT_WIDGETS).whenComplete((root, rootError) ->
-			{
-				if (rootError != null)
-				{
-					failActive(rootError.getMessage());
-					return;
-				}
-				if (root != null)
-				{
-					schedule(() -> waitForWorldReady(deadline), pollMillis);
-					return;
-				}
-				view.worldReady().whenComplete((ready, error) ->
-				{
-					if (error != null)
-					{
-						failActive(error.getMessage());
-						return;
-					}
-					if (Boolean.TRUE.equals(ready))
-					{
-						completeActive("SESSION_LOGGED_IN_AND_PLAYING");
-						return;
-					}
-					schedule(() -> waitForWorldReady(deadline), pollMillis);
-				});
-			});
-		});
+			failActive(error.getMessage());
+			return;
+		}
+		if (play != null)
+		{
+			schedule(() -> waitForWorldReady(deadline), pollMillis);
+			return;
+		}
+		view.visibleWidget(WELCOME_ROOT_WIDGETS).whenComplete(
+			(root, rootError) -> handleWelcomeWhileWaiting(deadline, root, rootError));
+	}
+
+	private void handleWelcomeWhileWaiting(long deadline, Rectangle root, Throwable error)
+	{
+		if (error != null)
+		{
+			failActive(error.getMessage());
+			return;
+		}
+		if (root != null)
+		{
+			schedule(() -> waitForWorldReady(deadline), pollMillis);
+			return;
+		}
+		view.worldReady().whenComplete(
+			(ready, readyError) -> handleWorldReady(deadline, ready, readyError));
+	}
+
+	private void handleWorldReady(long deadline, Boolean ready, Throwable error)
+	{
+		if (error != null)
+		{
+			failActive(error.getMessage());
+			return;
+		}
+		if (Boolean.TRUE.equals(ready))
+		{
+			completeActive("SESSION_LOGGED_IN_AND_PLAYING");
+			return;
+		}
+		schedule(() -> waitForWorldReady(deadline), pollMillis);
 	}
 
 	private CompletableFuture<String> clickBounds(Rectangle bounds)

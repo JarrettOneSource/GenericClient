@@ -8,6 +8,7 @@ import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
@@ -215,46 +216,53 @@ final class GenericClientScriptsPanel extends JPanel
 		}
 
 		String scriptId = selected.getId();
-		host.describe(scriptId).whenComplete((scriptInputs, error) -> SwingUtilities.invokeLater(() ->
+		host.describe(scriptId).whenComplete((scriptInputs, error) ->
+			SwingUtilities.invokeLater(() -> showInputs(request, scriptId, scriptInputs, error)));
+	}
+
+	private void showInputs(
+		long request,
+		String scriptId,
+		List<GenericClientScriptInput> scriptInputs,
+		Throwable error)
+	{
+		GenericClientScriptRegistry.Script current =
+			(GenericClientScriptRegistry.Script) scripts.getSelectedItem();
+		if (request != descriptionRequest || current == null || !scriptId.equals(current.getId()))
 		{
-			GenericClientScriptRegistry.Script current =
-				(GenericClientScriptRegistry.Script) scripts.getSelectedItem();
-			if (request != descriptionRequest || current == null || !scriptId.equals(current.getId()))
+			return;
+		}
+		inputs.removeAll();
+		choiceControls.clear();
+		if (error != null)
+		{
+			setNotice("Unable to load script inputs: " + GenericClientDashboardStyle.message(error));
+		}
+		else
+		{
+			int row = 0;
+			for (GenericClientScriptInput input : scriptInputs)
 			{
-				return;
-			}
-			inputs.removeAll();
-			choiceControls.clear();
-			if (error != null)
-			{
-				setNotice("Unable to load script inputs: " + GenericClientDashboardStyle.message(error));
-			}
-			else
-			{
-				int row = 0;
-				for (GenericClientScriptInput input : scriptInputs)
+				JComboBox<GenericClientScriptInput.Option> control = new JComboBox<>();
+				for (GenericClientScriptInput.Option choice : input.getChoices())
 				{
-					JComboBox<GenericClientScriptInput.Option> control = new JComboBox<>();
-					for (GenericClientScriptInput.Option choice : input.getChoices())
+					control.addItem(choice);
+					if (choice.getValue().equals(input.getDefaultValue()))
 					{
-						control.addItem(choice);
-						if (choice.getValue().equals(input.getDefaultValue()))
-						{
-							control.setSelectedItem(choice);
-						}
+						control.setSelectedItem(choice);
 					}
-					GenericClientDashboardStyle.combo(control, 240);
-					choiceControls.put(input.getId(), control);
-					addInputRow(row++, input.getLabel(), control);
 				}
-				inputs.setVisible(!scriptInputs.isEmpty());
-				run.setEnabled(true);
+				GenericClientDashboardStyle.combo(control, 240);
+				choiceControls.put(input.getId(), control);
+				addInputRow(row++, input.getLabel(), control);
 			}
-			inputs.revalidate();
-			inputs.repaint();
-			revalidate();
-			repaint();
-		}));
+			inputs.setVisible(!scriptInputs.isEmpty());
+			run.setEnabled(true);
+		}
+		inputs.revalidate();
+		inputs.repaint();
+		revalidate();
+		repaint();
 	}
 
 	private void addInputRow(int row, String text, JComponent control)

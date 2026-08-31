@@ -1,5 +1,8 @@
 plugins {
 	id 'java'
+	id 'jacoco'
+	id 'pmd'
+	id 'info.solidsoft.pitest' version '1.19.0'
 }
 
 repositories {
@@ -30,7 +33,7 @@ dependencies {
 	compileOnly 'org.projectlombok:lombok:1.18.30'
 	annotationProcessor 'org.projectlombok:lombok:1.18.30'
 
-	testImplementation 'junit:junit:4.12'
+	testImplementation 'junit:junit:4.13.2'
 	testImplementation group: 'net.runelite', name:'client', version: runeLiteVersion
 	testImplementation group: 'net.runelite', name:'jshell', version: runeLiteVersion
 }
@@ -45,6 +48,57 @@ tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'
 	options.release.set(11)
 	options.compilerArgs.addAll(['-Xlint:deprecation', '-Xlint:unchecked'])
+}
+
+jacoco {
+	toolVersion = '0.8.12'
+}
+
+pmd {
+	consoleOutput = true
+	toolVersion = '7.25.0'
+	ruleSets = []
+	ruleSetFiles = files('config/pmd/ruleset.xml')
+}
+
+pitest {
+	targetClasses = providers.gradleProperty('pitestTargetClasses')
+		.map { value -> value.split(',') as List }
+		.getOrElse(['com.genericclient.*'])
+	targetTests = providers.gradleProperty('pitestTargetTests')
+		.map { value -> value.split(',') as List }
+		.getOrElse(['com.genericclient.*'])
+	threads = 4
+	outputFormats = ['HTML', 'XML']
+	timestampedReports = false
+	timeoutConstInMillis = 10_000
+	timeoutFactor = 2.0
+}
+
+tasks.named('test') {
+	finalizedBy tasks.named('jacocoTestReport')
+}
+
+tasks.named('jacocoTestReport') {
+	dependsOn tasks.named('test')
+	reports {
+		xml.required = true
+		html.required = true
+	}
+}
+
+tasks.withType(Pmd).configureEach {
+	reports {
+		xml.required = true
+		html.required = true
+	}
+}
+
+tasks.register('qualityReport') {
+	group = LifecycleBasePlugin.VERIFICATION_GROUP
+	description = 'Runs tests, coverage reporting, and static analysis.'
+	dependsOn tasks.named('test'), tasks.named('jacocoTestReport'),
+		tasks.named('pmdMain'), tasks.named('pmdTest')
 }
 
 tasks.register('run', JavaExec) {

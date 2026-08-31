@@ -145,6 +145,9 @@ public class GenericClientQuestSnapshotTest
 		assertEquals("Ball", items.get(0).get("name"));
 		assertEquals(1L, items.get(0).get("quantity"));
 		assertEquals(Collections.singletonList("Take"), items.get(0).get("actions"));
+
+		query.put("limit", 0L);
+		assertEquals(Collections.emptyList(), snapshot.read("ground_items", query));
 	}
 
 	@Test

@@ -1,5 +1,9 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientWidgetTree.clickable;
+import static com.genericclient.GenericClientWidgetTree.descendants;
+import static com.genericclient.GenericClientWidgetTree.hasAction;
+
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.util.ArrayList;
@@ -66,59 +70,77 @@ final class GenericClientAutocastInput
 
 		List<Map<String, Object>> steps = new ArrayList<>();
 		reporter.accept("AUTOCAST_SELECTING spell=" + spell.getName());
-		return ensureCombatTab(activityContext, steps).thenCompose(tabReady ->
+		return ensureCombatTab(activityContext, steps).thenCompose(
+			tabReady -> selectFromCombatTab(spell, activityContext, steps, tabReady));
+	}
+
+	private CompletableFuture<Map<String, Object>> selectFromCombatTab(
+		GenericClientSpellInput.Spell spell,
+		GenericClientActivityContext activityContext,
+		List<Map<String, Object>> steps,
+		boolean tabReady)
+	{
+		if (!tabReady)
 		{
-			if (!tabReady)
+			return completedRejected("combat_tab_did_not_open", spell, steps);
+		}
+		return clientRead(() -> selectedSpellMatches(spell)).thenCompose(alreadySelected ->
+			alreadySelected
+				? CompletableFuture.completedFuture(
+					receipt("unchanged", "autocast_already_selected", spell, steps))
+				: openAutocastMenu(spell, activityContext, steps));
+	}
+
+	private CompletableFuture<Map<String, Object>> openAutocastMenu(
+		GenericClientSpellInput.Spell spell,
+		GenericClientActivityContext activityContext,
+		List<Map<String, Object>> steps)
+	{
+		return click(this::resolveAutocastButton, activityContext, steps).thenCompose(opened ->
+		{
+			if (!opened)
 			{
-				return completedRejected("combat_tab_did_not_open", spell, steps);
+				return completedRejected("autocast_menu_not_opened", spell, steps);
 			}
-			return clientRead(() -> selectedSpellMatches(spell)).thenCompose(alreadySelected ->
-			{
-				if (alreadySelected)
-				{
-					return CompletableFuture.completedFuture(
-						receipt("unchanged", "autocast_already_selected", spell, steps));
-				}
-				return click(this::resolveAutocastButton, activityContext, steps).thenCompose(opened ->
-				{
-					if (!opened)
-					{
-						return completedRejected("autocast_menu_not_opened", spell, steps);
-					}
-					return waitFor(() -> visibleWidget(InterfaceID.Autocast.UNIVERSE) != null)
-						.thenCompose(menuVisible ->
-						{
-							if (!menuVisible)
-							{
-								return completedRejected("autocast_menu_not_visible", spell, steps);
-							}
-							return click(
-								() -> resolveAutocastSpell(spell),
-								activityContext,
-								steps).thenCompose(selected ->
-							{
-								if (!selected)
-								{
-									return completedRejected("autocast_spell_not_selected", spell, steps);
-								}
-								return waitFor(() -> client.getVarbitValue(VarbitID.AUTOCAST_SET) != 0)
-									.thenApply(verified ->
-									{
-										Map<String, Object> result = receipt(
-											verified ? "set" : "rejected",
-											verified ? "autocast_selected" : "autocast_selection_unverified",
-											spell,
-											steps);
-										reporter.accept("AUTOCAST_COMPLETED spell=" + spell.getName() +
-											" status=" + result.get("status") +
-											" clicks=" + result.get("click_count"));
-										return result;
-									});
-							});
-						});
-				});
-			});
+			return waitFor(() -> visibleWidget(InterfaceID.Autocast.UNIVERSE) != null)
+				.thenCompose(visible -> selectAutocastSpell(spell, activityContext, steps, visible));
 		});
+	}
+
+	private CompletableFuture<Map<String, Object>> selectAutocastSpell(
+		GenericClientSpellInput.Spell spell,
+		GenericClientActivityContext activityContext,
+		List<Map<String, Object>> steps,
+		boolean menuVisible)
+	{
+		if (!menuVisible)
+		{
+			return completedRejected("autocast_menu_not_visible", spell, steps);
+		}
+		return click(() -> resolveAutocastSpell(spell), activityContext, steps).thenCompose(selected ->
+		{
+			if (!selected)
+			{
+				return completedRejected("autocast_spell_not_selected", spell, steps);
+			}
+			return waitFor(() -> client.getVarbitValue(VarbitID.AUTOCAST_SET) != 0)
+				.thenApply(verified -> autocastReceipt(spell, steps, verified));
+		});
+	}
+
+	private Map<String, Object> autocastReceipt(
+		GenericClientSpellInput.Spell spell,
+		List<Map<String, Object>> steps,
+		boolean verified)
+	{
+		Map<String, Object> result = receipt(
+			verified ? "set" : "rejected",
+			verified ? "autocast_selected" : "autocast_selection_unverified",
+			spell,
+			steps);
+		reporter.accept("AUTOCAST_COMPLETED spell=" + spell.getName() +
+			" status=" + result.get("status") + " clicks=" + result.get("click_count"));
+		return result;
 	}
 
 	private CompletableFuture<Boolean> ensureCombatTab(
@@ -311,8 +333,7 @@ final class GenericClientAutocastInput
 
 	static Widget findSpellWidget(Widget root, int spriteId, String label)
 	{
-		List<Widget> widgets = new ArrayList<>();
-		collect(root, widgets);
+		List<Widget> widgets = descendants(root, 256);
 		for (Widget widget : widgets)
 		{
 			if (clickable(widget) && spriteId >= 0 && widget.getSpriteId() == spriteId &&
@@ -345,62 +366,11 @@ final class GenericClientAutocastInput
 		return null;
 	}
 
-	private static void collect(Widget widget, List<Widget> result)
-	{
-		if (widget == null || result.size() >= 256)
-		{
-			return;
-		}
-		result.add(widget);
-		collect(widget.getStaticChildren(), result);
-		collect(widget.getDynamicChildren(), result);
-		collect(widget.getNestedChildren(), result);
-	}
-
-	private static void collect(Widget[] children, List<Widget> result)
-	{
-		if (children == null)
-		{
-			return;
-		}
-		for (Widget child : children)
-		{
-			collect(child, result);
-		}
-	}
-
 	private static boolean matchesLabel(Widget widget, String label)
 	{
 		String text = normalized(Objects.toString(widget.getName(), "") + " " +
 			Objects.toString(widget.getText(), ""));
 		return text.contains(normalized(label));
-	}
-
-	private static boolean hasAction(Widget widget, String action)
-	{
-		String[] actions = widget.getActions();
-		if (actions == null)
-		{
-			return false;
-		}
-		for (String candidate : actions)
-		{
-			if (candidate != null && candidate.equalsIgnoreCase(action))
-			{
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private static boolean clickable(Widget widget)
-	{
-		if (widget == null || widget.isHidden() || widget.isSelfHidden())
-		{
-			return false;
-		}
-		Rectangle bounds = widget.getBounds();
-		return bounds != null && bounds.width > 0 && bounds.height > 0;
 	}
 
 	private static String normalized(String value)

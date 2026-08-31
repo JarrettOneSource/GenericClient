@@ -53,70 +53,106 @@ final class GenericClientRuleEngine
 	{
 		if (condition.getAll() != null)
 		{
-			ConditionResult unknown = null;
-			for (GenericClientAutomationConfig.Condition child : condition.getAll())
-			{
-				ConditionResult result = evaluate(child, schedules, account);
-				if (result.truth == Truth.FALSE)
-				{
-					return new ConditionResult(Truth.FALSE, result.reason);
-				}
-				if (result.truth == Truth.UNKNOWN && unknown == null)
-				{
-					unknown = result;
-				}
-			}
-			return unknown == null
-				? new ConditionResult(Truth.TRUE, "all conditions matched")
-				: unknown;
+			return evaluateAll(condition.getAll(), schedules, account);
 		}
 		if (condition.getAny() != null)
 		{
-			ConditionResult unknown = null;
-			String falseReason = "no condition matched";
-			for (GenericClientAutomationConfig.Condition child : condition.getAny())
-			{
-				ConditionResult result = evaluate(child, schedules, account);
-				if (result.truth == Truth.TRUE)
-				{
-					return result;
-				}
-				if (result.truth == Truth.UNKNOWN && unknown == null)
-				{
-					unknown = result;
-				}
-				else if (result.truth == Truth.FALSE)
-				{
-					falseReason = result.reason;
-				}
-			}
-			return unknown == null
-				? new ConditionResult(Truth.FALSE, falseReason)
-				: unknown;
+			return evaluateAny(condition.getAny(), schedules, account);
 		}
 		if (condition.getNot() != null)
 		{
-			ConditionResult value = evaluate(condition.getNot(), schedules, account);
-			if (value.truth == Truth.UNKNOWN)
-			{
-				return value;
-			}
-			return new ConditionResult(value.truth == Truth.TRUE ? Truth.FALSE : Truth.TRUE,
-				"not: " + value.reason);
+			return evaluateNot(condition.getNot(), schedules, account);
 		}
 		if (condition.getSchedule() != null)
 		{
-			GenericClientSchedule.State state = schedules.get(condition.getSchedule());
-			if (state == null)
-			{
-				return new ConditionResult(Truth.UNKNOWN,
-					"schedule " + condition.getSchedule() + " is unavailable");
-			}
-			return new ConditionResult(state.isActive() ? Truth.TRUE : Truth.FALSE,
-				"schedule " + condition.getSchedule() + " is " +
-					(state.isActive() ? "active" : "inactive"));
+			return evaluateSchedule(condition.getSchedule(), schedules);
 		}
+		return evaluateFact(condition, account);
+	}
 
+	private ConditionResult evaluateAll(
+		List<GenericClientAutomationConfig.Condition> conditions,
+		GenericClientSchedule.Snapshot schedules,
+		Map<String, Object> account)
+	{
+		ConditionResult unknown = null;
+		for (GenericClientAutomationConfig.Condition child : conditions)
+		{
+			ConditionResult result = evaluate(child, schedules, account);
+			if (result.truth == Truth.FALSE)
+			{
+				return new ConditionResult(Truth.FALSE, result.reason);
+			}
+			if (result.truth == Truth.UNKNOWN && unknown == null)
+			{
+				unknown = result;
+			}
+		}
+		return unknown == null
+			? new ConditionResult(Truth.TRUE, "all conditions matched")
+			: unknown;
+	}
+
+	private ConditionResult evaluateAny(
+		List<GenericClientAutomationConfig.Condition> conditions,
+		GenericClientSchedule.Snapshot schedules,
+		Map<String, Object> account)
+	{
+		ConditionResult unknown = null;
+		String falseReason = "no condition matched";
+		for (GenericClientAutomationConfig.Condition child : conditions)
+		{
+			ConditionResult result = evaluate(child, schedules, account);
+			if (result.truth == Truth.TRUE)
+			{
+				return result;
+			}
+			if (result.truth == Truth.UNKNOWN && unknown == null)
+			{
+				unknown = result;
+			}
+			else if (result.truth == Truth.FALSE)
+			{
+				falseReason = result.reason;
+			}
+		}
+		return unknown == null
+			? new ConditionResult(Truth.FALSE, falseReason)
+			: unknown;
+	}
+
+	private ConditionResult evaluateNot(
+		GenericClientAutomationConfig.Condition condition,
+		GenericClientSchedule.Snapshot schedules,
+		Map<String, Object> account)
+	{
+		ConditionResult value = evaluate(condition, schedules, account);
+		if (value.truth == Truth.UNKNOWN)
+		{
+			return value;
+		}
+		return new ConditionResult(value.truth == Truth.TRUE ? Truth.FALSE : Truth.TRUE,
+			"not: " + value.reason);
+	}
+
+	private static ConditionResult evaluateSchedule(
+		String schedule,
+		GenericClientSchedule.Snapshot schedules)
+	{
+		GenericClientSchedule.State state = schedules.get(schedule);
+		if (state == null)
+		{
+			return new ConditionResult(Truth.UNKNOWN,
+				"schedule " + schedule + " is unavailable");
+		}
+		return new ConditionResult(state.isActive() ? Truth.TRUE : Truth.FALSE,
+			"schedule " + schedule + " is " + (state.isActive() ? "active" : "inactive"));
+	}
+
+	private static ConditionResult evaluateFact(
+		GenericClientAutomationConfig.Condition condition,
+		Map<String, Object> account)
+	{
 		FactValue fact = resolveFact(condition.getFact(), account);
 		if (!fact.known)
 		{
@@ -278,6 +314,7 @@ final class GenericClientRuleEngine
 		private final boolean eligible;
 		private final String reason;
 		private final long cooldownUntil;
+		@SuppressWarnings("PMD.UnusedPrivateField")
 		private final int order;
 
 		private RuleEvaluation(

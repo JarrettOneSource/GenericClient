@@ -2,6 +2,8 @@ package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.awt.Component;
@@ -43,12 +45,12 @@ public class GenericClientDashboardTest
 		{
 			GenericClientDashboard dashboard = new GenericClientDashboard(null, new FakeActions(), host);
 			JPanel content = dashboard.getContent();
-			assertTrue(findOrNull(content, JTabbedPane.class) == null);
-			assertTrue(buttonOrNull(content, "Active Script") != null);
-			assertTrue(buttonOrNull(content, "Automations") != null);
-			assertTrue(buttonOrNull(content, "Schedules") != null);
-			assertTrue(buttonOrNull(content, "Console") != null);
-			assertTrue(buttonOrNull(content, "Settings") != null);
+			assertNull(findOrNull(content, JTabbedPane.class));
+			assertNotNull(buttonOrNull(content, "Active Script"));
+			assertNotNull(buttonOrNull(content, "Automations"));
+			assertNotNull(buttonOrNull(content, "Schedules"));
+			assertNotNull(buttonOrNull(content, "Console"));
+			assertNotNull(buttonOrNull(content, "Settings"));
 
 			List<String> labels = labels(content);
 			assertTrue(labels.contains("Chance"));
@@ -58,9 +60,9 @@ public class GenericClientDashboardTest
 			assertFalse(labels.contains("Game ticks"));
 			assertFalse(labels.contains("Long pressure"));
 			assertFalse(labels.contains("Nearby NPCs:"));
-			assertTrue(buttonOrNull(content, "Enable") != null);
-			assertTrue(buttonOrNull(content, "Pause") != null);
-			assertTrue(buttonOrNull(content, "Reload rules") != null);
+			assertNotNull(buttonOrNull(content, "Enable"));
+			assertNotNull(buttonOrNull(content, "Pause"));
+			assertNotNull(buttonOrNull(content, "Reload rules"));
 			dashboard.close();
 		}
 		finally
@@ -204,9 +206,9 @@ public class GenericClientDashboardTest
 
 			assertTrue(labels(panel).contains("Active UI"));
 			assertTrue(labels(panel).contains("Mode"));
-			assertTrue(buttonOrNull(panel, "Refresh") != null);
-			assertTrue(buttonOrNull(panel, "Restart") != null);
-			assertTrue(buttonOrNull(panel, "Stop") != null);
+			assertNotNull(buttonOrNull(panel, "Refresh"));
+			assertNotNull(buttonOrNull(panel, "Restart"));
+			assertNotNull(buttonOrNull(panel, "Stop"));
 
 			SwingUtilities.invokeAndWait(() -> button(panel, "Refresh").doClick());
 			host.publishGameTick(snapshot(1));
@@ -233,26 +235,6 @@ public class GenericClientDashboardTest
 			}
 		}
 		return values;
-	}
-
-	private static <T> T find(Container root, Class<T> type)
-	{
-		for (Component component : root.getComponents())
-		{
-			if (type.isInstance(component))
-			{
-				return type.cast(component);
-			}
-			if (component instanceof Container)
-			{
-				T nested = findOrNull((Container) component, type);
-				if (nested != null)
-				{
-					return nested;
-				}
-			}
-		}
-		throw new AssertionError("Missing component " + type.getSimpleName());
 	}
 
 	private static <T> T findOrNull(Container root, Class<T> type)

@@ -112,19 +112,33 @@ final class GenericClientEmergencyController
 		lastHitpoints = hitpoints;
 		if (hitpoints <= 0)
 		{
-			guard = null;
-			recovering.set(false);
-			lastEvent = "death_observed";
-			reporter.accept("EMERGENCY_DEATH_OBSERVED");
-			stopAction.apply("emergency_death_observed").handle((ignored, error) -> null);
+			handleDeath();
 			return;
 		}
 		if (recovering.get())
 		{
 			return;
 		}
+		startRecovery(current, hitpoints, maximumHitpoints, missingHitpoints);
+	}
+
+	private void handleDeath()
+	{
+		guard = null;
+		recovering.set(false);
+		lastEvent = "death_observed";
+		reporter.accept("EMERGENCY_DEATH_OBSERVED");
+		stopAction.apply("emergency_death_observed").handle((ignored, error) -> null);
+	}
+
+	private void startRecovery(
+		Guard current,
+		int hitpoints,
+		int maximumHitpoints,
+		int missingHitpoints)
+	{
 		boolean forcedHealReady = maximumHitpoints > 0 &&
-			(long) hitpoints * 100L < (long) maximumHitpoints * FORCED_HEAL_PERCENT;
+			hitpoints * 100L < maximumHitpoints * FORCED_HEAL_PERCENT;
 		boolean continueAfterConsumable = current.continueAfterConsumable || forcedHealReady;
 		boolean exactHealReady = continueAfterConsumable &&
 			current.hasConsumableThatFits(missingHitpoints);
@@ -148,34 +162,35 @@ final class GenericClientEmergencyController
 				forcedHealReady ||
 					(hardFloorReached && current.allowOverheal && !exactHealReady),
 				forcedHealReady || hardFloorReached)
-			: stopConsumeAndEscape(current);
-		recovery
-			.whenComplete((receipt, error) ->
-			{
-				if (guard != current)
-				{
-					recovering.set(false);
-					return;
-				}
-				if (error != null)
-				{
-					lastEvent = "recovery_failed";
-					reporter.accept("EMERGENCY_RECOVERY_FAILED message=" + rootMessage(error));
-				}
-				else if (receipt != null && "dispatched".equals(receipt.get("status")))
-				{
-					lastEvent = String.valueOf(receipt.get("result"));
-					reporter.accept("EMERGENCY_RECOVERY_DISPATCHED result=" + receipt.get("result"));
-				}
-				else
-				{
-					lastEvent = receipt == null
-						? "recovery_unavailable"
-						: String.valueOf(receipt.get("result"));
-					reporter.accept("EMERGENCY_RECOVERY_UNAVAILABLE result=" + lastEvent);
-				}
-				recovering.set(false);
-			});
+				: stopConsumeAndEscape(current);
+		recovery.whenComplete((receipt, error) -> completeRecovery(current, receipt, error));
+	}
+
+	private void completeRecovery(Guard expected, Map<String, Object> receipt, Throwable error)
+	{
+		if (guard != expected)
+		{
+			recovering.set(false);
+			return;
+		}
+		if (error != null)
+		{
+			lastEvent = "recovery_failed";
+			reporter.accept("EMERGENCY_RECOVERY_FAILED message=" + rootMessage(error));
+		}
+		else if (receipt != null && "dispatched".equals(receipt.get("status")))
+		{
+			lastEvent = String.valueOf(receipt.get("result"));
+			reporter.accept("EMERGENCY_RECOVERY_DISPATCHED result=" + receipt.get("result"));
+		}
+		else
+		{
+			lastEvent = receipt == null
+				? "recovery_unavailable"
+				: String.valueOf(receipt.get("result"));
+			reporter.accept("EMERGENCY_RECOVERY_UNAVAILABLE result=" + lastEvent);
+		}
+		recovering.set(false);
 	}
 
 	private CompletableFuture<Map<String, Object>> consumeAndContinue(

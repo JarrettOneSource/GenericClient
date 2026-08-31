@@ -5,7 +5,6 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -284,7 +283,6 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		}
 	}
 
-	@SuppressWarnings("unchecked")
 	private void evaluate(String trigger)
 	{
 		if (closed)
@@ -299,15 +297,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		long now = clock.millis();
 		state.clearExpiredCooldowns(now);
 		GenericClientSchedule.Snapshot scheduleSnapshot = schedules.evaluate(clock.instant());
-		Map<String, Object> account = Collections.emptyMap();
-		if (latestSnapshot != null)
-		{
-			Object raw = latestSnapshot.read("account", Collections.emptyMap());
-			if (raw instanceof Map)
-			{
-				account = (Map<String, Object>) raw;
-			}
-		}
+		Map<String, Object> account = accountSnapshot();
 		GenericClientRuleEngine.Evaluation decision = ruleEngine.evaluate(
 			config, scheduleSnapshot, account, state.getCooldowns(), now);
 		GenericClientLuaHost.RunState run = runtime.getRunState();
@@ -322,80 +312,94 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 			decision = ruleEngine.evaluate(config, scheduleSnapshot, account, state.getCooldowns(), now);
 		}
 
-		String mode;
-		String detail;
+		AutomationMode mode = selectMode(
+			run, decision, attentionPending, attentionDetail, pausePending);
+		publishStatus(
+			mode.name, mode.detail, trigger, scheduleSnapshot, decision, run,
+			pausePending, attentionPending);
+		rescheduleBoundary(scheduleSnapshot.getNextTransition());
+	}
+
+	@SuppressWarnings("unchecked")
+	private Map<String, Object> accountSnapshot()
+	{
+		if (latestSnapshot == null)
+		{
+			return Collections.emptyMap();
+		}
+		Object value = latestSnapshot.read("account", Collections.emptyMap());
+		return value instanceof Map ? (Map<String, Object>) value : Collections.emptyMap();
+	}
+
+	private AutomationMode selectMode(
+		GenericClientLuaHost.RunState run,
+		GenericClientRuleEngine.Evaluation decision,
+		boolean attentionPending,
+		String attentionDetail,
+		boolean pausePending)
+	{
 		if (fault != null)
 		{
-			mode = "faulted";
-			detail = fault;
+			return new AutomationMode("faulted", fault);
 		}
-		else if (!config.isEnabled())
+		if (!config.isEnabled())
 		{
-			mode = "disabled";
-			detail = "automation is disabled";
 			stopIfOwned(run, "disabled");
+			return new AutomationMode("disabled", "automation is disabled");
 		}
-		else if (attentionPending)
+		if (attentionPending)
 		{
-			mode = "attention_required";
-			detail = attentionDetail == null ? "external attention is required" : attentionDetail;
 			stopIfOwned(run, "attention_required");
+			return new AutomationMode(
+				"attention_required",
+				attentionDetail == null ? "external attention is required" : attentionDetail);
 		}
-		else if (pausePending)
+		if (pausePending)
 		{
-			mode = "paused";
-			detail = state.getLastEvent();
 			stopIfOwned(run, "paused");
+			return new AutomationMode("paused", state.getLastEvent());
 		}
-		else if (actionPending)
+		if (actionPending)
 		{
-			mode = "transitioning";
-			detail = state.getLastEvent();
+			return new AutomationMode("transitioning", state.getLastEvent());
 		}
-		else if (run.isRunning() && run.isManual())
+		if (run.isRunning() && run.isManual())
 		{
-			mode = "manual";
-			detail = "manual script owns the runtime";
 			clearActiveRuleIfNeeded();
+			return new AutomationMode("manual", "manual script owns the runtime");
 		}
-		else if (run.isRunning() && run.getRuleId() != null)
+		if (run.isRunning() && run.getRuleId() != null)
 		{
-			String owner = run.getRuleId();
-			GenericClientRuleEngine.RuleEvaluation ownerDecision = decision.get(owner);
-			state.setActiveRule(owner);
-			if (ownerDecision == null || ownerDecision.getTruth() == GenericClientRuleEngine.Truth.FALSE)
-			{
-				mode = "stopping";
-				detail = ownerDecision == null ? "owning rule was removed" : ownerDecision.getReason();
-				requestStop(owner, "ineligible");
-			}
-			else if (ownerDecision.getTruth() == GenericClientRuleEngine.Truth.UNKNOWN)
-			{
-				mode = "holding";
-				detail = ownerDecision.getReason();
-			}
-			else
-			{
-				mode = "running";
-				detail = "rule " + owner + " retains its script lease";
-			}
+			return activeRuleMode(run.getRuleId(), decision);
 		}
-		else if (decision.getSelected() != null)
+		if (decision.getSelected() != null)
 		{
 			GenericClientRuleEngine.RuleEvaluation selected = decision.getSelected();
-			mode = "starting";
-			detail = selected.getReason();
 			requestStart(selected.getRule());
+			return new AutomationMode("starting", selected.getReason());
 		}
-		else
+		clearActiveRuleIfNeeded();
+		return new AutomationMode("idle", "no rule is eligible");
+	}
+
+	private AutomationMode activeRuleMode(
+		String owner,
+		GenericClientRuleEngine.Evaluation decision)
+	{
+		GenericClientRuleEngine.RuleEvaluation ownerDecision = decision.get(owner);
+		state.setActiveRule(owner);
+		if (ownerDecision == null || ownerDecision.getTruth() == GenericClientRuleEngine.Truth.FALSE)
 		{
-			mode = "idle";
-			detail = "no rule is eligible";
-			clearActiveRuleIfNeeded();
+			requestStop(owner, "ineligible");
+			return new AutomationMode(
+				"stopping",
+				ownerDecision == null ? "owning rule was removed" : ownerDecision.getReason());
 		}
-		publishStatus(
-			mode, detail, trigger, scheduleSnapshot, decision, run, pausePending, attentionPending);
-		rescheduleBoundary(scheduleSnapshot.getNextTransition());
+		if (ownerDecision.getTruth() == GenericClientRuleEngine.Truth.UNKNOWN)
+		{
+			return new AutomationMode("holding", ownerDecision.getReason());
+		}
+		return new AutomationMode("running", "rule " + owner + " retains its script lease");
 	}
 
 	private void handleTerminalRun(GenericClientLuaHost.RunState run, long now)
@@ -550,11 +554,11 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		if (boundaryFuture != null)
 		{
 			boundaryFuture.cancel(false);
-			boundaryFuture = null;
 		}
 		scheduledBoundary = nextTransition;
 		if (nextTransition == null || closed)
 		{
+			boundaryFuture = null;
 			return;
 		}
 		long delay = Math.max(1L, nextTransition.toEpochMilli() - clock.millis() + 5L);
@@ -686,6 +690,18 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 	private interface ThrowingSupplier<T>
 	{
 		T get() throws Exception;
+	}
+
+	private static final class AutomationMode
+	{
+		private final String name;
+		private final String detail;
+
+		private AutomationMode(String name, String detail)
+		{
+			this.name = name;
+			this.detail = detail;
+		}
 	}
 
 	interface Runtime

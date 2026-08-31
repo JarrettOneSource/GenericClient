@@ -45,25 +45,46 @@ final class GenericClientRunInput
 
 	CompletableFuture<Map<String, Object>> setEnabled(boolean expected, GenericClientActivityContext activityContext)
 	{
-		CompletableFuture<Boolean> enabled = clientRead(this::isEnabled);
-		return enabled.thenCompose(value -> value == expected
-			? CompletableFuture.completedFuture(unchanged(expected))
-			: menuInput.interact(this::resolveRunButton, activityContext).thenCompose(receipt ->
-			{
-				if (!"dispatched".equals(receipt.get("status")))
-				{
-					return CompletableFuture.completedFuture(receipt);
-				}
-				return verifyState(expected, VERIFY_ATTEMPTS).thenApply(verified ->
-				{
-					Map<String, Object> result = new LinkedHashMap<>(receipt);
-					result.put("status", verified ? "complete" : "rejected");
-					result.put("result", verified
-						? expected ? "run_enabled" : "run_disabled"
-						: "run_toggle_unverified");
-					return result;
-				});
-			}));
+		return clientRead(this::isEnabled).thenCompose(
+			enabled -> toggleIfNeeded(expected, activityContext, enabled));
+	}
+
+	private CompletableFuture<Map<String, Object>> toggleIfNeeded(
+		boolean expected,
+		GenericClientActivityContext activityContext,
+		boolean enabled)
+	{
+		if (enabled == expected)
+		{
+			return CompletableFuture.completedFuture(unchanged(expected));
+		}
+		return menuInput.interact(this::resolveRunButton, activityContext).thenCompose(
+			receipt -> verifyToggle(expected, receipt));
+	}
+
+	private CompletableFuture<Map<String, Object>> verifyToggle(
+		boolean expected,
+		Map<String, Object> receipt)
+	{
+		if (!"dispatched".equals(receipt.get("status")))
+		{
+			return CompletableFuture.completedFuture(receipt);
+		}
+		return verifyState(expected, VERIFY_ATTEMPTS).thenApply(
+			verified -> toggleReceipt(receipt, expected, verified));
+	}
+
+	private static Map<String, Object> toggleReceipt(
+		Map<String, Object> receipt,
+		boolean expected,
+		boolean verified)
+	{
+		Map<String, Object> result = new LinkedHashMap<>(receipt);
+		result.put("status", verified ? "complete" : "rejected");
+		result.put("result", verified
+			? expected ? "run_enabled" : "run_disabled"
+			: "run_toggle_unverified");
+		return result;
 	}
 
 	void cancel(String reason)

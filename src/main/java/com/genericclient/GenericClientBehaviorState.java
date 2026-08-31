@@ -169,6 +169,14 @@ final class GenericClientBehaviorState
 
 	void validate(String expectedProfileId)
 	{
+		validateIdentity(expectedProfileId);
+		validateProgress();
+		validateBreak();
+		validatePhaseHistory();
+	}
+
+	private void validateIdentity(String expectedProfileId)
+	{
 		if (!SCHEMA.equals(schema))
 		{
 			throw new IllegalArgumentException("Unsupported behavior state schema");
@@ -177,6 +185,10 @@ final class GenericClientBehaviorState
 		{
 			throw new IllegalArgumentException("Behavior state belongs to another profile");
 		}
+	}
+
+	private void validateProgress()
+	{
 		if (totalActiveMillis < 0L || activeMillisSinceLongBreak < 0L ||
 			activeMillisSinceLongBreak > totalActiveMillis ||
 			!Double.isFinite(longHazardBudget) || longHazardBudget <= 0.0 ||
@@ -184,6 +196,10 @@ final class GenericClientBehaviorState
 		{
 			throw new IllegalArgumentException("Behavior state has invalid long-break progress");
 		}
+	}
+
+	private void validateBreak()
+	{
 		if (!("none".equals(breakType) || "micro".equals(breakType) || "long".equals(breakType)))
 		{
 			throw new IllegalArgumentException("Behavior state has an invalid break type");
@@ -201,6 +217,10 @@ final class GenericClientBehaviorState
 		{
 			throw new IllegalArgumentException("Active behavior state has no break deadline");
 		}
+	}
+
+	private void validatePhaseHistory()
+	{
 		if (lastPhaseActiveMillis == null)
 		{
 			lastPhaseActiveMillis = new LinkedHashMap<>();

@@ -37,7 +37,7 @@ public class GenericClientBehaviorStoreTest
 		assertEquals(state.toMap(), loaded.toMap());
 		assertEquals(90_000L, loaded.getTotalActiveMillis());
 		assertEquals(90_000L, loaded.getLastGlobalPhaseActiveMillis());
-		assertEquals(Long.valueOf(90_000L), loaded.getLastPhaseActiveMillis("banking.complete"));
+		assertEquals(90_000L, loaded.getLastPhaseActiveMillis("banking.complete").longValue());
 		assertEquals(1_200_000_000L, loaded.getSavedAtEpochMillis());
 		assertFalse(Files.exists(directory.resolve("state-" + profileId + ".json.tmp")));
 	}
@@ -90,7 +90,7 @@ public class GenericClientBehaviorStoreTest
 
 		assertEquals(12_000L, state.getTotalActiveMillis());
 		assertEquals(2_000L, state.getActiveMillisSinceLongBreak());
-		assertEquals(Long.valueOf(10_000L), state.getLastPhaseActiveMillis("first"));
+		assertEquals(10_000L, state.getLastPhaseActiveMillis("first").longValue());
 		assertEquals(1.5, state.getLongHazardBudget(), 0.0);
 	}
 

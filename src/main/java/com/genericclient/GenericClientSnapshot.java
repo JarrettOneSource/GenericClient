@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
@@ -26,6 +27,11 @@ import net.runelite.api.gameval.VarPlayerID;
 final class GenericClientSnapshot
 {
 	private static final int MAX_QUERY_RESULTS = 100;
+	private static final Set<String> QUEST_SUBJECTS = Set.of(
+		"vars", "objects", "ground_items", "dialogue");
+	private static final Set<String> ACCOUNT_SUBJECTS = Set.of(
+		"skills", "inventory", "equipment", "bank", "quests", "ge",
+		"grand_exchange", "cash", "combat");
 	private static final String[] TRAVERSAL_ACTIONS =
 	{
 		"Open",
@@ -176,98 +182,121 @@ final class GenericClientSnapshot
 		List<GenericClientGameMessageBuffer.Message> messages)
 	{
 		Player localPlayer = client.getLocalPlayer();
-		PlayerSnapshot playerSnapshot = null;
-		List<NpcSnapshot> npcSnapshots = new ArrayList<>();
-		GenericClientSceneCollision sceneCollision = GenericClientSceneCollision.empty();
-
-		if (localPlayer != null && localPlayer.getWorldLocation() != null)
-		{
-			WorldPoint playerPoint = localPlayer.getWorldLocation();
-			WorldView worldView = localPlayer.getWorldView();
-			sceneCollision = GenericClientSceneCollision.capture(worldView, playerPoint.getPlane());
-			LocalPoint localDestination = client.getLocalDestinationLocation();
-			WorldPoint worldDestination = localDestination == null
-				? null
-				: WorldPoint.fromLocal(
-					worldView,
-					localDestination.getX(),
-					localDestination.getY(),
-					playerPoint.getPlane());
-			playerSnapshot = new PlayerSnapshot(
-				Objects.toString(localPlayer.getName(), ""),
-				playerPoint.getX(),
-				playerPoint.getY(),
-				playerPoint.getPlane(),
-				worldView.getId(),
-				localPlayer.getAnimation(),
-				localPlayer.getInteracting() == null ? null : localPlayer.getInteracting().getName(),
-				client.getBoostedSkillLevel(Skill.HITPOINTS),
-				client.getRealSkillLevel(Skill.HITPOINTS),
-				client.getEnergy(),
-				client.getVarpValue(VarPlayerID.OPTION_RUN) == 1,
-				worldDestination);
-
-			Rectangle viewport = GenericClientMenuInput.viewportBounds(client);
-			for (NPC npc : worldView.npcs())
-			{
-				if (npc == null || npc.getWorldLocation() == null)
-				{
-					continue;
-				}
-
-				WorldPoint location = npc.getWorldLocation();
-				NPCComposition composition = getComposition(npc);
-				Shape clickShape = npc.getConvexHull();
-				if (clickShape == null)
-				{
-					clickShape = npc.getCanvasTilePoly();
-				}
-				Point canvasPoint = GenericClientMenuInput.firstPointInside(
-					clickShape, viewport);
-				Rectangle canvasBounds = visibleBounds(clickShape, viewport);
-				npcSnapshots.add(new NpcSnapshot(
-					npc.getIndex(),
-					npc.getId(),
-					Objects.toString(npc.getName(), "<unnamed>"),
-					location.getX(),
-					location.getY(),
-					location.getPlane(),
-					playerPoint.distanceTo(location),
-					npc.getCombatLevel(),
-					npc.getAnimation(),
-					npc.getInteracting() == null ? null : npc.getInteracting().getName(),
-					composition == null ? 1 : composition.getSize(),
-					getActions(composition),
-					npc.getLocalLocation() != null && worldView.contains(npc.getLocalLocation()),
-					canvasPoint != null,
-					GenericClientNpcInput.hasLineOfSight(localPlayer, npc),
-					npc.isDead(),
-					npc.getHealthRatio(),
-					npc.getHealthScale(),
-					canvasPoint,
-					canvasBounds));
-			}
-		}
-
-		npcSnapshots.sort(Comparator
-			.comparingInt(NpcSnapshot::getDistance)
-			.thenComparingInt(NpcSnapshot::getIndex));
+		WorldCapture world = captureWorld(client, localPlayer);
 
 		return new GenericClientSnapshot(
 			gameTick,
 			client.getGameState().name(),
 			client.getRevision(),
-			playerSnapshot,
-			npcSnapshots,
+			world.player,
+			world.npcs,
 			GenericClientAccountSnapshot.capture(client, bankCache, questCache, gameTick),
 			GenericClientQuestSnapshot.capture(client, localPlayer),
 			messages,
-			sceneCollision,
+			world.collision,
 			GenericClientWidgetSnapshot.capture(client));
+	}
+
+	private static WorldCapture captureWorld(Client client, Player localPlayer)
+	{
+		if (localPlayer == null || localPlayer.getWorldLocation() == null)
+		{
+			return WorldCapture.empty();
+		}
+		WorldPoint playerPoint = localPlayer.getWorldLocation();
+		WorldView worldView = localPlayer.getWorldView();
+		GenericClientSceneCollision collision =
+			GenericClientSceneCollision.capture(worldView, playerPoint.getPlane());
+		LocalPoint localDestination = client.getLocalDestinationLocation();
+		WorldPoint worldDestination = localDestination == null
+			? null
+			: WorldPoint.fromLocal(
+				worldView,
+				localDestination.getX(),
+				localDestination.getY(),
+				playerPoint.getPlane());
+		PlayerSnapshot player = new PlayerSnapshot(
+			Objects.toString(localPlayer.getName(), ""),
+			playerPoint.getX(),
+			playerPoint.getY(),
+			playerPoint.getPlane(),
+			worldView.getId(),
+			localPlayer.getAnimation(),
+			localPlayer.getInteracting() == null ? null : localPlayer.getInteracting().getName(),
+			client.getBoostedSkillLevel(Skill.HITPOINTS),
+			client.getRealSkillLevel(Skill.HITPOINTS),
+			client.getEnergy(),
+			client.getVarpValue(VarPlayerID.OPTION_RUN) == 1,
+			worldDestination);
+
+		Rectangle viewport = GenericClientMenuInput.viewportBounds(client);
+		List<NpcSnapshot> npcs = new ArrayList<>();
+		for (NPC npc : worldView.npcs())
+		{
+			NpcSnapshot snapshot = captureNpc(localPlayer, playerPoint, worldView, viewport, npc);
+			if (snapshot != null)
+			{
+				npcs.add(snapshot);
+			}
+		}
+		npcs.sort(Comparator
+			.comparingInt(NpcSnapshot::getDistance)
+			.thenComparingInt(NpcSnapshot::getIndex));
+		return new WorldCapture(player, npcs, collision);
+	}
+
+	private static NpcSnapshot captureNpc(
+		Player player,
+		WorldPoint playerPoint,
+		WorldView worldView,
+		Rectangle viewport,
+		NPC npc)
+	{
+		if (npc == null || npc.getWorldLocation() == null)
+		{
+			return null;
+		}
+		WorldPoint location = npc.getWorldLocation();
+		NPCComposition composition = getComposition(npc);
+		Shape clickShape = npc.getConvexHull();
+		if (clickShape == null)
+		{
+			clickShape = npc.getCanvasTilePoly();
+		}
+		Point canvasPoint = GenericClientMenuInput.firstPointInside(clickShape, viewport);
+		return new NpcSnapshot(
+			npc.getIndex(),
+			npc.getId(),
+			Objects.toString(npc.getName(), "<unnamed>"),
+			location.getX(),
+			location.getY(),
+			location.getPlane(),
+			playerPoint.distanceTo(location),
+			npc.getCombatLevel(),
+			npc.getAnimation(),
+			npc.getInteracting() == null ? null : npc.getInteracting().getName(),
+			composition == null ? 1 : composition.getSize(),
+			getActions(composition),
+			npc.getLocalLocation() != null && worldView.contains(npc.getLocalLocation()),
+			canvasPoint != null,
+			GenericClientNpcInput.hasLineOfSight(player, npc),
+			npc.isDead(),
+			npc.getHealthRatio(),
+			npc.getHealthScale(),
+			canvasPoint,
+			visibleBounds(clickShape, viewport));
 	}
 
 	Object read(String subject, Map<?, ?> query)
 	{
+		if (QUEST_SUBJECTS.contains(subject))
+		{
+			return quest.read(subject, query);
+		}
+		if (ACCOUNT_SUBJECTS.contains(subject))
+		{
+			return account.read(subject);
+		}
 		switch (subject)
 		{
 			case "runtime":
@@ -291,21 +320,6 @@ final class GenericClientSnapshot
 				return widgets.read(query);
 			case "sliding_puzzle":
 				return widgets.readSlidingPuzzle();
-			case "vars":
-			case "objects":
-			case "ground_items":
-			case "dialogue":
-				return quest.read(subject, query);
-			case "skills":
-			case "inventory":
-			case "equipment":
-			case "bank":
-			case "quests":
-			case "ge":
-			case "grand_exchange":
-			case "cash":
-			case "combat":
-				return account.read(subject);
 			default:
 				throw new IllegalArgumentException("unknown subject: " + subject);
 		}
@@ -536,50 +550,21 @@ final class GenericClientSnapshot
 
 	private List<Map<String, Object>> queryNpcs(Map<?, ?> query)
 	{
-		int within = intValue(query == null ? null : query.get("within"), Integer.MAX_VALUE);
-		int limit = Math.min(MAX_QUERY_RESULTS, Math.max(0, intValue(query == null ? null : query.get("limit"), 50)));
-		if (limit == 0)
+		NpcQuery criteria = NpcQuery.from(query);
+		if (criteria.limit == 0)
 		{
 			return Collections.emptyList();
-		}
-		String requiredAction = stringValue(query == null ? null : query.get("action"));
-		String requiredName = null;
-		Integer requiredId = null;
-		Boolean requiredClickable = null;
-		Boolean requiredLineOfSight = null;
-		Boolean requiredDead = null;
-		if (query != null && query.get("where") instanceof Map)
-		{
-			Map<?, ?> where = (Map<?, ?>) query.get("where");
-			requiredName = stringValue(where.get("name"));
-			if (where.get("id") instanceof Number)
-			{
-				requiredId = ((Number) where.get("id")).intValue();
-			}
-			requiredClickable = booleanValue(where.get("clickable"));
-			requiredLineOfSight = booleanValue(where.get("line_of_sight"));
-			requiredDead = booleanValue(where.get("dead"));
-		}
-		if (query != null && query.get("id") instanceof Number)
-		{
-			requiredId = ((Number) query.get("id")).intValue();
 		}
 
 		List<Map<String, Object>> result = new ArrayList<>();
 		for (NpcSnapshot npc : npcs)
 		{
-			if (npc.distance > within ||
-				(requiredId != null && npc.id != requiredId) ||
-				(requiredName != null && !npc.name.equalsIgnoreCase(requiredName)) ||
-				(requiredClickable != null && npc.clickable != requiredClickable) ||
-				(requiredLineOfSight != null && npc.lineOfSight != requiredLineOfSight) ||
-				(requiredDead != null && npc.dead != requiredDead) ||
-				(requiredAction != null && npc.actions.stream().noneMatch(action -> action.equalsIgnoreCase(requiredAction))))
+			if (!criteria.matches(npc))
 			{
 				continue;
 			}
 			result.add(npc.toMap());
-			if (result.size() == limit)
+			if (result.size() == criteria.limit)
 			{
 				break;
 			}
@@ -732,6 +717,100 @@ final class GenericClientSnapshot
 		}
 		Rectangle bounds = shape.getBounds().intersection(clipBounds);
 		return bounds.isEmpty() ? null : bounds;
+	}
+
+	private static final class WorldCapture
+	{
+		private final PlayerSnapshot player;
+		private final List<NpcSnapshot> npcs;
+		private final GenericClientSceneCollision collision;
+
+		private WorldCapture(
+			PlayerSnapshot player,
+			List<NpcSnapshot> npcs,
+			GenericClientSceneCollision collision)
+		{
+			this.player = player;
+			this.npcs = npcs;
+			this.collision = collision;
+		}
+
+		private static WorldCapture empty()
+		{
+			return new WorldCapture(
+				null, Collections.emptyList(), GenericClientSceneCollision.empty());
+		}
+	}
+
+	private static final class NpcQuery
+	{
+		private final int within;
+		private final int limit;
+		private final String action;
+		private final String name;
+		private final Integer id;
+		private final Boolean clickable;
+		private final Boolean lineOfSight;
+		private final Boolean dead;
+
+		private NpcQuery(
+			int within,
+			int limit,
+			String action,
+			String name,
+			Integer id,
+			Boolean clickable,
+			Boolean lineOfSight,
+			Boolean dead)
+		{
+			this.within = within;
+			this.limit = limit;
+			this.action = action;
+			this.name = name;
+			this.id = id;
+			this.clickable = clickable;
+			this.lineOfSight = lineOfSight;
+			this.dead = dead;
+		}
+
+		private static NpcQuery from(Map<?, ?> query)
+		{
+			int within = intValue(query == null ? null : query.get("within"), Integer.MAX_VALUE);
+			int limit = Math.min(
+				MAX_QUERY_RESULTS,
+				Math.max(0, intValue(query == null ? null : query.get("limit"), 50)));
+			String action = stringValue(query == null ? null : query.get("action"));
+			Map<?, ?> where = query != null && query.get("where") instanceof Map
+				? (Map<?, ?>) query.get("where")
+				: Collections.emptyMap();
+			Integer id = where.get("id") instanceof Number
+				? ((Number) where.get("id")).intValue()
+				: null;
+			if (query != null && query.get("id") instanceof Number)
+			{
+				id = ((Number) query.get("id")).intValue();
+			}
+			return new NpcQuery(
+				within,
+				limit,
+				action,
+				stringValue(where.get("name")),
+				id,
+				booleanValue(where.get("clickable")),
+				booleanValue(where.get("line_of_sight")),
+				booleanValue(where.get("dead")));
+		}
+
+		private boolean matches(NpcSnapshot npc)
+		{
+			return npc.distance <= within &&
+				(id == null || npc.id == id) &&
+				(name == null || npc.name.equalsIgnoreCase(name)) &&
+				(clickable == null || npc.clickable == clickable) &&
+				(lineOfSight == null || npc.lineOfSight == lineOfSight) &&
+				(dead == null || npc.dead == dead) &&
+				(action == null || containsAction(npc.actions, action));
+		}
 	}
 
 	static final class PlayerSnapshot

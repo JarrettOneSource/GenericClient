@@ -84,54 +84,48 @@ final class GenericClientCollisionMap
 
 	boolean canMove(int x, int y, int plane, int dx, int dy)
 	{
-		if (dx == 0 && dy == 0 || Math.abs(dx) > 1 || Math.abs(dy) > 1)
+		if ((dx == 0 && dy == 0) || Math.abs(dx) > 1 || Math.abs(dy) > 1)
 		{
 			return false;
 		}
 
 		if (isBlocked(x, y, plane))
 		{
-			if (isBlocked(x + dx, y + dy, plane))
-			{
-				return false;
-			}
-			return dx == 0 || dy == 0 ||
-				(!isBlocked(x + dx, y, plane) && !isBlocked(x, y + dy, plane));
+			return canLeaveBlockedTile(x, y, plane, dx, dy);
 		}
 
-		if (dx == -1 && dy == 0)
+		if (dx == 0)
 		{
-			return west(x, y, plane);
+			return verticalOpen(x, y, plane, dy);
 		}
-		if (dx == 1 && dy == 0)
+		if (dy == 0)
 		{
-			return east(x, y, plane);
+			return horizontalOpen(x, y, plane, dx);
 		}
-		if (dx == 0 && dy == -1)
+		return horizontalOpen(x, y, plane, dx) &&
+			horizontalOpen(x, y + dy, plane, dx) &&
+			verticalOpen(x, y, plane, dy) &&
+			verticalOpen(x + dx, y, plane, dy);
+	}
+
+	private boolean canLeaveBlockedTile(int x, int y, int plane, int dx, int dy)
+	{
+		if (isBlocked(x + dx, y + dy, plane))
 		{
-			return south(x, y, plane);
+			return false;
 		}
-		if (dx == 0 && dy == 1)
-		{
-			return north(x, y, plane);
-		}
-		if (dx == -1 && dy == -1)
-		{
-			return south(x, y, plane) && west(x, y - 1, plane) &&
-				west(x, y, plane) && south(x - 1, y, plane);
-		}
-		if (dx == 1 && dy == -1)
-		{
-			return south(x, y, plane) && east(x, y - 1, plane) &&
-				east(x, y, plane) && south(x + 1, y, plane);
-		}
-		if (dx == -1 && dy == 1)
-		{
-			return north(x, y, plane) && west(x, y + 1, plane) &&
-				west(x, y, plane) && north(x - 1, y, plane);
-		}
-		return north(x, y, plane) && east(x, y + 1, plane) &&
-			east(x, y, plane) && north(x + 1, y, plane);
+		return dx == 0 || dy == 0 ||
+			!isBlocked(x + dx, y, plane) && !isBlocked(x, y + dy, plane);
+	}
+
+	private boolean horizontalOpen(int x, int y, int plane, int dx)
+	{
+		return dx < 0 ? west(x, y, plane) : east(x, y, plane);
+	}
+
+	private boolean verticalOpen(int x, int y, int plane, int dy)
+	{
+		return dy < 0 ? south(x, y, plane) : north(x, y, plane);
 	}
 
 	private boolean isBlocked(int x, int y, int plane)
@@ -176,7 +170,7 @@ final class GenericClientCollisionMap
 		int bit = (plane * REGION_SIZE * REGION_SIZE +
 			(y & REGION_MASK) * REGION_SIZE + (x & REGION_MASK)) * FLAG_COUNT + flag;
 		int byteIndex = bit >>> 3;
-		return byteIndex < data.length && ((data[byteIndex] & 0xFF) & (1 << (bit & 7))) != 0;
+		return byteIndex < data.length && (data[byteIndex] & 0xFF & (1 << (bit & 7))) != 0;
 	}
 
 	private static int packRegion(int x, int y)

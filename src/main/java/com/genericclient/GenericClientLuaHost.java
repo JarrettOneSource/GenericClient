@@ -466,83 +466,91 @@ final class GenericClientLuaHost implements AutoCloseable
 		boolean replaceActive)
 	{
 		CompletableFuture<String> completion = new CompletableFuture<>();
-		scheduler.execute(() ->
-		{
-			GenericClientLuaScript candidate = null;
-			try
-			{
-				String blockedBy = randomEventKey;
-				if (blockedBy != null && !randomEventOwner(blockedBy).equals(owner))
-				{
-					throw new IllegalStateException(
-						"A random event requires completion before another standalone script can start");
-				}
-				if (!replaceActive && session != null)
-				{
-					ActiveRun running = activeRun;
-					String activeOwner = running == null ? "unknown" : running.owner;
-					completion.complete("LUA_START_SKIPPED active_owner=" + activeOwner);
-					return;
-				}
-				GenericClientScriptRegistry.Script definition = registry.get(scriptId);
-				candidate = new GenericClientLuaScript(
-					this,
-					definition.getId(),
-					registry.readExecutableSource(definition.getId()));
-				Map<String, Object> resolvedInputs = GenericClientScriptInput.resolve(
-					candidate.getInputs(), suppliedInputs);
-				candidate.pinSnapshot(currentSnapshot);
-				candidate.activate(resolvedInputs);
-				if (candidate.isFinished() && "FAULTED".equals(candidate.getTerminalStatus()))
-				{
-					throw new IllegalArgumentException(
-						"Script faulted during initialization: " + candidate.getFaultMessage());
-				}
-
-				GenericClientLuaScript previous = session;
-				session = candidate;
-				activeScript = scriptId;
-				activeInputs = resolvedInputs;
-				status = candidate.isFinished() ? candidate.getTerminalStatus() : "WAITING";
-				activeRun = new ActiveRun(
-					++nextRunId,
-					owner,
-					definition,
-					candidate,
-					resolvedInputs,
-					status,
-					candidate.getStartedNanos());
-				if (previous != null)
-				{
-					cancelAction.accept("script_replaced");
-					previous.close();
-				}
-				String result;
-				if (candidate.isFinished())
-				{
-					reconcileSession(candidate);
-					result = "LUA_" + candidate.getTerminalStatus() + " script=" + scriptId +
-						" owner=" + owner;
-				}
-				else
-				{
-					result = "LUA_STARTED script=" + scriptId + " owner=" + owner;
-					publishStatus(result);
-				}
-				completion.complete(result);
-			}
-			catch (IOException | RuntimeException exception)
-			{
-				if (candidate != null && candidate != session)
-				{
-					candidate.close();
-				}
-				String result = "LUA_START_FAILED script=" + scriptId + " message=" + exception.getMessage();
-				publishStatus(result);
-				completion.completeExceptionally(exception);
-			}
-		});
+		scheduler.execute(() -> startOnScheduler(
+			scriptId, suppliedInputs, owner, replaceActive, completion));
 		return completion;
+	}
+
+	private void startOnScheduler(
+		String scriptId,
+		Map<String, Object> suppliedInputs,
+		String owner,
+		boolean replaceActive,
+		CompletableFuture<String> completion)
+	{
+		GenericClientLuaScript candidate = null;
+		try
+		{
+			String blockedBy = randomEventKey;
+			if (blockedBy != null && !randomEventOwner(blockedBy).equals(owner))
+			{
+				throw new IllegalStateException(
+					"A random event requires completion before another standalone script can start");
+			}
+			if (!replaceActive && session != null)
+			{
+				ActiveRun running = activeRun;
+				String activeOwner = running == null ? "unknown" : running.owner;
+				completion.complete("LUA_START_SKIPPED active_owner=" + activeOwner);
+				return;
+			}
+			GenericClientScriptRegistry.Script definition = registry.get(scriptId);
+			candidate = new GenericClientLuaScript(
+				this,
+				definition.getId(),
+				registry.readExecutableSource(definition.getId()));
+			Map<String, Object> resolvedInputs = GenericClientScriptInput.resolve(
+				candidate.getInputs(), suppliedInputs);
+			candidate.pinSnapshot(currentSnapshot);
+			candidate.activate(resolvedInputs);
+			if (candidate.isFinished() && "FAULTED".equals(candidate.getTerminalStatus()))
+			{
+				throw new IllegalArgumentException(
+					"Script faulted during initialization: " + candidate.getFaultMessage());
+			}
+
+			GenericClientLuaScript previous = session;
+			session = candidate;
+			activeScript = scriptId;
+			activeInputs = resolvedInputs;
+			status = candidate.isFinished() ? candidate.getTerminalStatus() : "WAITING";
+			activeRun = new ActiveRun(
+				++nextRunId,
+				owner,
+				definition,
+				candidate,
+				resolvedInputs,
+				status,
+				candidate.getStartedNanos());
+			if (previous != null)
+			{
+				cancelAction.accept("script_replaced");
+				previous.close();
+			}
+			String result;
+			if (candidate.isFinished())
+			{
+				reconcileSession(candidate);
+				result = "LUA_" + candidate.getTerminalStatus() + " script=" + scriptId +
+					" owner=" + owner;
+			}
+			else
+			{
+				result = "LUA_STARTED script=" + scriptId + " owner=" + owner;
+				publishStatus(result);
+			}
+			completion.complete(result);
+		}
+		catch (IOException | RuntimeException exception)
+		{
+			if (candidate != null && candidate != session)
+			{
+				candidate.close();
+			}
+			String result = "LUA_START_FAILED script=" + scriptId + " message=" + exception.getMessage();
+			publishStatus(result);
+			completion.completeExceptionally(exception);
+		}
 	}
 
 	CompletableFuture<String> reload()

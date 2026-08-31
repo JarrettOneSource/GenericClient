@@ -310,71 +310,15 @@ final class GenericClientMenuInput implements AutoCloseable
 			finishRejected("context_menu_already_open");
 			return;
 		}
-		if (current.isDynamic())
+		current = refreshDynamicTarget(current);
+		if (current == null)
 		{
-			Resolution refreshed;
-			try
-			{
-				refreshed = resolver.resolve();
-			}
-			catch (RuntimeException exception)
-			{
-				finishRejected("target_refresh: " + exception.getMessage());
-				return;
-			}
-			if (refreshed == null || refreshed.target == null)
-			{
-				finishRejected(refreshed == null ? "target_refresh_unavailable" : refreshed.reason);
-				return;
-			}
-			current = refreshed.target;
-			target = current;
-			net.runelite.api.Point refreshedMouse = client.getMouseCanvasPosition();
-			if (!current.contains(refreshedMouse.getX(), refreshedMouse.getY()))
-			{
-				if (dynamicRetargetCount >= MAX_DYNAMIC_RETARGETS)
-				{
-					finishRejected("dynamic_target_kept_moving");
-					return;
-				}
-				dynamicRetargetCount++;
-				cursorRetained = false;
-				Target destination = current;
-				reporter.accept("MENU_INTERACTION_RETARGET description=" + current.description +
-					" attempt=" + dynamicRetargetCount +
-					" canvas=" + current.point.x + "," + current.point.y);
-				syntheticMouse.move(current.point).whenComplete((ignored, error) ->
-				{
-					if (error != null)
-					{
-						finishRejected("synthetic_retarget_move: " + rootMessage(error));
-						return;
-					}
-					if (target == destination)
-					{
-						schedule(() -> clientThread.invoke(this::verifyHoverAndClick),
-							HOVER_SETTLE_MILLIS);
-					}
-				});
-				return;
-			}
+			return;
 		}
 		net.runelite.api.Point mouse = client.getMouseCanvasPosition();
 		MenuEntry[] entries = client.getMenu().getMenuEntries();
-		if (cursorRetained && findEntryIndex(entries, current) < 0)
+		if (restoreRetainedCursor(current, entries))
 		{
-			cursorRetained = false;
-			reporter.accept("MENU_INTERACTION_CURSOR_RETENTION_EXPIRED description=" +
-				current.description + " canvas=" + current.point.x + "," + current.point.y);
-			syntheticMouse.move(current.point).whenComplete((ignored, error) ->
-			{
-				if (error != null)
-				{
-					finishRejected("synthetic_mouse_move: " + rootMessage(error));
-					return;
-				}
-				schedule(() -> clientThread.invoke(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
-			});
 			return;
 		}
 		if (!cursorRetained && !current.acceptsMouse(mouse.getX(), mouse.getY()))
@@ -401,6 +345,80 @@ final class GenericClientMenuInput implements AutoCloseable
 			return;
 		}
 		openContextMenu();
+	}
+
+	private Target refreshDynamicTarget(Target current)
+	{
+		if (!current.isDynamic())
+		{
+			return current;
+		}
+		Resolution refreshed;
+		try
+		{
+			refreshed = resolver.resolve();
+		}
+		catch (RuntimeException exception)
+		{
+			finishRejected("target_refresh: " + exception.getMessage());
+			return null;
+		}
+		if (refreshed == null || refreshed.target == null)
+		{
+			finishRejected(refreshed == null ? "target_refresh_unavailable" : refreshed.reason);
+			return null;
+		}
+		Target destination = refreshed.target;
+		target = destination;
+		net.runelite.api.Point mouse = client.getMouseCanvasPosition();
+		if (destination.contains(mouse.getX(), mouse.getY()))
+		{
+			return destination;
+		}
+		if (dynamicRetargetCount >= MAX_DYNAMIC_RETARGETS)
+		{
+			finishRejected("dynamic_target_kept_moving");
+			return null;
+		}
+		dynamicRetargetCount++;
+		cursorRetained = false;
+		reporter.accept("MENU_INTERACTION_RETARGET description=" + destination.description +
+			" attempt=" + dynamicRetargetCount +
+			" canvas=" + destination.point.x + "," + destination.point.y);
+		syntheticMouse.move(destination.point).whenComplete((ignored, error) ->
+		{
+			if (error != null)
+			{
+				finishRejected("synthetic_retarget_move: " + rootMessage(error));
+				return;
+			}
+			if (target == destination)
+			{
+				schedule(() -> clientThread.invoke(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+			}
+		});
+		return null;
+	}
+
+	private boolean restoreRetainedCursor(Target current, MenuEntry[] entries)
+	{
+		if (!cursorRetained || findEntryIndex(entries, current) >= 0)
+		{
+			return false;
+		}
+		cursorRetained = false;
+		reporter.accept("MENU_INTERACTION_CURSOR_RETENTION_EXPIRED description=" +
+			current.description + " canvas=" + current.point.x + "," + current.point.y);
+		syntheticMouse.move(current.point).whenComplete((ignored, error) ->
+		{
+			if (error != null)
+			{
+				finishRejected("synthetic_mouse_move: " + rootMessage(error));
+				return;
+			}
+			schedule(() -> clientThread.invoke(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+		});
+		return true;
 	}
 
 	private void dispatchDirectClick()

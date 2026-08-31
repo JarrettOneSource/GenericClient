@@ -102,13 +102,14 @@ public class GenericClientRuleEngineTest
 
 	private static String twoRules()
 	{
-		return base("[{\"id\":\"restore-cash\",\"priority\":100,\"when\":{\"all\":[" +
+		return base("[{\"id\":\"train-strength\",\"priority\":50," +
+			"\"when\":{\"all\":[{\"schedule\":\"work\"}," +
+			"{\"fact\":\"skills.strength.level\",\"lt\":30}]}," +
+			"\"run\":{\"script\":\"aio-melee\"}},{\"id\":\"restore-cash\"," +
+			"\"priority\":100,\"when\":{\"all\":[" +
 			"{\"schedule\":\"work\"},{\"fact\":\"cash.complete\",\"eq\":true}," +
 			"{\"fact\":\"cash.known_total_value\",\"lt\":5000000}]}," +
-			"\"run\":{\"script\":\"account-auditor\"}},{\"id\":\"train-strength\"," +
-			"\"priority\":50,\"when\":{\"all\":[{\"schedule\":\"work\"}," +
-			"{\"fact\":\"skills.strength.level\",\"lt\":30}]}," +
-			"\"run\":{\"script\":\"aio-melee\"}}]");
+			"\"run\":{\"script\":\"account-auditor\"}}]");
 	}
 
 	private static String base(String rules)

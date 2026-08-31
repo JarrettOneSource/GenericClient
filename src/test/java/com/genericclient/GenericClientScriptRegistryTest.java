@@ -3,6 +3,8 @@ package com.genericclient;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -22,11 +24,12 @@ public class GenericClientScriptRegistryTest
 		Path directory = temporaryFolder.newFolder("scripts").toPath();
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(
 			directory);
+		JsonObject manifest = new Gson().fromJson(
+			Files.readString(directory.resolve("manifest.json")), JsonObject.class);
 
 		assertTrue(registry.list().isEmpty());
-		assertEquals(
-			"{\n  \"schema\": \"genericclient_scripts\",\n  \"scripts\": []\n}\n",
-			Files.readString(directory.resolve("manifest.json")));
+		assertEquals("genericclient_scripts", manifest.get("schema").getAsString());
+		assertEquals(0, manifest.getAsJsonArray("scripts").size());
 	}
 
 	@Test
@@ -34,14 +37,17 @@ public class GenericClientScriptRegistryTest
 	{
 		Path directory = temporaryFolder.newFolder("saved-scripts").toPath();
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
+		long revision = registry.getRevision();
 
-		registry.save(
+		GenericClientScriptRegistry.Script saved = registry.save(
 			"where-am-i",
 			"Where am I?",
 			"Return the current player snapshot.",
 			"return { run = function(input) return gc.read('player') end }\n");
 		GenericClientScriptRegistry reloaded = new GenericClientScriptRegistry(directory);
 
+		assertEquals("where-am-i", saved.getId());
+		assertEquals(revision + 1, registry.getRevision());
 		assertEquals("Where am I?", reloaded.get("where-am-i").getName());
 		assertEquals("return { run = function(input) return gc.read('player') end }\n",
 			reloaded.readSource("where-am-i"));
@@ -53,25 +59,24 @@ public class GenericClientScriptRegistryTest
 	public void preservesAnExistingExternalManifest() throws Exception
 	{
 		Path directory = temporaryFolder.newFolder("external-scripts").toPath();
-		Files.writeString(directory.resolve("manifest.json"),
+		String manifest =
 			"{\n" +
 			"  \"schema\": \"genericclient_scripts\",\n" +
 			"  \"scripts\": [\n" +
 			"    { \"id\": \"custom\", \"name\": \"Custom\", " +
 				"\"description\": \"Keep me\", \"file\": \"custom.lua\" }\n" +
 			"  ]\n" +
-			"}\n");
-		Files.writeString(directory.resolve("custom.lua"),
-			"return { run = function(input) return 'custom' end }\n");
+			"}\n";
+		String source = "return { run = function(input) return 'custom' end }\n";
+		Files.writeString(directory.resolve("manifest.json"), manifest);
+		Files.writeString(directory.resolve("custom.lua"), source);
 
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
 
 		assertEquals(1, registry.list().size());
 		assertEquals("Custom", registry.get("custom").getName());
-		assertEquals("return { run = function(input) return 'custom' end }\n",
-			registry.readSource("custom"));
-		assertTrue(Files.readString(directory.resolve("manifest.json"))
-			.contains("\"id\": \"custom\""));
+		assertEquals(source, registry.readSource("custom"));
+		assertEquals(manifest, Files.readString(directory.resolve("manifest.json")));
 	}
 
 	@Test
@@ -97,6 +102,7 @@ public class GenericClientScriptRegistryTest
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
 		String executable = registry.readExecutableSource("example");
 
+		assertTrue(executable.contains("gc.require = function(name)"));
 		assertTrue(executable.contains("__gc_module_loaders[\"maths\"]"));
 		assertTrue(executable.contains("return { answer = 42 }"));
 		assertEquals("return { answer = 42 }\n",

@@ -479,7 +479,7 @@ final class GenericClientBehaviorProfile
 			digest.update((byte) 0);
 			byte[] bytes = digest.digest(label.getBytes(StandardCharsets.UTF_8));
 			long bits = ByteBuffer.wrap(bytes).getLong() >>> 11;
-			return (bits + 0.5) / (double) (1L << 53);
+			return (bits + 0.5) / (1L << 53);
 		}
 		catch (NoSuchAlgorithmException exception)
 		{

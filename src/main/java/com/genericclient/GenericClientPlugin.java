@@ -458,6 +458,15 @@ public final class GenericClientPlugin extends Plugin
 	protected void shutDown()
 	{
 		lifecycle = "STOPPING";
+		closeRuntimeServices();
+		closeInputServices();
+		removePluginUi();
+		lifecycle = "STOPPED";
+		log.info("{} PLUGIN_STOPPED ticks={} uptime={}", LOG_PREFIX, tickCount, getUptimeText());
+	}
+
+	private void closeRuntimeServices()
+	{
 		if (panelRefreshFuture != null)
 		{
 			panelRefreshFuture.cancel(false);
@@ -505,15 +514,16 @@ public final class GenericClientPlugin extends Plugin
 			mouseRecorder.close();
 			mouseRecorder = null;
 		}
+	}
+
+	private void closeInputServices()
+	{
 		if (gameInput != null)
 		{
 			gameInput.close();
 			gameInput = null;
 		}
-		if (npcInput != null)
-		{
-			npcInput = null;
-		}
+		npcInput = null;
 		if (bankInput != null)
 		{
 			bankInput.close();
@@ -561,6 +571,10 @@ public final class GenericClientPlugin extends Plugin
 			syntheticKeyboard.close();
 			syntheticKeyboard = null;
 		}
+	}
+
+	private void removePluginUi()
+	{
 		overlayManager.remove(mouseEffectOverlay);
 		if (breakOverlay != null)
 		{
@@ -578,8 +592,6 @@ public final class GenericClientPlugin extends Plugin
 			clientToolbar.removeNavigation(navigationButton);
 			navigationButton = null;
 		}
-		lifecycle = "STOPPED";
-		log.info("{} PLUGIN_STOPPED ticks={} uptime={}", LOG_PREFIX, tickCount, getUptimeText());
 	}
 
 	@Subscribe

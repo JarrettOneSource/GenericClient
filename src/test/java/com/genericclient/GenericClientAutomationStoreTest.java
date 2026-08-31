@@ -37,7 +37,7 @@ public class GenericClientAutomationStoreTest
 		GenericClientAutomationStore.State loaded = store.loadState("0123456789abcdef");
 		assertTrue(loaded.isPaused());
 		assertEquals("train", loaded.getActiveRule());
-		assertEquals(Long.valueOf(5_000L), loaded.getCooldowns().get("train"));
+		assertEquals(5_000L, loaded.getCooldowns().get("train").longValue());
 		assertEquals(7L, loaded.getHandledRunId());
 
 		assertFalse(store.loadConfig("fedcba9876543210").isEnabled());

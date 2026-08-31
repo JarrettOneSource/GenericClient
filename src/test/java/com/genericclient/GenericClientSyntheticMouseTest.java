@@ -2,6 +2,7 @@ package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.awt.Canvas;
@@ -106,7 +107,7 @@ public class GenericClientSyntheticMouseTest
 			assertTrue(events.contains(FocusEvent.FOCUS_GAINED));
 			assertTrue(events.contains(MouseEvent.MOUSE_ENTERED));
 			assertEquals(1, enteredPoints.size());
-			assertTrue(enteredPoints.get(0).y != outside.y);
+			assertNotEquals(outside.y, enteredPoints.get(0).y);
 			assertEquals(new Point(80, 90), mouse.getPosition());
 		}
 		finally
@@ -128,13 +129,13 @@ public class GenericClientSyntheticMouseTest
 
 		assertTrue(left.x < 0);
 		assertTrue(left.y >= 0 && left.y < 600);
-		assertTrue(left.y != 100);
+		assertNotEquals(100, left.y);
 		assertTrue(right.x >= 800);
 		assertTrue(right.y >= 0 && right.y < 600);
-		assertTrue(right.y != 500);
+		assertNotEquals(500, right.y);
 		assertTrue(top.y < 0);
 		assertTrue(top.x >= 0 && top.x < 800);
-		assertTrue(top.x != 300);
+		assertNotEquals(300, top.x);
 	}
 
 	@Test

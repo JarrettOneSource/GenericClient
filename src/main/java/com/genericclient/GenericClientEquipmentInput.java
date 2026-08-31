@@ -1,10 +1,12 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientInteractionReceipts.composite;
+import static com.genericclient.GenericClientInteractionReceipts.rejected;
+import static com.genericclient.GenericClientInteractionReceipts.wasDispatched;
+
 import java.awt.Point;
 import java.awt.Rectangle;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
@@ -92,13 +94,13 @@ final class GenericClientEquipmentInput
 				{
 					if (!visible)
 					{
-						return CompletableFuture.completedFuture(compositeReceipt(
+						return CompletableFuture.completedFuture(composite(
 							"open_equipment_then_item",
 							tabReceipt,
 							rejected("equipment_did_not_open")));
 					}
 					return interactVisible(itemId, action, activityContext)
-						.thenApply(itemReceipt -> compositeReceipt(
+						.thenApply(itemReceipt -> composite(
 							"open_equipment_then_item", tabReceipt, itemReceipt));
 				});
 			});
@@ -290,42 +292,6 @@ final class GenericClientEquipmentInput
 			: entry.getParam1() == widgetId;
 		return sameWidget && (entry.getItemId() == itemId || entry.getItemId() == -1) &&
 			action.equalsIgnoreCase(entry.getOption());
-	}
-
-	private static boolean wasDispatched(Map<String, Object> receipt)
-	{
-		return receipt != null && "dispatched".equals(receipt.get("status"));
-	}
-
-	private static Map<String, Object> compositeReceipt(
-		String result,
-		Map<String, Object> first,
-		Map<String, Object> second)
-	{
-		Map<String, Object> receipt = new LinkedHashMap<>();
-		receipt.put("status", second.get("status"));
-		receipt.put("result", result);
-		List<Map<String, Object>> steps = new ArrayList<>();
-		steps.add(first);
-		steps.add(second);
-		receipt.put("steps", steps);
-		receipt.put("click_count", clickCount(first) + clickCount(second));
-		return receipt;
-	}
-
-	private static long clickCount(Map<String, Object> receipt)
-	{
-		Object count = receipt.get("click_count");
-		return count instanceof Number ? ((Number) count).longValue() : 0L;
-	}
-
-	private static Map<String, Object> rejected(String result)
-	{
-		Map<String, Object> receipt = new LinkedHashMap<>();
-		receipt.put("status", "rejected");
-		receipt.put("result", result);
-		receipt.put("click_count", 0L);
-		return receipt;
 	}
 
 	private static String requireText(String value, String label)

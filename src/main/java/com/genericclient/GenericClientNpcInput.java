@@ -17,10 +17,8 @@ import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
 import net.runelite.api.Player;
-import net.runelite.api.ScriptID;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 
@@ -37,7 +35,6 @@ final class GenericClientNpcInput
 	private static final long CAMERA_SETTLE_TIMEOUT_MILLIS = 3_000L;
 	private static final long SCENE_RETRY_MILLIS = 600L;
 	private static final int MAX_SCENE_RETRIES = 2;
-	private static final int OUTER_CAMERA_ZOOM = -400;
 
 	private final Client client;
 	private final ClientThread clientThread;
@@ -143,37 +140,10 @@ final class GenericClientNpcInput
 				return retryWithCamera(
 					resolver, receipt, name, id, within, activityContext, 0, 0);
 			}
-			return prepareZoom().thenCompose(zoom -> retryWithCamera(
+			return GenericClientCameraZoom.widen(client, clientThread).thenCompose(zoom -> retryWithCamera(
 					resolver, receipt, name, id, within, activityContext, 0, 0)
-				.whenComplete((ignored, error) -> restoreZoom(zoom)));
-		});
-	}
-
-	private CompletableFuture<CameraZoom> prepareZoom()
-	{
-		CompletableFuture<CameraZoom> result = new CompletableFuture<>();
-		clientThread.invoke(() ->
-		{
-			CameraZoom previous = new CameraZoom(
-				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL),
-				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_BIG),
-				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL_MIN),
-				client.getVarcIntValue(VarClientID.CAMERA_ZOOM_BIG_MIN));
-			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL_MIN, OUTER_CAMERA_ZOOM);
-			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_BIG_MIN, OUTER_CAMERA_ZOOM);
-			client.runScript(ScriptID.CAMERA_DO_ZOOM, OUTER_CAMERA_ZOOM, OUTER_CAMERA_ZOOM);
-			result.complete(previous);
-		});
-		return result;
-	}
-
-	private void restoreZoom(CameraZoom previous)
-	{
-		clientThread.invoke(() ->
-		{
-			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_SMALL_MIN, previous.smallMinimum);
-			client.setVarcIntValue(VarClientID.CAMERA_ZOOM_BIG_MIN, previous.bigMinimum);
-			client.runScript(ScriptID.CAMERA_DO_ZOOM, previous.small, previous.big);
+				.whenComplete((ignored, error) ->
+					GenericClientCameraZoom.restore(client, clientThread, zoom)));
 		});
 	}
 
@@ -361,14 +331,10 @@ final class GenericClientNpcInput
 		{
 			return GenericClientMenuInput.Resolution.rejected("client_not_logged_in");
 		}
-		if (requestedSelection != null)
+		String selectionFailure = selectionFailure(requestedSelection);
+		if (selectionFailure != null)
 		{
-			Widget selected = client.getSelectedWidget();
-			if (!client.isWidgetSelected() || selected == null || !requestedSelection.matches(selected))
-			{
-				return GenericClientMenuInput.Resolution.rejected(
-					"requested_" + requestedSelection.kind + "_not_selected");
-			}
+			return GenericClientMenuInput.Resolution.rejected(selectionFailure);
 		}
 		Player player = client.getLocalPlayer();
 		if (player == null || player.getWorldLocation() == null)
@@ -376,23 +342,53 @@ final class GenericClientNpcInput
 			return GenericClientMenuInput.Resolution.rejected("local_player_unavailable");
 		}
 
+		NpcSearch search = findNpc(player, name, id, action, within, requestedSelection);
+		if (search.npc == null)
+		{
+			return missingNpc(search, requestedSelection);
+		}
+
+		NPC targetNpc = search.npc;
+		Map<String, Object> value = npcMap(targetNpc);
+		if (requestedSelection != null)
+		{
+			value.put("selected_" + requestedSelection.kind, requestedSelection.toMap());
+		}
+		String description = "npc:" + targetNpc.getId() + ":" + targetNpc.getIndex();
+		return GenericClientMenuInput.Resolution.resolved(new GenericClientMenuInput.Target(
+			search.point,
+			action,
+			description,
+			value,
+			entry -> menuEntryMatches(entry, targetNpc, action, requestedSelection),
+			search.shape));
+	}
+
+	private String selectionFailure(SelectedWidget requestedSelection)
+	{
+		if (requestedSelection == null)
+		{
+			return null;
+		}
+		Widget selected = client.getSelectedWidget();
+		return client.isWidgetSelected() && selected != null && requestedSelection.matches(selected)
+			? null
+			: "requested_" + requestedSelection.kind + "_not_selected";
+	}
+
+	private NpcSearch findNpc(
+		Player player,
+		String name,
+		Integer id,
+		String action,
+		int within,
+		SelectedWidget requestedSelection)
+	{
+		NpcSearch search = new NpcSearch();
 		WorldView worldView = player.getWorldView();
-		NPC nearest = null;
-		Point nearestPoint = null;
-		Shape nearestShape = null;
-		int nearestDistance = Integer.MAX_VALUE;
-		boolean matchingNpcExists = false;
-		boolean matchingNpcHasLineOfSight = false;
 		for (NPC npc : worldView.npcs())
 		{
-			if (npc == null || npc.getWorldLocation() == null ||
-				(id != null && npc.getId() != id) ||
-				(name != null && !name.equalsIgnoreCase(Objects.toString(npc.getName(), ""))) ||
-				(requestedSelection == null && !hasAction(npc, action)) ||
-				(requestedSelection != null && "spell".equals(requestedSelection.kind) &&
-					npc.getInteracting() != null && npc.getInteracting() != player) ||
-				("Attack".equalsIgnoreCase(action) &&
-					npc.getInteracting() != null && npc.getInteracting() != player))
+			if (!matchesRequest(npc, player, name, id, action, requestedSelection))
 			{
 				continue;
 			}
@@ -401,55 +397,70 @@ final class GenericClientNpcInput
 			{
 				continue;
 			}
-			matchingNpcExists = true;
-			if (requestedSelection != null && "spell".equals(requestedSelection.kind) &&
-				!hasLineOfSight(player, npc))
+			search.matchingNpcExists = true;
+			if (usesSelectedSpell(requestedSelection) && !hasLineOfSight(player, npc))
 			{
 				continue;
 			}
-			matchingNpcHasLineOfSight = true;
-			Shape candidateShape = npc.getConvexHull();
-			if (candidateShape == null)
+			search.matchingNpcHasLineOfSight = true;
+			Shape shape = npc.getConvexHull();
+			if (shape == null)
 			{
-				candidateShape = npc.getCanvasTilePoly();
+				shape = npc.getCanvasTilePoly();
 			}
-			Point candidatePoint = GenericClientMenuInput.randomPointInside(
-				candidateShape, GenericClientMenuInput.viewportBounds(client));
-			if (candidatePoint != null && distance < nearestDistance)
-			{
-				nearest = npc;
-				nearestPoint = candidatePoint;
-				nearestShape = candidateShape;
-				nearestDistance = distance;
-			}
+			Point point = GenericClientMenuInput.randomPointInside(
+				shape, GenericClientMenuInput.viewportBounds(client));
+			search.consider(npc, point, shape, distance);
 		}
-		if (nearest == null)
-		{
-			if (matchingNpcExists && requestedSelection != null &&
-				"spell".equals(requestedSelection.kind) && !matchingNpcHasLineOfSight)
-			{
-				return GenericClientMenuInput.Resolution.rejected("npc_no_line_of_sight");
-			}
-			return GenericClientMenuInput.Resolution.rejected(
-				matchingNpcExists ? "npc_not_visible" : "matching_npc_not_found");
-		}
+		return search;
+	}
 
-		NPC targetNpc = nearest;
-		Map<String, Object> value = npcMap(targetNpc);
-		if (requestedSelection != null)
+	private static boolean matchesRequest(
+		NPC npc,
+		Player player,
+		String name,
+		Integer id,
+		String action,
+		SelectedWidget requestedSelection)
+	{
+		if (npc == null || npc.getWorldLocation() == null ||
+			(id != null && npc.getId() != id) ||
+			(name != null && !name.equalsIgnoreCase(Objects.toString(npc.getName(), ""))) ||
+			(requestedSelection == null && !hasAction(npc, action)))
 		{
-			value.put("selected_" + requestedSelection.kind, requestedSelection.toMap());
+			return false;
 		}
-		String description = "npc:" + targetNpc.getId() + ":" + targetNpc.getIndex();
-		return GenericClientMenuInput.Resolution.resolved(new GenericClientMenuInput.Target(
-			nearestPoint,
-			action,
-			description,
-			value,
-			entry -> requestedSelection != null
-				? matchesNpc(entry, targetNpc) && entry.getType() == MenuAction.WIDGET_TARGET_ON_NPC
-				: matchesNpc(entry, targetNpc) && action.equalsIgnoreCase(entry.getOption()),
-			nearestShape));
+		return npc.getInteracting() == null || npc.getInteracting() == player ||
+			(!usesSelectedSpell(requestedSelection) && !"Attack".equalsIgnoreCase(action));
+	}
+
+	private static GenericClientMenuInput.Resolution missingNpc(
+		NpcSearch search,
+		SelectedWidget requestedSelection)
+	{
+		if (search.matchingNpcExists && usesSelectedSpell(requestedSelection) &&
+			!search.matchingNpcHasLineOfSight)
+		{
+			return GenericClientMenuInput.Resolution.rejected("npc_no_line_of_sight");
+		}
+		return GenericClientMenuInput.Resolution.rejected(
+			search.matchingNpcExists ? "npc_not_visible" : "matching_npc_not_found");
+	}
+
+	private static boolean menuEntryMatches(
+		MenuEntry entry,
+		NPC npc,
+		String action,
+		SelectedWidget requestedSelection)
+	{
+		return matchesNpc(entry, npc) && (requestedSelection == null
+			? action.equalsIgnoreCase(entry.getOption())
+			: entry.getType() == MenuAction.WIDGET_TARGET_ON_NPC);
+	}
+
+	private static boolean usesSelectedSpell(SelectedWidget requestedSelection)
+	{
+		return requestedSelection != null && "spell".equals(requestedSelection.kind);
 	}
 
 	static boolean hasLineOfSight(Player player, NPC npc)
@@ -541,19 +552,25 @@ final class GenericClientNpcInput
 		}
 	}
 
-	private static final class CameraZoom
+	private static final class NpcSearch
 	{
-		private final int small;
-		private final int big;
-		private final int smallMinimum;
-		private final int bigMinimum;
+		private NPC npc;
+		private Point point;
+		private Shape shape;
+		private int distance = Integer.MAX_VALUE;
+		private boolean matchingNpcExists;
+		private boolean matchingNpcHasLineOfSight;
 
-		private CameraZoom(int small, int big, int smallMinimum, int bigMinimum)
+		private void consider(NPC candidate, Point candidatePoint, Shape candidateShape, int candidateDistance)
 		{
-			this.small = small;
-			this.big = big;
-			this.smallMinimum = smallMinimum;
-			this.bigMinimum = bigMinimum;
+			if (candidatePoint == null || candidateDistance >= distance)
+			{
+				return;
+			}
+			npc = candidate;
+			point = candidatePoint;
+			shape = candidateShape;
+			distance = candidateDistance;
 		}
 	}
 

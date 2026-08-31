@@ -1,5 +1,9 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientInteractionReceipts.clickCount;
+import static com.genericclient.GenericClientInteractionReceipts.composite;
+import static com.genericclient.GenericClientInteractionReceipts.wasDispatched;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -345,7 +349,7 @@ final class GenericClientQuestActions
 			{
 				if (!selected)
 				{
-					return CompletableFuture.completedFuture(compositeReceipt(
+					return CompletableFuture.completedFuture(composite(
 						"item_used_on_object", selection, rejected("requested_item_not_selected")));
 				}
 				return objectInput.useSelectedItemOnObject(
@@ -375,7 +379,7 @@ final class GenericClientQuestActions
 			{
 				if (!selected)
 				{
-					return CompletableFuture.completedFuture(compositeReceipt(
+					return CompletableFuture.completedFuture(composite(
 						"item_used_on_npc", selection, rejected("requested_item_not_selected")));
 				}
 				return npcInput.useSelectedItemOnNpc(
@@ -393,7 +397,7 @@ final class GenericClientQuestActions
 		Map<String, Object> selection,
 		Map<String, Object> target)
 	{
-		Map<String, Object> receipt = compositeReceipt(result, selection, target);
+		Map<String, Object> receipt = composite(result, selection, target);
 		if (wasDispatched(target))
 		{
 			return CompletableFuture.completedFuture(receipt);
@@ -513,30 +517,4 @@ final class GenericClientQuestActions
 			: null;
 	}
 
-	private static boolean wasDispatched(Map<String, Object> receipt)
-	{
-		return receipt != null && "dispatched".equals(receipt.get("status"));
-	}
-
-	private static Map<String, Object> compositeReceipt(
-		String result,
-		Map<String, Object> first,
-		Map<String, Object> second)
-	{
-		Map<String, Object> receipt = new LinkedHashMap<>();
-		receipt.put("status", second.get("status"));
-		receipt.put("result", result);
-		List<Map<String, Object>> steps = new ArrayList<>();
-		steps.add(first);
-		steps.add(second);
-		receipt.put("steps", steps);
-		receipt.put("click_count", clickCount(first) + clickCount(second));
-		return receipt;
-	}
-
-	private static long clickCount(Map<String, Object> receipt)
-	{
-		Object value = receipt.get("click_count");
-		return value instanceof Number ? ((Number) value).longValue() : 0L;
-	}
 }

@@ -13,7 +13,6 @@ import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
-import javax.swing.border.EmptyBorder;
 
 final class GenericClientActiveScriptPanel extends JPanel
 {
@@ -53,7 +52,7 @@ final class GenericClientActiveScriptPanel extends JPanel
 		identity.add(runtime, BorderLayout.EAST);
 		restart.addActionListener(event -> restart());
 		restart.setToolTipText("Restart with the selected configuration");
-		stop.addActionListener(event -> host.stop().whenComplete(this::showResult));
+		stop.addActionListener(event -> observe(host.stop()));
 		JPanel footer = GenericClientDashboardStyle.panel(new BorderLayout(12, 0));
 		footer.add(GenericClientDashboardStyle.inline(8, restart, stop), BorderLayout.WEST);
 		footer.add(notice, BorderLayout.CENTER);
@@ -142,7 +141,7 @@ final class GenericClientActiveScriptPanel extends JPanel
 		for (GenericClientScriptAction action : current.getActions())
 		{
 			JButton button = GenericClientDashboardStyle.button(action.getLabel());
-			button.addActionListener(event -> host.triggerAction(action.getId()).whenComplete(this::showResult));
+			button.addActionListener(event -> observe(host.triggerAction(action.getId())));
 			scriptActions.add(button);
 		}
 		scriptActions.setVisible(!current.getActions().isEmpty());
@@ -177,7 +176,7 @@ final class GenericClientActiveScriptPanel extends JPanel
 			return;
 		}
 		notice.setText("");
-		host.start(current.getId(), selectedValues()).whenComplete(this::showResult);
+		observe(host.start(current.getId(), selectedValues()));
 	}
 
 	private Map<String, Object> selectedValues()
@@ -199,7 +198,12 @@ final class GenericClientActiveScriptPanel extends JPanel
 		return values;
 	}
 
-	private void showResult(String result, Throwable error)
+	private void observe(java.util.concurrent.CompletableFuture<?> operation)
+	{
+		operation.whenComplete((ignored, error) -> showResult(error));
+	}
+
+	private void showResult(Throwable error)
 	{
 		SwingUtilities.invokeLater(() ->
 		{

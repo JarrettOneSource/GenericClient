@@ -39,6 +39,7 @@ final class GenericClientControlServer implements AutoCloseable
 	private final Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> screenshotAction;
 	private final Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> endBreakAction;
 	private final Consumer<String> reporter;
+	private final Map<String, RpcHandler> handlers;
 	private final Gson gson = new Gson();
 	private HttpServer server;
 	private ExecutorService executor;
@@ -124,6 +125,7 @@ final class GenericClientControlServer implements AutoCloseable
 		this.screenshotAction = screenshotAction;
 		this.endBreakAction = endBreakAction;
 		this.reporter = reporter;
+		this.handlers = createHandlers();
 	}
 
 	void start() throws IOException
@@ -237,101 +239,96 @@ final class GenericClientControlServer implements AutoCloseable
 	private Object dispatch(String method, Map<String, Object> parameters)
 		throws IOException, ExecutionException, InterruptedException, TimeoutException
 	{
-		switch (method)
+		RpcHandler handler = handlers.get(method);
+		if (handler == null)
 		{
-			case "status":
-				return statusSupplier.get();
-			case "screenshot.capture":
-				return screenshotAction.get().get(15, TimeUnit.SECONDS);
-			case "behavior.status":
-				return behaviorStatus();
-			case "behavior.profile":
-				Object behavior = behaviorStatus();
-				return behavior instanceof Map ? ((Map<?, ?>) behavior).get("profile") : null;
-			case "behavior.break.end":
-				return endBreakAction.get().get(30, TimeUnit.SECONDS);
-			case "random_event.status":
-				return randomEvents().status();
-			case "random_event.acknowledge":
-				return randomEvents().acknowledge().get(10, TimeUnit.SECONDS);
-			case "random_event.complete":
-				return randomEvents().complete(
-					optionalStringParameter(parameters, "reason", "completed_via_control"),
-					optionalBooleanParameter(parameters, "resume_interrupted", true))
-					.get(30, TimeUnit.SECONDS);
-			case "automation.status":
-				return automation().status();
-			case "automation.config.get":
-				return automation().getConfig().get(10, TimeUnit.SECONDS);
-			case "automation.config.set":
-				return automation().configure(objectParameter(parameters, "config"))
-					.get(10, TimeUnit.SECONDS);
-			case "automation.enable":
-				return automation().setEnabled(booleanParameter(parameters, "enabled"))
-					.get(10, TimeUnit.SECONDS);
-			case "automation.pause":
-				return automation().setPaused(true, "control").get(10, TimeUnit.SECONDS);
-			case "automation.resume":
-				return automation().setPaused(false, "control").get(10, TimeUnit.SECONDS);
-			case "automation.reload":
-				return automation().reload().get(10, TimeUnit.SECONDS);
-			case "account.snapshot":
-				return luaHost.readCurrentSnapshot("account").get(10, TimeUnit.SECONDS);
-			case "account.note.get":
-				return noteSupplier.get();
-			case "account.note.set":
-				return noteSetter.apply(noteParameter(parameters)).get(10, TimeUnit.SECONDS);
-			case "session.logout":
-				return logoutAction.get().get(30, TimeUnit.SECONDS);
-			case "session.login":
-				return loginAction.get().get(30, TimeUnit.SECONDS);
-			case "lua.eval":
-				return luaHost.evaluate(stringParameter(parameters, "code"))
-					.get(LUA_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-			case "lua.reset":
-				return luaHost.resetRepl().get(10, TimeUnit.SECONDS);
-			case "scripts.list":
-				return luaHost.listScriptValues();
-			case "scripts.get":
-			{
-				String id = stringParameter(parameters, "id");
-				Map<String, Object> script = new LinkedHashMap<>(luaHost.getScriptValue(id));
-				List<Map<String, Object>> inputs = new ArrayList<>();
-				for (GenericClientScriptInput input : luaHost.describe(id).get(10, TimeUnit.SECONDS))
-				{
-					inputs.add(input.toMap());
-				}
-				script.put("inputs", inputs);
-				List<Map<String, Object>> actions = new ArrayList<>();
-				for (GenericClientScriptAction action : luaHost.describeActions(id).get(10, TimeUnit.SECONDS))
-				{
-					actions.add(action.toMap());
-				}
-				script.put("actions", actions);
-				return script;
-			}
-			case "scripts.save":
-				return luaHost.saveScript(
-					stringParameter(parameters, "id"),
-					stringParameter(parameters, "name"),
-					stringParameter(parameters, "description"),
-					stringParameter(parameters, "source"),
-					integerListParameter(parameters, "random_events"))
-					.get(10, TimeUnit.SECONDS);
-			case "scripts.run":
-				return luaHost.start(
-					stringParameter(parameters, "id"),
-					inputParameters(parameters)).get(10, TimeUnit.SECONDS);
-			case "scripts.action":
-				return luaHost.triggerAction(stringParameter(parameters, "action"))
-					.get(10, TimeUnit.SECONDS);
-			case "scripts.stop":
-				return luaHost.stop().get(10, TimeUnit.SECONDS);
-			case "scripts.reload":
-				return luaHost.reloadManifest().get(10, TimeUnit.SECONDS);
-			default:
-				throw new IllegalArgumentException("Unknown RPC method: " + method);
+			throw new IllegalArgumentException("Unknown RPC method: " + method);
 		}
+		return handler.handle(parameters);
+	}
+
+	private Map<String, RpcHandler> createHandlers()
+	{
+		Map<String, RpcHandler> values = new LinkedHashMap<>();
+		values.put("status", parameters -> statusSupplier.get());
+		values.put("screenshot.capture", parameters -> await(screenshotAction.get(), 15));
+		values.put("behavior.status", parameters -> behaviorStatus());
+		values.put("behavior.profile", parameters -> behaviorProfile());
+		values.put("behavior.break.end", parameters -> await(endBreakAction.get(), 30));
+		values.put("random_event.status", parameters -> randomEvents().status());
+		values.put("random_event.acknowledge", parameters ->
+			await(randomEvents().acknowledge(), 10));
+		values.put("random_event.complete", parameters -> await(randomEvents().complete(
+			optionalStringParameter(parameters, "reason", "completed_via_control"),
+			optionalBooleanParameter(parameters, "resume_interrupted", true)), 30));
+		values.put("automation.status", parameters -> automation().status());
+		values.put("automation.config.get", parameters -> await(automation().getConfig(), 10));
+		values.put("automation.config.set", parameters -> await(
+			automation().configure(objectParameter(parameters, "config")), 10));
+		values.put("automation.enable", parameters -> await(
+			automation().setEnabled(booleanParameter(parameters, "enabled")), 10));
+		values.put("automation.pause", parameters -> await(
+			automation().setPaused(true, "control"), 10));
+		values.put("automation.resume", parameters -> await(
+			automation().setPaused(false, "control"), 10));
+		values.put("automation.reload", parameters -> await(automation().reload(), 10));
+		values.put("account.snapshot", parameters -> await(
+			luaHost.readCurrentSnapshot("account"), 10));
+		values.put("account.note.get", parameters -> noteSupplier.get());
+		values.put("account.note.set", parameters -> await(
+			noteSetter.apply(noteParameter(parameters)), 10));
+		values.put("session.logout", parameters -> await(logoutAction.get(), 30));
+		values.put("session.login", parameters -> await(loginAction.get(), 30));
+		values.put("lua.eval", parameters -> await(
+			luaHost.evaluate(stringParameter(parameters, "code")), LUA_TIMEOUT_SECONDS));
+		values.put("lua.reset", parameters -> await(luaHost.resetRepl(), 10));
+		values.put("scripts.list", parameters -> luaHost.listScriptValues());
+		values.put("scripts.get", this::scriptDetails);
+		values.put("scripts.save", parameters -> await(luaHost.saveScript(
+			stringParameter(parameters, "id"),
+			stringParameter(parameters, "name"),
+			stringParameter(parameters, "description"),
+			stringParameter(parameters, "source"),
+			integerListParameter(parameters, "random_events")), 10));
+		values.put("scripts.run", parameters -> await(luaHost.start(
+			stringParameter(parameters, "id"), inputParameters(parameters)), 10));
+		values.put("scripts.action", parameters -> await(
+			luaHost.triggerAction(stringParameter(parameters, "action")), 10));
+		values.put("scripts.stop", parameters -> await(luaHost.stop(), 10));
+		values.put("scripts.reload", parameters -> await(luaHost.reloadManifest(), 10));
+		return Collections.unmodifiableMap(values);
+	}
+
+	private Object behaviorProfile()
+	{
+		Object behavior = behaviorStatus();
+		return behavior instanceof Map ? ((Map<?, ?>) behavior).get("profile") : null;
+	}
+
+	private Map<String, Object> scriptDetails(Map<String, Object> parameters)
+		throws IOException, ExecutionException, InterruptedException, TimeoutException
+	{
+		String id = stringParameter(parameters, "id");
+		Map<String, Object> script = new LinkedHashMap<>(luaHost.getScriptValue(id));
+		List<Map<String, Object>> inputs = new ArrayList<>();
+		for (GenericClientScriptInput input : await(luaHost.describe(id), 10))
+		{
+			inputs.add(input.toMap());
+		}
+		script.put("inputs", inputs);
+		List<Map<String, Object>> actions = new ArrayList<>();
+		for (GenericClientScriptAction action : await(luaHost.describeActions(id), 10))
+		{
+			actions.add(action.toMap());
+		}
+		script.put("actions", actions);
+		return script;
+	}
+
+	private static <T> T await(java.util.concurrent.CompletableFuture<T> future, int seconds)
+		throws ExecutionException, InterruptedException, TimeoutException
+	{
+		return future.get(seconds, TimeUnit.SECONDS);
 	}
 
 	private Object behaviorStatus()
@@ -538,5 +535,12 @@ final class GenericClientControlServer implements AutoCloseable
 	{
 		private String method;
 		private Map<String, Object> params;
+	}
+
+	@FunctionalInterface
+	private interface RpcHandler
+	{
+		Object handle(Map<String, Object> parameters)
+			throws IOException, ExecutionException, InterruptedException, TimeoutException;
 	}
 }

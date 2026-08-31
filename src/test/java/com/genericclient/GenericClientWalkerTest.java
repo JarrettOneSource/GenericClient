@@ -2,6 +2,7 @@ package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -38,8 +39,9 @@ public class GenericClientWalkerTest
 		assertEquals(
 			new GenericClientWalker.BlockedEdge(west, east),
 			new GenericClientWalker.BlockedEdge(east, west));
-		assertFalse(new GenericClientWalker.BlockedEdge(west, east).equals(
-			new GenericClientWalker.BlockedEdge(west, new WorldPoint(3010, 3403, 0))));
+		assertNotEquals(
+			new GenericClientWalker.BlockedEdge(west, east),
+			new GenericClientWalker.BlockedEdge(west, new WorldPoint(3010, 3403, 0)));
 	}
 
 	@Test
@@ -318,7 +320,7 @@ public class GenericClientWalkerTest
 			assertEquals(2000, obstacleInput.objectId);
 			assertEquals("Open", obstacleInput.action);
 			assertEquals(door, obstacleInput.world);
-			assertEquals(false, obstacleInput.breaksEnabled);
+			assertFalse(obstacleInput.breaksEnabled);
 			assertTrue(walkInput.targets.isEmpty());
 
 			walker.publishGameTick(doorSnapshot(tick++, start, beforeDoor, door, false));

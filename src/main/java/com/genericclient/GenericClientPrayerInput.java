@@ -1,5 +1,9 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientWidgetTree.clickable;
+import static com.genericclient.GenericClientWidgetTree.descendants;
+import static com.genericclient.GenericClientWidgetTree.hasAction;
+
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.util.ArrayList;
@@ -167,8 +171,7 @@ final class GenericClientPrayerInput
 	private Widget findPrayerWidget(Setting prayer, boolean enabled)
 	{
 		Widget root = visibleWidget(InterfaceID.Prayerbook.CONTAINER);
-		List<Widget> widgets = new ArrayList<>();
-		collect(root, widgets);
+		List<Widget> widgets = descendants(root, 256);
 		return findPrayerActionWidget(
 			widgets,
 			prayer.activeSprite,
@@ -207,57 +210,6 @@ final class GenericClientPrayerInput
 			}
 		}
 		return null;
-	}
-
-	private static void collect(Widget widget, List<Widget> result)
-	{
-		if (widget == null || result.size() >= 256)
-		{
-			return;
-		}
-		result.add(widget);
-		collect(widget.getStaticChildren(), result);
-		collect(widget.getDynamicChildren(), result);
-		collect(widget.getNestedChildren(), result);
-	}
-
-	private static void collect(Widget[] children, List<Widget> result)
-	{
-		if (children == null)
-		{
-			return;
-		}
-		for (Widget child : children)
-		{
-			collect(child, result);
-		}
-	}
-
-	private static boolean hasAction(Widget widget, String action)
-	{
-		String[] actions = widget.getActions();
-		if (actions == null)
-		{
-			return false;
-		}
-		for (String candidate : actions)
-		{
-			if (candidate != null && candidate.equalsIgnoreCase(action))
-			{
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private static boolean clickable(Widget widget)
-	{
-		if (widget == null || widget.isHidden() || widget.isSelfHidden())
-		{
-			return false;
-		}
-		Rectangle bounds = widget.getBounds();
-		return bounds != null && bounds.width > 0 && bounds.height > 0;
 	}
 
 	private GenericClientMenuInput.Resolution resolveWidget(

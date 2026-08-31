@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ruleset xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd"
+	name="GenericClient quality rules">
+	<description>Complexity, dead-code, and redundancy checks for GenericClient.</description>
+
+	<rule ref="category/java/design.xml/CognitiveComplexity">
+		<properties>
+			<property name="reportLevel" value="22" />
+		</properties>
+	</rule>
+	<rule ref="category/java/design.xml/CyclomaticComplexity">
+		<properties>
+			<property name="classReportLevel" value="100000" />
+			<property name="methodReportLevel" value="22" />
+		</properties>
+	</rule>
+
+	<rule ref="category/java/bestpractices.xml/UnusedFormalParameter" />
+	<rule ref="category/java/bestpractices.xml/UnusedLabel" />
+	<rule ref="category/java/bestpractices.xml/UnusedLocalVariable" />
+	<rule ref="category/java/bestpractices.xml/UnusedPrivateField" />
+	<rule ref="category/java/bestpractices.xml/UnusedPrivateMethod" />
+	<rule ref="category/java/bestpractices.xml/UnnecessaryVarargsArrayCreation" />
+	<rule ref="category/java/bestpractices.xml/UnnecessaryWarningSuppression" />
+
+	<rule ref="category/java/design.xml/CollapsibleIfStatements" />
+	<rule ref="category/java/design.xml/UselessOverridingMethod" />
+	<rule ref="category/java/errorprone.xml/IdempotentOperations" />
+	<rule ref="category/java/errorprone.xml/IdenticalConditionalBranches" />
+	<rule ref="category/java/design.xml/SimplifyBooleanReturns" />
+	<rule ref="category/java/design.xml/SimplifyConditional" />
+	<rule ref="category/java/codestyle.xml/UnnecessaryConstructor" />
+	<rule ref="category/java/codestyle.xml/IdenticalCatchBranches" />
+	<rule ref="category/java/codestyle.xml/UnnecessaryBlock" />
+	<rule ref="category/java/codestyle.xml/UnnecessaryBoxing" />
+	<rule ref="category/java/codestyle.xml/UnnecessaryCast" />
+	<rule ref="category/java/codestyle.xml/UnnecessaryImport" />
+	<rule ref="category/java/codestyle.xml/UnnecessaryInterfaceDeclaration" />
+	<rule ref="category/java/codestyle.xml/UnnecessaryModifier" />
+	<rule ref="category/java/codestyle.xml/UnnecessaryReturn" />
+	<rule ref="category/java/codestyle.xml/UnnecessarySemicolon" />
+
+	<rule ref="category/java/bestpractices.xml/SimplifiableTestAssertion" />
+	<rule ref="category/java/bestpractices.xml/UnitTestShouldIncludeAssert" />
+	<rule ref="category/java/errorprone.xml/UnnecessaryBooleanAssertion" />
+</ruleset>
