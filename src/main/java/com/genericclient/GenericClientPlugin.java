@@ -317,7 +317,8 @@ public final class GenericClientPlugin extends Plugin
 			questActions::execute,
 			this::cancelActiveActions,
 			behaviorController,
-			this::publishResult);
+			this::publishResult,
+			System::nanoTime);
 		automationScheduler = new GenericClientAutomationScheduler(
 			net.runelite.client.RuneLite.RUNELITE_DIR.toPath()
 				.resolve("genericclient").resolve("automation"),

@@ -27,13 +27,8 @@ public class GenericClientControlServerTest
 	@SuppressWarnings("unchecked")
 	public void exposesStructuredLuaAndScriptOperationsOverLoopback() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("control-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("control-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "control").build();
 		AtomicReference<String> note = new AtomicReference<>("Account Goal");
 		Map<String, Object> screenshot = new LinkedHashMap<>();
 		screenshot.put("mime_type", "image/png");

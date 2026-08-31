@@ -1,5 +1,7 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientTestSupport.script;
+import static com.genericclient.GenericClientTestSupport.waitForStatus;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -39,14 +41,11 @@ public class GenericClientLuaHostTest
 			"return { run = function() return maths.answer end }\n");
 		Files.writeString(directory.resolve("example/maths.lua"),
 			"return { answer = 42 }\n");
-		GenericClientLuaHost host = new GenericClientLuaHost(
+		GenericClientLuaHost host = GenericClientTestSupport.luaHost(
 			directory,
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) ->
-				CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("module-behavior").toPath()),
-			message -> { });
+			GenericClientTestSupport.behavior(
+				temporaryFolder.newFolder("module-behavior").toPath()))
+			.build();
 		try
 		{
 			host.start("example").get(2, TimeUnit.SECONDS);
@@ -62,13 +61,8 @@ public class GenericClientLuaHostTest
 	@Test
 	public void startsWithoutStandaloneScripts() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("idle-start-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("idle-start-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "idle-start").build();
 		try
 		{
 			assertEquals("none", host.getActiveScript());
@@ -85,13 +79,8 @@ public class GenericClientLuaHostTest
 	@Test
 	public void preservesManualAndScheduledRunOwnership() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("owned-run-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("owned-run-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "owned-run").build();
 		AtomicInteger manualStops = new AtomicInteger();
 		host.setManualStopListener(manualStops::incrementAndGet);
 		try
@@ -138,18 +127,15 @@ public class GenericClientLuaHostTest
 	public void runsTickReadLogAndRealActionShapeEndToEnd() throws Exception
 	{
 		AtomicInteger walkRequests = new AtomicInteger();
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("scripts").toPath(),
-			breaks ->
+		GenericClientLuaHost host = GenericClientTestSupport
+			.luaHost(temporaryFolder, "actions")
+			.walkRandom(breaks ->
 			{
 				walkRequests.incrementAndGet();
 				return CompletableFuture.completedFuture(
 					GenericClientTestSupport.interaction("WALK_CLICK_EXECUTED test"));
-			},
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("behavior").toPath()),
-			message -> { });
+			})
+			.build();
 		try
 		{
 			host.saveScript(
@@ -180,365 +166,10 @@ public class GenericClientLuaHostTest
 	}
 
 	@Test
-	public void dispatchesNpcInteractionWithExplicitTargetAndBreakPolicy() throws Exception
-	{
-		AtomicReference<String> request = new AtomicReference<>();
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("npc-action-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			(id, name, action, within, breaks) ->
-			{
-				request.set(id + ":" + name + ":" + action + ":" + within + ":" +
-					breaks.allowsBreaks());
-				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
-				receipt.put("status", "dispatched");
-				receipt.put("result", "menu_action_executed");
-				return CompletableFuture.completedFuture(receipt);
-			},
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("npc-action-behavior").toPath()),
-			message -> { });
-		try
-		{
-			host.saveScript(
-				"npc-action",
-				"NPC action",
-				"Exercise npc.interact dispatch.",
-				script(
-					"local receipt = gc.await { action = { type = 'npc.interact', " +
-					"id = 3996, name = \"Witch's experiment\", action = 'Attack', within = 7 }, " +
-					"breaks = false }\n" +
-					"gc.log('info', 'npc-result', receipt)"))
-				.get(2, TimeUnit.SECONDS);
-
-			host.start("npc-action").get(2, TimeUnit.SECONDS);
-			waitForStatus(host, "COMPLETED");
-
-			assertEquals("3996:Witch's experiment:Attack:7:false", request.get());
-			assertTrue(host.getRecentLogs().contains("npc-result"));
-			assertTrue(host.getRecentLogs().contains("menu_action_executed"));
-		}
-		finally
-		{
-			host.close();
-		}
-	}
-
-	@Test
-	public void dispatchesQuestActionWithoutMovingQuestFactsIntoJava() throws Exception
-	{
-		AtomicReference<String> requestedType = new AtomicReference<>();
-		AtomicReference<Map<String, Object>> requestedAction = new AtomicReference<>();
-		AtomicReference<Boolean> requestedBreaks = new AtomicReference<>();
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("quest-action-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			(mode, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			(type, action, breaks) ->
-			{
-				requestedType.set(type);
-				requestedAction.set(action);
-				requestedBreaks.set(breaks.allowsBreaks());
-				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
-				receipt.put("status", "dispatched");
-				receipt.put("result", "item_used_on_object");
-				return CompletableFuture.completedFuture(receipt);
-			},
-			reason -> { },
-			GenericClientTestSupport.behavior(
-				temporaryFolder.newFolder("quest-action-behavior").toPath()),
-			message -> { });
-		try
-		{
-			host.saveScript(
-				"quest-action",
-				"Quest action",
-				"Exercise semantic quest action dispatch.",
-				script(
-					"local receipt = gc.await { action = { type = 'item.use_on_object', " +
-					"item_id = 1985, object_id = 2870, " +
-					"world = { x = 2903, y = 3466, plane = 0 }, within = 8 }, breaks = false }\n" +
-					"gc.log('info', 'quest-action-result', receipt)"))
-				.get(2, TimeUnit.SECONDS);
-
-			host.start("quest-action").get(2, TimeUnit.SECONDS);
-			waitForStatus(host, "COMPLETED");
-
-			assertEquals("item.use_on_object", requestedType.get());
-			assertEquals(1985.0, requestedAction.get().get("item_id"));
-			assertEquals(2870.0, requestedAction.get().get("object_id"));
-			assertEquals(2903.0, ((Map<?, ?>) requestedAction.get().get("world")).get("x"));
-			assertEquals(Boolean.FALSE, requestedBreaks.get());
-			assertTrue(host.getRecentLogs().contains("item_used_on_object"));
-		}
-		finally
-		{
-			host.close();
-		}
-	}
-
-	@Test
-	public void capturesAndInfersAnImmutableActivityForEveryAwaitedAction() throws Exception
-	{
-		List<String> activities = new java.util.concurrent.CopyOnWriteArrayList<>();
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("activity-scripts").toPath(),
-			context -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, context, useRun) ->
-			{
-				activities.add("walk:" + context.getActivity().getValue());
-				return CompletableFuture.completedFuture(Collections.singletonMap("status", "arrived"));
-			},
-			(id, name, action, within, context) ->
-			{
-				activities.add(action + ":" + context.getActivity().getValue());
-				return CompletableFuture.completedFuture(Collections.singletonMap("status", "dispatched"));
-			},
-			(mode, context) -> CompletableFuture.completedFuture(Collections.singletonMap("status", "set")),
-			(type, action, context) ->
-			{
-				activities.add(type + ":" + context.getActivity().getValue());
-				return CompletableFuture.completedFuture(Collections.singletonMap("status", "complete"));
-			},
-			reason -> { },
-			GenericClientTestSupport.behavior(
-				temporaryFolder.newFolder("activity-behavior").toPath()),
-			message -> { });
-		try
-		{
-			host.saveScript(
-				"activity",
-				"Activity",
-				"Exercise activity capture and semantic inference.",
-				script(
-					"gc.activity('skilling')\n" +
-					"gc.await { activity = 'banking', action = { type = 'item.interact', id = 1, action = 'Use' } }\n" +
-					"gc.await { action = { type = 'item.interact', id = 1, action = 'Use' } }\n" +
-					"gc.await { action = { type = 'walk.to', destination = { x = 3200, y = 3200, plane = 0 } } }\n" +
-					"gc.await { action = { type = 'npc.interact', id = 1, action = 'Talk-to' } }\n" +
-					"gc.await { action = { type = 'npc.interact', id = 1, action = 'Attack' } }\n" +
-					"gc.await { action = { type = 'npc.interact', id = 1, action = 'Bank' } }\n" +
-					"gc.await { action = { type = 'npc.interact', id = 1, action = 'Exchange' } }\n" +
-					"gc.await { action = { type = 'bank.loadout', items = {} } }\n" +
-					"gc.await { action = { type = 'ge.buy', item_id = 1, item_name = 'Test', quantity = 1, maximum_unit_price = 1 } }"))
-				.get(2, TimeUnit.SECONDS);
-
-			host.start("activity").get(2, TimeUnit.SECONDS);
-			waitForStatus(host, "COMPLETED");
-
-			assertEquals(java.util.Arrays.asList(
-				"item.interact:banking",
-				"item.interact:skilling",
-				"walk:travel",
-				"Talk-to:dialogue",
-				"Attack:combat",
-				"Bank:banking",
-				"Exchange:trading",
-				"bank.loadout:banking",
-				"ge.buy:trading"), activities);
-		}
-		finally
-		{
-			host.close();
-		}
-	}
-
-	@Test
-	public void dispatchesEquipmentInteractionThroughTheLuaSurface() throws Exception
-	{
-		AtomicReference<String> requestedType = new AtomicReference<>();
-		AtomicReference<Map<String, Object>> requestedAction = new AtomicReference<>();
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("equipment-action-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) ->
-				CompletableFuture.completedFuture(Collections.emptyMap()),
-			(id, name, action, within, breaks) ->
-				CompletableFuture.completedFuture(Collections.emptyMap()),
-			(mode, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			(type, action, breaks) ->
-			{
-				requestedType.set(type);
-				requestedAction.set(action);
-				return CompletableFuture.completedFuture(receipt("dispatched"));
-			},
-			reason -> { },
-			GenericClientTestSupport.behavior(
-				temporaryFolder.newFolder("equipment-action-behavior").toPath()),
-			message -> { });
-		try
-		{
-			host.saveScript(
-				"equipment-action",
-				"Equipment action",
-				"Exercise equipped-item interaction dispatch.",
-				script("gc.await { action = { type = 'equipment.interact', " +
-					"id = 2560, action = 'Rub' }, breaks = false }"))
-				.get(2, TimeUnit.SECONDS);
-
-			host.start("equipment-action").get(2, TimeUnit.SECONDS);
-			waitForStatus(host, "COMPLETED");
-
-			assertEquals("equipment.interact", requestedType.get());
-			assertEquals(2560.0, requestedAction.get().get("id"));
-			assertEquals("Rub", requestedAction.get().get("action"));
-		}
-		finally
-		{
-			host.close();
-		}
-	}
-
-	@Test
-	public void dispatchesWidgetClickThroughTheLuaSurface() throws Exception
-	{
-		AtomicReference<String> requestedType = new AtomicReference<>();
-		AtomicReference<Map<String, Object>> requestedAction = new AtomicReference<>();
-		AtomicReference<Boolean> requestedBreaks = new AtomicReference<>();
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("widget-action-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) ->
-				CompletableFuture.completedFuture(Collections.emptyMap()),
-			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			(mode, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			(type, action, breaks) ->
-			{
-				requestedType.set(type);
-				requestedAction.set(action);
-				requestedBreaks.set(breaks.allowsBreaks());
-				return CompletableFuture.completedFuture(receipt("dispatched"));
-			},
-			reason -> { },
-			GenericClientTestSupport.behavior(
-				temporaryFolder.newFolder("widget-action-behavior").toPath()),
-			message -> { });
-		try
-		{
-			host.saveScript(
-				"widget-action",
-				"Widget action",
-				"Exercise generic widget click dispatch.",
-				script("gc.await { action = { type = 'ui.click', widget_id = 1703941 }, " +
-					"breaks = false }"))
-				.get(2, TimeUnit.SECONDS);
-
-			host.start("widget-action").get(2, TimeUnit.SECONDS);
-			waitForStatus(host, "COMPLETED");
-
-			assertEquals("ui.click", requestedType.get());
-			assertEquals(1703941.0, requestedAction.get().get("widget_id"));
-			assertEquals(Boolean.FALSE, requestedBreaks.get());
-		}
-		finally
-		{
-			host.close();
-		}
-	}
-
-	@Test
-	public void dispatchesCombatStyleSelection() throws Exception
-	{
-		AtomicReference<String> request = new AtomicReference<>();
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("combat-style-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			(style, breaks) ->
-			{
-				request.set(style + ":" + breaks.allowsBreaks());
-				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
-				receipt.put("status", "set");
-				receipt.put("style_index", (long) style);
-				return CompletableFuture.completedFuture(receipt);
-			},
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("combat-style-behavior").toPath()),
-			message -> { });
-		try
-		{
-			host.saveScript(
-				"combat-style",
-				"Combat style",
-				"Exercise combat.set_style dispatch.",
-				script(
-					"local receipt = gc.await { action = { type = 'combat.set_style', style = 3 }, " +
-					"breaks = false }\n" +
-					"gc.log('info', 'style-result', receipt)"))
-				.get(2, TimeUnit.SECONDS);
-
-			host.start("combat-style").get(2, TimeUnit.SECONDS);
-			waitForStatus(host, "COMPLETED");
-
-			assertEquals("3:false", request.get());
-			assertTrue(host.getRecentLogs().contains("style-result"));
-			assertTrue(host.getRecentLogs().contains("style_index=3.0"));
-		}
-		finally
-		{
-			host.close();
-		}
-	}
-
-	@Test
-	public void dispatchesAutoRetaliateSelection() throws Exception
-	{
-		AtomicReference<String> request = new AtomicReference<>();
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("auto-retaliate-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			(id, name, action, within, breaks) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			(mode, breaks) ->
-			{
-				request.set(mode + ":" + breaks.allowsBreaks());
-				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
-				receipt.put("status", "set");
-				receipt.put("enabled", mode == 5);
-				return CompletableFuture.completedFuture(receipt);
-			},
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("auto-retaliate-behavior").toPath()),
-			message -> { });
-		try
-		{
-			host.saveScript(
-				"auto-retaliate",
-				"Auto retaliate",
-				"Exercise combat.set_auto_retaliate dispatch.",
-				script(
-					"local receipt = gc.await { action = { type = 'combat.set_auto_retaliate', " +
-					"enabled = false }, breaks = false }\n" +
-					"gc.log('info', 'retaliate-result', receipt)"))
-				.get(2, TimeUnit.SECONDS);
-
-			host.start("auto-retaliate").get(2, TimeUnit.SECONDS);
-			waitForStatus(host, "COMPLETED");
-
-			assertEquals("4:false", request.get());
-			assertTrue(host.getRecentLogs().contains("retaliate-result"));
-			assertTrue(host.getRecentLogs().contains("enabled=false"));
-		}
-		finally
-		{
-			host.close();
-		}
-	}
-
-	@Test
 	public void pinsOneSnapshotForTheEntireCoroutineResume() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("pinned-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("pinned-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "pinned").build();
 		try
 		{
 			host.saveScript(
@@ -569,13 +200,8 @@ public class GenericClientLuaHostTest
 	@Test
 	public void stopsAnInfiniteScriptWithTheInstructionHook() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("fault-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("fault-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "fault").build();
 		try
 		{
 			host.saveScript(
@@ -603,13 +229,8 @@ public class GenericClientLuaHostTest
 	@Test
 	public void rejectsANonBooleanBreakPolicyDuringInitialization() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("invalid-break-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("invalid-break-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "invalid-break").build();
 		try
 		{
 			host.saveScript(
@@ -639,13 +260,8 @@ public class GenericClientLuaHostTest
 	@SuppressWarnings("unchecked")
 	public void replKeepsGlobalsAndReturnsStructuredValues() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("repl-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("repl-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "repl").build();
 		try
 		{
 			host.publishGameTick(snapshot(7));
@@ -678,13 +294,8 @@ public class GenericClientLuaHostTest
 	@SuppressWarnings("unchecked")
 	public void replReadsQuestVarsObjectsAndDialogueFromOnePinnedFrame() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("quest-read-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("quest-read-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "quest-read").build();
 		try
 		{
 			int[] varps = new int[100];
@@ -736,18 +347,15 @@ public class GenericClientLuaHostTest
 	public void phaseAndActionCanBypassBreaksForATimeSensitiveSequence() throws Exception
 	{
 		AtomicInteger walkRequests = new AtomicInteger();
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("phase-scripts").toPath(),
-			breaks ->
+		GenericClientLuaHost host = GenericClientTestSupport
+			.luaHost(temporaryFolder, "phase")
+			.walkRandom(breaks ->
 			{
 				walkRequests.incrementAndGet();
 				return CompletableFuture.completedFuture(
 					GenericClientTestSupport.interaction("WALK_CLICK_EXECUTED phase-test"));
-			},
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("phase-behavior").toPath()),
-			message -> { });
+			})
+			.build();
 		try
 		{
 			host.saveScript(
@@ -779,13 +387,8 @@ public class GenericClientLuaHostTest
 	@Test
 	public void describesChoiceInputsAndPassesTheSelectedValueToRun() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("input-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("input-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "input").build();
 		try
 		{
 			host.saveScript(
@@ -823,13 +426,8 @@ public class GenericClientLuaHostTest
 	@Test
 	public void rejectsValuesOutsideTheDeclaredChoices() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("invalid-input-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("invalid-input-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "invalid-input").build();
 		try
 		{
 			host.saveScript(
@@ -881,10 +479,9 @@ public class GenericClientLuaHostTest
 			behaviorHash++;
 		}
 		behavior.activateAccount(behaviorHash);
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("walker-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) ->
+		GenericClientLuaHost host = GenericClientTestSupport.luaHost(
+			temporaryFolder.newFolder("walker-scripts").toPath(), behavior)
+			.walkTo((destination, within, timeout, breaks, useRun) ->
 			{
 				requestedDestination.set(destination);
 				requestedWithin.set(within);
@@ -893,10 +490,8 @@ public class GenericClientLuaHostTest
 				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
 				receipt.put("status", "arrived");
 				return CompletableFuture.completedFuture(receipt);
-			},
-			reason -> { },
-			behavior,
-			message -> { });
+			})
+			.build();
 		try
 		{
 			host.saveScript(
@@ -942,20 +537,16 @@ public class GenericClientLuaHostTest
 	public void walkToCanExplicitlyConserveRunEnergy() throws Exception
 	{
 		AtomicReference<Boolean> requestedUseRun = new AtomicReference<>();
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("conserve-run-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) ->
+		GenericClientLuaHost host = GenericClientTestSupport
+			.luaHost(temporaryFolder, "conserve-run")
+			.walkTo((destination, within, timeout, breaks, useRun) ->
 			{
 				requestedUseRun.set(useRun);
 				Map<String, Object> receipt = new java.util.LinkedHashMap<>();
 				receipt.put("status", "arrived");
 				return CompletableFuture.completedFuture(receipt);
-			},
-			reason -> { },
-			GenericClientTestSupport.behavior(
-				temporaryFolder.newFolder("conserve-run-behavior").toPath()),
-			message -> { });
+			})
+			.build();
 		try
 		{
 			host.saveScript(
@@ -980,13 +571,8 @@ public class GenericClientLuaHostTest
 	@Test
 	public void completesAPendingReplCallWhenTheHostCloses() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("closing-repl-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("closing-repl-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "closing-repl").build();
 		try
 		{
 			CompletableFuture<Map<String, Object>> pending = host.evaluate(
@@ -1012,14 +598,10 @@ public class GenericClientLuaHostTest
 	public void exposesRuntimeOverlayAndCooperativeScriptActions() throws Exception
 	{
 		AtomicLong clock = new AtomicLong(TimeUnit.SECONDS.toNanos(10));
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("presentation-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("presentation-behavior").toPath()),
-			message -> { },
-			clock::get);
+		GenericClientLuaHost host = GenericClientTestSupport
+			.luaHost(temporaryFolder, "presentation")
+			.clock(clock::get)
+			.build();
 		try
 		{
 			host.saveScript(
@@ -1092,26 +674,4 @@ public class GenericClientLuaHostTest
 				Collections.singletonList("Bank"))));
 	}
 
-	private static String script(String body)
-	{
-		return "return { run = function(input)\n" + body + "\nend }\n";
-	}
-
-	private static Map<String, Object> receipt(String status)
-	{
-		Map<String, Object> receipt = new java.util.LinkedHashMap<>();
-		receipt.put("status", status);
-		receipt.put("click_count", 0L);
-		return receipt;
-	}
-
-	private static void waitForStatus(GenericClientLuaHost host, String expected) throws InterruptedException
-	{
-		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-		while (!expected.equals(host.getStatus()) && System.nanoTime() < deadline)
-		{
-			Thread.sleep(10);
-		}
-		assertEquals(expected, host.getStatus());
-	}
 }

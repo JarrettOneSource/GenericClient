@@ -47,61 +47,6 @@ final class GenericClientControlServer implements AutoCloseable
 	GenericClientControlServer(
 		int port,
 		GenericClientLuaHost luaHost,
-		Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction,
-		Supplier<java.util.concurrent.CompletableFuture<String>> loginAction,
-		Supplier<Map<String, Object>> statusSupplier,
-		Supplier<String> noteSupplier,
-		Function<String, java.util.concurrent.CompletableFuture<String>> noteSetter,
-		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> screenshotAction,
-		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> endBreakAction,
-		Consumer<String> reporter)
-	{
-		this(
-			port,
-			luaHost,
-			null,
-			null,
-			logoutAction,
-			loginAction,
-			statusSupplier,
-			noteSupplier,
-			noteSetter,
-			screenshotAction,
-			endBreakAction,
-			reporter);
-	}
-
-	GenericClientControlServer(
-		int port,
-		GenericClientLuaHost luaHost,
-		GenericClientAutomationScheduler automationScheduler,
-		Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction,
-		Supplier<java.util.concurrent.CompletableFuture<String>> loginAction,
-		Supplier<Map<String, Object>> statusSupplier,
-		Supplier<String> noteSupplier,
-		Function<String, java.util.concurrent.CompletableFuture<String>> noteSetter,
-		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> screenshotAction,
-		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> endBreakAction,
-		Consumer<String> reporter)
-	{
-		this(
-			port,
-			luaHost,
-			automationScheduler,
-			null,
-			logoutAction,
-			loginAction,
-			statusSupplier,
-			noteSupplier,
-			noteSetter,
-			screenshotAction,
-			endBreakAction,
-			reporter);
-	}
-
-	GenericClientControlServer(
-		int port,
-		GenericClientLuaHost luaHost,
 		GenericClientAutomationScheduler automationScheduler,
 		GenericClientRandomEventController randomEventController,
 		Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction,

@@ -143,14 +143,10 @@ public class GenericClientRandomEventLuaHostTest
 		CompletableFuture<GenericClientInteractionResult> pendingWalk = new CompletableFuture<>();
 		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
 			temporaryFolder.newFolder("late-action-behavior").toPath());
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("late-action-scripts").toPath(),
-			breaks -> pendingWalk,
-			(destination, within, timeout, breaks, run) ->
-				CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			behavior,
-			message -> { });
+		GenericClientLuaHost host = GenericClientTestSupport.luaHost(
+			temporaryFolder.newFolder("late-action-scripts").toPath(), behavior)
+			.walkRandom(breaks -> pendingWalk)
+			.build();
 		try
 		{
 			host.saveScript(
@@ -248,14 +244,8 @@ public class GenericClientRandomEventLuaHostTest
 		Path scripts = temporaryFolder.newFolder(name + "-scripts").toPath();
 		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(
 			temporaryFolder.newFolder(name + "-behavior").toPath());
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			scripts,
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, run) ->
-				CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			behavior,
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(scripts, behavior).build();
 		host.saveScript(
 			"walker",
 			"Walker",

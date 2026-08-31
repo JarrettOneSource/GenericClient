@@ -34,13 +34,8 @@ public class GenericClientDashboardTest
 	@Test
 	public void keepsThePopoutToFocusedDestinations() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "dashboard").build();
 		try
 		{
 			GenericClientDashboard dashboard = new GenericClientDashboard(null, new FakeActions(), host);
@@ -97,13 +92,8 @@ public class GenericClientDashboardTest
 	@Test
 	public void longBreakBannerCanEndTheBreak() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("break-banner-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("break-banner-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "break-banner").build();
 		try
 		{
 			FakeActions actions = new FakeActions();
@@ -142,13 +132,8 @@ public class GenericClientDashboardTest
 	@Test
 	public void rendersInputsFromAnExternalLuaDescriptor() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("external-ui-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("walker-ui-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "external-ui").build();
 		try
 		{
 			host.saveScript(
@@ -180,13 +165,8 @@ public class GenericClientDashboardTest
 	@Test
 	public void activeScriptPageShowsConfigurationAndDeclaredActions() throws Exception
 	{
-		GenericClientLuaHost host = new GenericClientLuaHost(
-			temporaryFolder.newFolder("active-ui-scripts").toPath(),
-			breaks -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")),
-			(destination, within, timeout, breaks, useRun) -> CompletableFuture.completedFuture(Collections.emptyMap()),
-			reason -> { },
-			GenericClientTestSupport.behavior(temporaryFolder.newFolder("active-ui-behavior").toPath()),
-			message -> { });
+		GenericClientLuaHost host =
+			GenericClientTestSupport.luaHost(temporaryFolder, "active-ui").build();
 		try
 		{
 			host.saveScript(

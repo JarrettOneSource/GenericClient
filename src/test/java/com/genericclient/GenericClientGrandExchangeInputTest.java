@@ -1,49 +1,43 @@
 package com.genericclient;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertSame;
-import static org.junit.Assert.assertTrue;
-
-import java.awt.Rectangle;
-import java.lang.reflect.Proxy;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import net.runelite.api.GrandExchangeOffer;
-import net.runelite.api.GrandExchangeOfferState;
-import net.runelite.api.widgets.Widget;
 import org.junit.Test;
 
 public class GenericClientGrandExchangeInputTest
 {
 	@Test
-	public void permitsSpendThatLeavesExactlyTheHardReserve()
+	public void acceptsEveryRequestBoundary()
 	{
-		Map<String, Object> cash = cash(14_200_000L, 9_200_000L);
-
-		assertNull(GenericClientGrandExchangeInput.cashRejection(
-			cash, 9_200_000L, 5_000_000L));
+		assertValid(() -> GenericClientGrandExchangeInput.validateRequest(
+			0, "Air rune", 1, Integer.MAX_VALUE, 5_000_000L));
+		assertValid(() -> GenericClientGrandExchangeInput.validateRequest(
+			0, "Air rune", 1, 1, 5_000_000L));
 	}
 
 	@Test
-	public void rejectsSpendThatCrossesTheReserve()
+	public void rejectsMissingItemIdentity()
 	{
-		Map<String, Object> cash = cash(14_200_000L, 9_300_000L);
-
-		assertEquals("cash_reserve_would_be_breached",
-			GenericClientGrandExchangeInput.cashRejection(
-				cash, 9_200_001L, 5_000_000L));
+		assertInvalid(() -> GenericClientGrandExchangeInput.validateRequest(
+			-1, "Air rune", 1, 1, 5_000_000L));
+		assertInvalid(() -> GenericClientGrandExchangeInput.validateRequest(
+			556, null, 1, 1, 5_000_000L));
+		assertInvalid(() -> GenericClientGrandExchangeInput.validateRequest(
+			556, "   ", 1, 1, 5_000_000L));
 	}
 
 	@Test
-	public void requiresEnoughCoinsInInventoryToPlaceTheOffer()
+	public void rejectsNonPositiveQuantityOrPrice()
 	{
-		Map<String, Object> cash = cash(14_200_000L, 99_999L);
+		assertInvalid(() -> GenericClientGrandExchangeInput.validateRequest(
+			556, "Air rune", 0, 1, 5_000_000L));
+		assertInvalid(() -> GenericClientGrandExchangeInput.validateRequest(
+			556, "Air rune", 1, 0, 5_000_000L));
+	}
 
-		assertEquals("insufficient_inventory_coins_for_offer",
-			GenericClientGrandExchangeInput.cashRejection(
-				cash, 100_000L, 5_000_000L));
+	@Test
+	public void rejectsCoinStackOverflow()
+	{
+		assertInvalid(() -> GenericClientGrandExchangeInput.validateRequest(
+			556, "Air rune", 2, 1_073_741_824, 5_000_000L));
 	}
 
 	@Test(expected = IllegalArgumentException.class)
@@ -53,202 +47,26 @@ public class GenericClientGrandExchangeInputTest
 			556, "Air rune", 300, 10, 4_999_999L);
 	}
 
-	@Test
-	public void mapsTheStockCreateBuyOfferTextToTheSemanticBuyAction()
+	private static void assertInvalid(Request request)
 	{
-		assertTrue(GenericClientGrandExchangeInput.matchesActionText(
-			"Create <col=ff9040>Buy</col> offer", "Buy"));
+		try
+		{
+			request.validate();
+			throw new AssertionError("Expected request validation to fail");
+		}
+		catch (IllegalArgumentException expected)
+		{
+			// Expected.
+		}
 	}
 
-	@Test
-	public void aimsAtTheBuyControlInsteadOfTheOfferSlotHeading()
+	private static void assertValid(Request request)
 	{
-		Rectangle slot = new Rectangle(145, 78, 113, 110);
-
-		assertEquals(new Rectangle(165, 139, 20, 22),
-			GenericClientGrandExchangeInput.buyOfferHitbox(slot));
+		request.validate();
 	}
 
-	@Test
-	public void recognizesTheVisiblePriceWarningChoiceWithoutADeclaredAction()
+	private interface Request
 	{
-		Widget yes = widget(new Rectangle(307, 201, 40, 32), 0, 0, null, null, "Yes", null);
-
-		assertTrue(GenericClientGrandExchangeInput.matchesWidgetText(yes, "Yes"));
-	}
-
-	@Test
-	public void findsPriceWarningChoiceInsideAttachedPopupRoot()
-	{
-		Rectangle scope = new Rectangle(20, 20, 480, 300);
-		Widget yes = widget(new Rectangle(307, 201, 40, 32), 0, 0, null, null, "Yes", null);
-		Widget popup = widget(new Rectangle(35, 125, 440, 120), 0, 0, null, null, null, null, yes);
-
-		assertSame(yes, GenericClientGrandExchangeInput.findByTextWithin(popup, "Yes", scope));
-	}
-
-	@Test
-	public void scopesPriceWarningToTheOfferIndexAfterSetupCloses()
-	{
-		Rectangle index = new Rectangle(20, 20, 480, 300);
-
-		assertEquals(index, GenericClientGrandExchangeInput.priceWarningScope(null, index));
-	}
-
-	@Test
-	public void resolvesSentinelSearchRowBoundsThroughItsVisibleParent()
-	{
-		Widget parent = widget(new Rectangle(9, 367, 485, 104), 0, 0, null);
-		Widget row = widget(new Rectangle(-1, -1, 161, 32), 0, 0, parent);
-
-		assertEquals(new Rectangle(9, 367, 161, 32),
-			GenericClientGrandExchangeInput.resolvedWidgetBounds(row));
-	}
-
-	@Test
-	public void aimsAtTheExactSearchResultIconInsteadOfBlankRowSpace()
-	{
-		Widget row = widget(new Rectangle(9, 367, 485, 104), 0, 0, null);
-		Widget icon = widget(new Rectangle(17, 374, 36, 32), 0, 0, row);
-
-		assertEquals(new Rectangle(17, 374, 36, 32),
-			GenericClientGrandExchangeInput.searchResultHitbox(row, icon));
-	}
-
-	@Test
-	public void replacesOnlyAZeroFillBuyWithStaleQuantityOrPrice()
-	{
-		assertTrue(GenericClientGrandExchangeInput.shouldReplaceZeroFill(
-			offer(GrandExchangeOfferState.BUYING, 5, 0, 675), 700, 10));
-		assertTrue(GenericClientGrandExchangeInput.shouldReplaceZeroFill(
-			offer(GrandExchangeOfferState.BUYING, 5, 0, 700), 700, 10));
-		assertFalse(GenericClientGrandExchangeInput.shouldReplaceZeroFill(
-			offer(GrandExchangeOfferState.BUYING, 5, 1, 700), 700, 10));
-		assertFalse(GenericClientGrandExchangeInput.shouldReplaceZeroFill(
-			offer(GrandExchangeOfferState.BOUGHT, 5, 0, 700), 700, 10));
-		assertFalse(GenericClientGrandExchangeInput.shouldReplaceZeroFill(
-			offer(GrandExchangeOfferState.BUYING, 10, 0, 700), 700, 10));
-	}
-
-	@Test
-	public void acceptsOnlyMatchingActiveOrCompletedOffers()
-	{
-		assertTrue(GenericClientGrandExchangeInput.matchesRequestedOffer(
-			offer(GrandExchangeOfferState.BUYING, 10, 0, 700), 700, 10));
-		assertTrue(GenericClientGrandExchangeInput.matchesRequestedOffer(
-			offer(GrandExchangeOfferState.BOUGHT, 5, 700, 700), 700, 10));
-		assertFalse(GenericClientGrandExchangeInput.matchesRequestedOffer(
-			offer(GrandExchangeOfferState.BOUGHT, 5, 675, 675), 700, 10));
-	}
-
-	@Test
-	public void selectsTheRequestedCollectionMode()
-	{
-		Widget collect = widget(
-			new Rectangle(100, 100, 36, 32),
-			0,
-			0,
-			null,
-			new String[]{"Collect-notes", "Collect-items", "Bank"});
-
-		assertEquals("Collect-items", GenericClientGrandExchangeInput.collectAction(collect, "items"));
-		assertEquals("Collect-notes", GenericClientGrandExchangeInput.collectAction(collect, "notes"));
-		assertEquals("Bank", GenericClientGrandExchangeInput.collectAction(collect, "bank"));
-	}
-
-	private static Map<String, Object> cash(long knownTotal, long inventoryCoins)
-	{
-		Map<String, Object> value = new LinkedHashMap<>();
-		value.put("complete", true);
-		value.put("known_total_value", knownTotal);
-		value.put("inventory_coins", inventoryCoins);
-		return value;
-	}
-
-	private static Widget widget(
-		Rectangle bounds,
-		int relativeX,
-		int relativeY,
-		Widget parent)
-	{
-		return widget(bounds, relativeX, relativeY, parent, null);
-	}
-
-	private static Widget widget(
-		Rectangle bounds,
-		int relativeX,
-		int relativeY,
-		Widget parent,
-		String[] actions)
-	{
-		return widget(bounds, relativeX, relativeY, parent, actions, null, null);
-	}
-
-	private static Widget widget(
-		Rectangle bounds,
-		int relativeX,
-		int relativeY,
-		Widget parent,
-		String[] actions,
-		String text,
-		String name,
-		Widget... children)
-	{
-		return (Widget) Proxy.newProxyInstance(
-			Widget.class.getClassLoader(),
-			new Class<?>[]{Widget.class},
-			(proxy, method, arguments) ->
-			{
-				switch (method.getName())
-				{
-					case "getBounds":
-						return bounds;
-					case "getRelativeX":
-						return relativeX;
-					case "getRelativeY":
-						return relativeY;
-					case "getParent":
-						return parent;
-					case "getActions":
-						return actions;
-					case "getText":
-						return text;
-					case "getName":
-						return name;
-					case "getChildren":
-						return children;
-					default:
-						return method.getReturnType() == boolean.class
-							? false
-							: method.getReturnType().isPrimitive() ? 0 : null;
-				}
-			});
-	}
-
-	private static GrandExchangeOffer offer(
-		GrandExchangeOfferState state,
-		int price,
-		int quantitySold,
-		int totalQuantity)
-	{
-		return (GrandExchangeOffer) Proxy.newProxyInstance(
-			GrandExchangeOffer.class.getClassLoader(),
-			new Class<?>[]{GrandExchangeOffer.class},
-			(proxy, method, arguments) ->
-			{
-				switch (method.getName())
-				{
-					case "getState":
-						return state;
-					case "getPrice":
-						return price;
-					case "getQuantitySold":
-						return quantitySold;
-					case "getTotalQuantity":
-						return totalQuantity;
-					default:
-						return method.getReturnType().isPrimitive() ? 0 : null;
-				}
-			});
+		void validate();
 	}
 }

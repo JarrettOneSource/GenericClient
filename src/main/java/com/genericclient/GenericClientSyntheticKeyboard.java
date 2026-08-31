@@ -26,16 +26,6 @@ final class GenericClientSyntheticKeyboard implements AutoCloseable
 	private boolean closed;
 	private CompletableFuture<String> activeResult;
 
-	GenericClientSyntheticKeyboard(Canvas canvas, ScheduledExecutorService executor)
-	{
-		this(
-			canvas,
-			executor,
-			ignored -> { },
-			() -> GenericClientBehaviorProfile.DEFAULT_TYPING_WORDS_PER_MINUTE,
-			canvas::dispatchEvent);
-	}
-
 	GenericClientSyntheticKeyboard(
 		Canvas canvas,
 		ScheduledExecutorService executor,
