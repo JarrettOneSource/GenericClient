@@ -1,10 +1,12 @@
-package net.runelite.client.callback;
+package com.genericclient;
 
 import java.awt.Graphics;
 import java.awt.Image;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.function.Consumer;
 import javax.inject.Inject;
@@ -20,6 +22,7 @@ import net.runelite.api.hooks.Callbacks;
 import net.runelite.api.widgets.Widget;
 import net.runelite.api.widgets.WidgetItem;
 import net.runelite.client.eventbus.EventBus;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.input.KeyManager;
 import net.runelite.client.input.MouseManager;
 import net.runelite.client.ui.DrawManager;
@@ -31,6 +34,8 @@ public final class GenericClientDenseHooks implements Callbacks
 {
 	private static final GameTick GAME_TICK = new GameTick();
 	private static final BeforeRender BEFORE_RENDER = new BeforeRender();
+	private static final Method CLIENT_THREAD_INVOKE = clientThreadMethod("invoke");
+	private static final Method CLIENT_THREAD_TICK_END = clientThreadMethod("invokeTickEnd");
 
 	private final Client client;
 	private final Consumer<Object> eventPoster;
@@ -101,13 +106,13 @@ public final class GenericClientDenseHooks implements Callbacks
 			eventPoster.accept(GAME_TICK);
 			client.setTickCount(client.getTickCount() + 1);
 		}
-		clientThread.invoke();
+		invokeClientThread(CLIENT_THREAD_INVOKE);
 	}
 
 	@Override
 	public void tickEnd()
 	{
-		clientThread.invokeTickEnd();
+		invokeClientThread(CLIENT_THREAD_TICK_END);
 		eventPoster.accept(new PostClientTick());
 	}
 
@@ -249,6 +254,45 @@ public final class GenericClientDenseHooks implements Callbacks
 	public boolean isRuneLiteClientOutdated()
 	{
 		return false;
+	}
+
+	private void invokeClientThread(Method method)
+	{
+		try
+		{
+			method.invoke(clientThread);
+		}
+		catch (IllegalAccessException exception)
+		{
+			throw new IllegalStateException("Cannot drain RuneLite client-thread work", exception);
+		}
+		catch (InvocationTargetException exception)
+		{
+			Throwable cause = exception.getCause();
+			if (cause instanceof RuntimeException)
+			{
+				throw (RuntimeException) cause;
+			}
+			if (cause instanceof Error)
+			{
+				throw (Error) cause;
+			}
+			throw new IllegalStateException("RuneLite client-thread work failed", cause);
+		}
+	}
+
+	private static Method clientThreadMethod(String name)
+	{
+		try
+		{
+			Method method = ClientThread.class.getDeclaredMethod(name);
+			method.setAccessible(true);
+			return method;
+		}
+		catch (ReflectiveOperationException exception)
+		{
+			throw new ExceptionInInitializerError(exception);
+		}
 	}
 
 	interface InputForwarder

@@ -67,6 +67,16 @@ public class GenericClientRuntimeOptionsTest
 		assertInvalid(runeLite, GenericClientRuntimeOptions.INSTANCE_ID_PROPERTY, "bad/id");
 		assertInvalid(runeLite, GenericClientRuntimeOptions.CONTROL_PORT_PROPERTY, "65536");
 		assertInvalid(runeLite, GenericClientRuntimeOptions.CONTROL_PORT_PROPERTY, "auto");
+		try
+		{
+			GenericClientRuntimeOptions.from(
+				new Properties(), -1, runeLite, () -> "generated-instance");
+			fail("Expected configured port rejection");
+		}
+		catch (IllegalArgumentException expected)
+		{
+			assertTrue(expected.getMessage().contains(GenericClientRuntimeOptions.CONTROL_PORT_PROPERTY));
+		}
 	}
 
 	private static void assertInvalid(Path runeLite, String key, String value)

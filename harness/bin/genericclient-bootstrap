@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+bridge_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+harness_dir=$(cd -- "${bridge_dir}/.." && pwd)
+repo_dir=$(cd -- "${harness_dir}/.." && pwd)
+
+if [[ -n "${GENERICCLIENT_BRIDGE_PROBE_OUTPUT:-}" ]]; then
+	exec node "${harness_dir}/src/bridge-probe.mjs" "$@"
+fi
+
+java_bin=${GENERICCLIENT_JAVA:-$(command -v java)}
+client_jar=${GENERICCLIENT_JAR:-${repo_dir}/build/libs/GenericClient.jar}
+instance_id=${GENERICCLIENT_INSTANCE_ID:-$(tr -d '\n' </proc/sys/kernel/random/uuid)}
+runtime_dir=${GENERICCLIENT_RUNTIME_DIR:-${harness_dir}/run}
+instance_home=${GENERICCLIENT_INSTANCE_HOME:-${runtime_dir}/homes/${instance_id}}
+descriptor_dir=${GENERICCLIENT_INSTANCE_DIRECTORY:-${runtime_dir}/instances}
+heap_size=${GENERICCLIENT_HEAP_SIZE:-512m}
+
+if [[ ! -x "${java_bin}" ]]; then
+	echo "GenericClient Java executable is unavailable: ${java_bin}" >&2
+	exit 64
+fi
+if [[ ! -f "${client_jar}" ]]; then
+	echo "GenericClient JAR is unavailable: ${client_jar}" >&2
+	exit 66
+fi
+if [[ -z "${DISPLAY:-}" ]]; then
+	echo "GenericClient dense mode requires DISPLAY (use Xvfb)" >&2
+	exit 69
+fi
+
+mkdir -p "${instance_home}" "${descriptor_dir}"
+
+jvm_args=(
+	-ea
+	"-Xmx${heap_size}"
+	-Xss1m
+	-XX:ActiveProcessorCount=2
+	-Djava.awt.headless=false
+	"-Duser.home=${instance_home}"
+	-Dgenericclient.dense=true
+	"-Dgenericclient.instanceId=${instance_id}"
+	-Dgenericclient.controlPort=0
+	"-Dgenericclient.instanceDirectory=${descriptor_dir}"
+)
+
+if [[ -n "${GENERICCLIENT_RUNELITE_PROFILE:-}" ]]; then
+	jvm_args+=("-Dgenericclient.runeliteProfile=${GENERICCLIENT_RUNELITE_PROFILE}")
+fi
+if [[ -n "${GENERICCLIENT_SHARED_ARCHIVE:-}" ]]; then
+	jvm_args+=("-XX:SharedArchiveFile=${GENERICCLIENT_SHARED_ARCHIVE}" -Xshare:auto -Xlog:cds=info)
+fi
+if [[ -n "${GENERICCLIENT_ARCHIVE_AT_EXIT:-}" ]]; then
+	mkdir -p "$(dirname -- "${GENERICCLIENT_ARCHIVE_AT_EXIT}")"
+	jvm_args+=("-XX:ArchiveClassesAtExit=${GENERICCLIENT_ARCHIVE_AT_EXIT}" -Xlog:cds=info)
+fi
+
+export GLIBC_TUNABLES=${GLIBC_TUNABLES:-glibc.malloc.arena_max=2}
+exec "${java_bin}" "${jvm_args[@]}" -cp "${client_jar}" \
+	com.genericclient.GenericClientDenseLauncher "$@"

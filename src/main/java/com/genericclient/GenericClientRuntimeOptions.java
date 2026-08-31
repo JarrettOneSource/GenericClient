@@ -133,18 +133,17 @@ final class GenericClientRuntimeOptions
 		int maximum)
 	{
 		String value = optional(properties, name);
-		if (value == null)
+		int parsed = defaultValue;
+		if (value != null)
 		{
-			return defaultValue;
-		}
-		int parsed;
-		try
-		{
-			parsed = Integer.parseInt(value);
-		}
-		catch (NumberFormatException exception)
-		{
-			throw new IllegalArgumentException(name + " must be an integer", exception);
+			try
+			{
+				parsed = Integer.parseInt(value);
+			}
+			catch (NumberFormatException exception)
+			{
+				throw new IllegalArgumentException(name + " must be an integer", exception);
+			}
 		}
 		if (parsed < minimum || parsed > maximum)
 		{

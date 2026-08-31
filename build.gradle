@@ -18,6 +18,7 @@ repositories {
 
 def runeLiteVersion = 'latest.release'
 def pluginMainClass = 'com.genericclient.GenericClientLauncher'
+def denseMainClass = 'com.genericclient.GenericClientDenseLauncher'
 
 configurations {
 	standaloneRuntime
@@ -107,6 +108,14 @@ tasks.register('run', JavaExec) {
 
 	jvmArgs "-ea"
 	args "--debug"
+}
+
+tasks.register('denseRun', JavaExec) {
+	group = LifecycleBasePlugin.APPLICATION_GROUP
+	description = 'Runs the Linux dense GenericClient proof of concept.'
+	classpath = sourceSets.main.runtimeClasspath + configurations.standaloneRuntime
+	mainClass = denseMainClass
+	jvmArgs '-ea', '-Dgenericclient.dense=true', '-Dgenericclient.controlPort=0'
 }
 
 tasks.register('shadowJar', Jar) {
