@@ -26,29 +26,27 @@ import net.runelite.client.callback.ClientThread;
 
 final class GenericClientGroundItemInput
 {
-	private static final int[] CAMERA_YAW_OFFSETS = {
-		0,
-		GenericClientGameInput.CAMERA_QUARTER_TURN,
-		GenericClientGameInput.CAMERA_QUARTER_TURN * 2,
-		GenericClientGameInput.CAMERA_QUARTER_TURN * 3,
-	};
+	private static final int CAMERA_ATTEMPTS = 1;
 	private static final long CAMERA_SETTLE_MILLIS = 1_600L;
 
 	private final Client client;
 	private final ClientThread clientThread;
 	private final ScheduledExecutorService executor;
 	private final GenericClientMenuInput menuInput;
+	private final GenericClientCameraOwner cameraOwner;
 
 	GenericClientGroundItemInput(
 		Client client,
 		ClientThread clientThread,
 		ScheduledExecutorService executor,
-		GenericClientMenuInput menuInput)
+		GenericClientMenuInput menuInput,
+		GenericClientCameraOwner cameraOwner)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
 		this.executor = executor;
 		this.menuInput = menuInput;
+		this.cameraOwner = cameraOwner;
 	}
 
 	CompletableFuture<Map<String, Object>> take(
@@ -65,11 +63,13 @@ final class GenericClientGroundItemInput
 		{
 			throw new IllegalArgumentException("Ground item radius must be between 1 and 32 tiles");
 		}
+		GenericClientCameraOwner.Operation cameraOperation = cameraOwner.begin();
 		GenericClientMenuInput.TargetResolver resolver =
 			() -> resolveGroundItem(itemId, world, within);
 		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
 			retryWithCamera(
-				resolver, receipt, itemId, world, within, activityContext, 0));
+				resolver, receipt, itemId, world, within, activityContext,
+				cameraOperation, 0));
 	}
 
 	private CompletableFuture<Map<String, Object>> retryWithCamera(
@@ -79,17 +79,21 @@ final class GenericClientGroundItemInput
 		WorldPoint world,
 		int within,
 		GenericClientActivityContext activityContext,
+		GenericClientCameraOwner.Operation cameraOperation,
 		int cameraAttempt)
 	{
-		Object result = receipt.get("result");
-		if ((!"ground_item_not_visible".equals(result) &&
-			!"hover_has_no_matching_action".equals(result)) ||
-			cameraAttempt >= CAMERA_YAW_OFFSETS.length)
+		if (!cameraOperation.isActive())
 		{
 			return CompletableFuture.completedFuture(receipt);
 		}
-		return faceGroundItem(
-			itemId, world, within, CAMERA_YAW_OFFSETS[cameraAttempt]).thenCompose(faced ->
+		Object result = receipt.get("result");
+		if ((!"ground_item_not_visible".equals(result) &&
+			!"hover_has_no_matching_action".equals(result)) ||
+			cameraAttempt >= CAMERA_ATTEMPTS)
+		{
+			return CompletableFuture.completedFuture(receipt);
+		}
+		return faceGroundItem(itemId, world, within, cameraOperation).thenCompose(faced ->
 		{
 			if (!faced)
 			{
@@ -99,7 +103,9 @@ final class GenericClientGroundItemInput
 			executor.schedule(
 				() -> settled.complete(null), CAMERA_SETTLE_MILLIS, TimeUnit.MILLISECONDS);
 			return settled
-				.thenCompose(ignored -> menuInput.interact(resolver, activityContext))
+				.thenCompose(ignored -> cameraOperation.isActive()
+					? menuInput.interact(resolver, activityContext)
+					: CompletableFuture.completedFuture(receipt))
 				.thenCompose(next -> retryWithCamera(
 					resolver,
 					next,
@@ -107,6 +113,7 @@ final class GenericClientGroundItemInput
 					world,
 					within,
 					activityContext,
+					cameraOperation,
 					cameraAttempt + 1));
 		});
 	}
@@ -115,11 +122,16 @@ final class GenericClientGroundItemInput
 		int itemId,
 		WorldPoint requestedWorld,
 		int within,
-		int yawOffset)
+		GenericClientCameraOwner.Operation cameraOperation)
 	{
 		CompletableFuture<Boolean> result = new CompletableFuture<>();
 		clientThread.invoke(() ->
 		{
+			if (!cameraOperation.isActive())
+			{
+				result.complete(false);
+				return;
+			}
 			Player player = client.getLocalPlayer();
 			if (player == null || player.getWorldLocation() == null || player.getLocalLocation() == null)
 			{
@@ -132,11 +144,10 @@ final class GenericClientGroundItemInput
 				result.complete(false);
 				return;
 			}
-			client.setCameraYawTarget((GenericClientGameInput.yawToward(
-				player.getWorldLocation(), targets.get(0).tile.getWorldLocation()) + yawOffset) &
-				GenericClientGameInput.CAMERA_YAW_MASK);
-			client.setCameraPitchTarget(GenericClientGameInput.CAMERA_INTERACTION_PITCH);
-			result.complete(true);
+			int targetYaw = GenericClientGameInput.yawToward(
+				player.getWorldLocation(), targets.get(0).tile.getWorldLocation());
+			result.complete(cameraOperation.face(
+				targetYaw, GenericClientGameInput.CAMERA_INTERACTION_PITCH));
 		});
 		return result;
 	}

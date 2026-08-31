@@ -24,12 +24,7 @@ import net.runelite.client.callback.ClientThread;
 
 final class GenericClientNpcInput
 {
-	private static final int[] CAMERA_YAW_OFFSETS = {
-		0,
-		GenericClientGameInput.CAMERA_QUARTER_TURN,
-		GenericClientGameInput.CAMERA_QUARTER_TURN * 2,
-		GenericClientGameInput.CAMERA_QUARTER_TURN * 3,
-	};
+	private static final int CAMERA_ATTEMPTS = 1;
 	private static final int CAMERA_SETTLED_UNITS = 64;
 	private static final long CAMERA_POLL_MILLIS = 40L;
 	private static final long CAMERA_SETTLE_TIMEOUT_MILLIS = 3_000L;
@@ -40,6 +35,7 @@ final class GenericClientNpcInput
 	private final ClientThread clientThread;
 	private final ScheduledExecutorService executor;
 	private final GenericClientMenuInput menuInput;
+	private final GenericClientCameraOwner cameraOwner;
 	private final Consumer<String> reporter;
 
 	GenericClientNpcInput(
@@ -47,12 +43,14 @@ final class GenericClientNpcInput
 		ClientThread clientThread,
 		ScheduledExecutorService executor,
 		GenericClientMenuInput menuInput,
+		GenericClientCameraOwner cameraOwner,
 		Consumer<String> reporter)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
 		this.executor = executor;
 		this.menuInput = menuInput;
+		this.cameraOwner = cameraOwner;
 		this.reporter = reporter;
 	}
 
@@ -131,19 +129,24 @@ final class GenericClientNpcInput
 		SelectedWidget requestedSelection,
 		GenericClientActivityContext activityContext)
 	{
+		GenericClientCameraOwner.Operation cameraOperation = cameraOwner.begin();
 		GenericClientMenuInput.TargetResolver resolver = () -> resolveNpc(
 			name, id, action, within, requestedSelection);
 		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
 		{
+			if (!cameraOperation.isActive())
+			{
+				return CompletableFuture.completedFuture(receipt);
+			}
 			if (!isCameraRetryable(receipt.get("result")))
 			{
 				return retryWithCamera(
-					resolver, receipt, name, id, within, activityContext, 0, 0);
+					resolver, receipt, name, id, within, activityContext,
+					cameraOperation, 0, 0);
 			}
-			return GenericClientCameraZoom.widen(client, clientThread).thenCompose(zoom -> retryWithCamera(
-					resolver, receipt, name, id, within, activityContext, 0, 0)
-				.whenComplete((ignored, error) ->
-					GenericClientCameraZoom.restore(client, clientThread, zoom)));
+			return retryWithCamera(
+				resolver, receipt, name, id, within, activityContext,
+				cameraOperation, 0, 0);
 		});
 	}
 
@@ -154,38 +157,49 @@ final class GenericClientNpcInput
 		Integer id,
 		int within,
 		GenericClientActivityContext activityContext,
+		GenericClientCameraOwner.Operation cameraOperation,
 		int cameraAttempt,
 		int sceneAttempt)
 	{
+		if (!cameraOperation.isActive())
+		{
+			return CompletableFuture.completedFuture(receipt);
+		}
 		Object result = receipt.get("result");
 		if (!isCameraRetryable(result))
 		{
 			if (isSceneRetryable(result) && sceneAttempt < MAX_SCENE_RETRIES)
 			{
 				return retryAfterSceneSettles(
-					resolver, receipt, name, id, within, activityContext, sceneAttempt);
+					resolver, receipt, name, id, within, activityContext,
+					cameraOperation, sceneAttempt);
 			}
 			return CompletableFuture.completedFuture(receipt);
 		}
-		if (cameraAttempt >= CAMERA_YAW_OFFSETS.length)
+		if (cameraAttempt >= CAMERA_ATTEMPTS)
 		{
 			return CompletableFuture.completedFuture(receipt);
 		}
-		return faceNpc(name, id, within, CAMERA_YAW_OFFSETS[cameraAttempt]).thenCompose(faced ->
+		return faceNpc(name, id, within, cameraOperation).thenCompose(faced ->
 		{
 			if (!faced)
 			{
 				if (sceneAttempt < MAX_SCENE_RETRIES)
 				{
 					return retryAfterSceneSettles(
-						resolver, receipt, name, id, within, activityContext, sceneAttempt);
+						resolver, receipt, name, id, within, activityContext,
+						cameraOperation, sceneAttempt);
 				}
+				return CompletableFuture.completedFuture(receipt);
+			}
+			if (!cameraOperation.isActive())
+			{
 				return CompletableFuture.completedFuture(receipt);
 			}
 			return menuInput.interact(resolver, activityContext)
 				.thenCompose(next -> retryWithCamera(
 					resolver, next, name, id, within, activityContext,
-					cameraAttempt + 1, sceneAttempt));
+					cameraOperation, cameraAttempt + 1, sceneAttempt));
 		});
 	}
 
@@ -196,6 +210,7 @@ final class GenericClientNpcInput
 		Integer id,
 		int within,
 		GenericClientActivityContext activityContext,
+		GenericClientCameraOwner.Operation cameraOperation,
 		int sceneAttempt)
 	{
 		CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
@@ -203,9 +218,16 @@ final class GenericClientNpcInput
 		reporter.accept("NPC_SCENE_RETRY_SCHEDULED attempt=" + nextAttempt +
 			" result=" + previousReceipt.get("result"));
 		executor.schedule(() ->
+		{
+			if (!cameraOperation.isActive())
+			{
+				result.complete(previousReceipt);
+				return;
+			}
 			menuInput.interact(resolver, activityContext)
 				.thenCompose(next -> retryWithCamera(
-					resolver, next, name, id, within, activityContext, 0, nextAttempt))
+					resolver, next, name, id, within, activityContext,
+					cameraOperation, 0, nextAttempt))
 				.whenComplete((receipt, error) ->
 				{
 					if (error == null)
@@ -216,7 +238,8 @@ final class GenericClientNpcInput
 					{
 						result.completeExceptionally(error);
 					}
-				}),
+				});
+		},
 			SCENE_RETRY_MILLIS,
 			TimeUnit.MILLISECONDS);
 		return result;
@@ -238,65 +261,90 @@ final class GenericClientNpcInput
 		String name,
 		Integer id,
 		int within,
-		int yawOffset)
+		GenericClientCameraOwner.Operation cameraOperation)
 	{
 		CompletableFuture<Boolean> result = new CompletableFuture<>();
 		clientThread.invoke(() ->
 		{
+			if (!cameraOperation.isActive())
+			{
+				result.complete(false);
+				return;
+			}
 			Player player = client.getLocalPlayer();
 			if (player == null || player.getWorldLocation() == null)
 			{
 				result.complete(false);
 				return;
 			}
-			NPC closest = null;
-			int closestDistance = Integer.MAX_VALUE;
-			for (NPC npc : player.getWorldView().npcs())
-			{
-				if (npc == null || npc.getWorldLocation() == null ||
-					(id != null && npc.getId() != id) ||
-					(name != null && !name.equalsIgnoreCase(Objects.toString(npc.getName(), ""))))
-				{
-					continue;
-				}
-				int distance = player.getWorldLocation().distanceTo(npc.getWorldLocation());
-				if (distance <= within && distance < closestDistance)
-				{
-					closest = npc;
-					closestDistance = distance;
-				}
-			}
-			if (closest == null)
+			NPC target = closestNpc(player, name, id, within);
+			if (target == null)
 			{
 				result.complete(false);
 				return;
 			}
-			int targetYaw = (GenericClientGameInput.yawToward(
-				player.getWorldLocation(), closest.getWorldLocation()) + yawOffset) &
-				GenericClientGameInput.CAMERA_YAW_MASK;
-			client.setCameraYawTarget(targetYaw);
-			client.setCameraPitchTarget(GenericClientGameInput.CAMERA_INTERACTION_PITCH);
-			reporter.accept("NPC_CAMERA_TURN_STARTED id=" + closest.getId() +
-				" yaw=" + client.getCameraYaw() + " targetYaw=" + targetYaw +
-				" pitch=" + client.getCameraPitch() +
-				" targetPitch=" + GenericClientGameInput.CAMERA_INTERACTION_PITCH);
+			int targetYaw = GenericClientGameInput.yawToward(
+				player.getWorldLocation(), target.getWorldLocation());
+			boolean started = cameraOperation.face(
+				targetYaw, GenericClientGameInput.CAMERA_INTERACTION_PITCH);
+			if (started)
+			{
+				reporter.accept("NPC_CAMERA_TURN_STARTED id=" + target.getId() +
+					" yaw=" + client.getCameraYaw() + " targetYaw=" + targetYaw +
+					" pitch=" + client.getCameraPitch() +
+					" targetPitch=" + GenericClientGameInput.CAMERA_INTERACTION_PITCH);
+			}
+			if (!started)
+			{
+				result.complete(false);
+				return;
+			}
 			awaitCameraSettled(
-				closest.getId(),
+				target.getId(),
 				targetYaw,
 				System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CAMERA_SETTLE_TIMEOUT_MILLIS),
+				cameraOperation,
 				result);
 		});
 		return result;
+	}
+
+	private static NPC closestNpc(Player player, String name, Integer id, int within)
+	{
+		NPC closest = null;
+		int closestDistance = Integer.MAX_VALUE;
+		for (NPC npc : player.getWorldView().npcs())
+		{
+			if (npc == null || npc.getWorldLocation() == null ||
+				(id != null && npc.getId() != id) ||
+				(name != null && !name.equalsIgnoreCase(Objects.toString(npc.getName(), ""))))
+			{
+				continue;
+			}
+			int distance = player.getWorldLocation().distanceTo(npc.getWorldLocation());
+			if (distance <= within && distance < closestDistance)
+			{
+				closest = npc;
+				closestDistance = distance;
+			}
+		}
+		return closest;
 	}
 
 	private void awaitCameraSettled(
 		int npcId,
 		int targetYaw,
 		long deadlineNanos,
+		GenericClientCameraOwner.Operation cameraOperation,
 		CompletableFuture<Boolean> result)
 	{
 		if (result.isDone())
 		{
+			return;
+		}
+		if (!cameraOperation.isActive())
+		{
+			result.complete(false);
 			return;
 		}
 		int yaw = client.getCameraYaw();
@@ -315,7 +363,8 @@ final class GenericClientNpcInput
 		}
 		executor.schedule(
 			() -> clientThread.invoke(() ->
-				awaitCameraSettled(npcId, targetYaw, deadlineNanos, result)),
+				awaitCameraSettled(
+					npcId, targetYaw, deadlineNanos, cameraOperation, result)),
 			CAMERA_POLL_MILLIS,
 			TimeUnit.MILLISECONDS);
 	}

@@ -100,6 +100,7 @@ public final class GenericClientPlugin extends Plugin
 	private GenericClientScriptOverlay scriptOverlay;
 	private GenericClientControlServer controlServer;
 	private GenericClientGameInput gameInput;
+	private GenericClientCameraOwner cameraOwner;
 	private GenericClientMenuInput menuInput;
 	private GenericClientNpcInput npcInput;
 	private GenericClientRunInput runInput;
@@ -195,6 +196,7 @@ public final class GenericClientPlugin extends Plugin
 			GenericClientBehaviorController.systemClock(),
 			GenericClientBehaviorController.secureRandom(),
 			this::publishResult);
+		cameraOwner = new GenericClientCameraOwner(client);
 		breakOverlay = new GenericClientBreakOverlay(
 			() ->
 			{
@@ -218,7 +220,7 @@ public final class GenericClientPlugin extends Plugin
 			this::publishResult);
 		runInput = new GenericClientRunInput(client, clientThread, executor, menuInput);
 		npcInput = new GenericClientNpcInput(
-			client, clientThread, executor, menuInput, this::publishResult);
+			client, clientThread, executor, menuInput, cameraOwner, this::publishResult);
 		spellInput = new GenericClientSpellInput(client, clientThread, executor, menuInput, npcInput);
 		autocastInput = new GenericClientAutocastInput(
 			client, clientThread, executor, menuInput, this::publishResult);
@@ -226,11 +228,12 @@ public final class GenericClientPlugin extends Plugin
 			client, clientThread, executor, menuInput, this::publishResult);
 		uiInput = new GenericClientUiInput(
 			client, menuInput, syntheticKeyboard, behaviorController);
-		objectInput = new GenericClientObjectInput(client, clientThread, executor, menuInput);
+		objectInput = new GenericClientObjectInput(
+			client, clientThread, executor, menuInput, cameraOwner);
 		inventoryInput = new GenericClientInventoryInput(client, clientThread, executor, menuInput);
 		equipmentInput = new GenericClientEquipmentInput(client, clientThread, executor, menuInput);
 		groundItemInput = new GenericClientGroundItemInput(
-			client, clientThread, executor, menuInput);
+			client, clientThread, executor, menuInput, cameraOwner);
 		dialogueInput = new GenericClientDialogueInput(
 			client, menuInput, behaviorController, this::publishResult);
 		walker = new GenericClientWalker(
@@ -519,6 +522,10 @@ public final class GenericClientPlugin extends Plugin
 
 	private void closeInputServices()
 	{
+		if (cameraOwner != null)
+		{
+			cameraOwner.cancel();
+		}
 		if (gameInput != null)
 		{
 			gameInput.close();
@@ -546,6 +553,7 @@ public final class GenericClientPlugin extends Plugin
 		inventoryInput = null;
 		equipmentInput = null;
 		objectInput = null;
+		cameraOwner = null;
 		runInput = null;
 		if (menuInput != null)
 		{
@@ -1052,6 +1060,11 @@ public final class GenericClientPlugin extends Plugin
 
 	private void cancelActiveActions(String reason)
 	{
+		GenericClientCameraOwner activeCameraOwner = cameraOwner;
+		if (activeCameraOwner != null)
+		{
+			activeCameraOwner.cancel();
+		}
 		GenericClientGameInput activeGameInput = gameInput;
 		if (activeGameInput != null)
 		{

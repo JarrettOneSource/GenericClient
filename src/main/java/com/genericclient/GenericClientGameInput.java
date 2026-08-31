@@ -41,7 +41,6 @@ final class GenericClientGameInput implements AutoCloseable
 	private static final int MAX_TARGET_ATTEMPTS = 20;
 	static final int CAMERA_FULL_TURN = 1 << 14;
 	static final int CAMERA_YAW_MASK = CAMERA_FULL_TURN - 1;
-	static final int CAMERA_QUARTER_TURN = CAMERA_FULL_TURN / 4;
 	static final int CAMERA_INTERACTION_PITCH = 383 << 3;
 
 	private final Client client;

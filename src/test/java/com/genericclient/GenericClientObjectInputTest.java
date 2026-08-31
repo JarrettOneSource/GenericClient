@@ -14,12 +14,9 @@ import org.junit.Test;
 public class GenericClientObjectInputTest
 {
 	@Test
-	public void retriesFourCameraQuadrantsAroundTheTarget()
+	public void cameraRetryKeepsFacingTheTargetInsteadOfSnappingAcrossQuadrants()
 	{
-		assertEquals(100, GenericClientObjectInput.cameraYawForAttempt(100, 0));
-		assertEquals(4196, GenericClientObjectInput.cameraYawForAttempt(100, 1));
-		assertEquals(8292, GenericClientObjectInput.cameraYawForAttempt(100, 2));
-		assertEquals(12388, GenericClientObjectInput.cameraYawForAttempt(100, 3));
+		assertEquals(100, GenericClientObjectInput.cameraYawTarget(100));
 	}
 
 	@Test
@@ -45,6 +42,15 @@ public class GenericClientObjectInputTest
 			null, new net.runelite.api.Point(552, 186), viewport));
 		assertNull(GenericClientObjectInput.clickPoint(
 			null, new net.runelite.api.Point(273, 496), viewport));
+	}
+
+	@Test
+	public void usesAVisibleCanvasAnchorWhenNoClickboxExists()
+	{
+		Rectangle viewport = new Rectangle(0, 0, 517, 340);
+
+		assertEquals(new Point(260, 170), GenericClientObjectInput.clickPoint(
+			null, new net.runelite.api.Point(260, 170), viewport));
 	}
 
 	@Test

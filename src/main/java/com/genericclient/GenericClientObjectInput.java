@@ -31,7 +31,7 @@ import net.runelite.client.callback.ClientThread;
 
 final class GenericClientObjectInput
 {
-	private static final int CAMERA_ATTEMPTS = 4;
+	private static final int CAMERA_ATTEMPTS = 1;
 	private static final int CAMERA_POLL_ATTEMPTS = 30;
 	private static final long CAMERA_POLL_MILLIS = 100L;
 	private static final int CAMERA_SETTLED_UNITS = 384;
@@ -40,17 +40,20 @@ final class GenericClientObjectInput
 	private final ClientThread clientThread;
 	private final ScheduledExecutorService executor;
 	private final GenericClientMenuInput menuInput;
+	private final GenericClientCameraOwner cameraOwner;
 
 	GenericClientObjectInput(
 		Client client,
 		ClientThread clientThread,
 		ScheduledExecutorService executor,
-		GenericClientMenuInput menuInput)
+		GenericClientMenuInput menuInput,
+		GenericClientCameraOwner cameraOwner)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
 		this.executor = executor;
 		this.menuInput = menuInput;
+		this.cameraOwner = cameraOwner;
 	}
 
 	CompletableFuture<Map<String, Object>> interact(
@@ -89,6 +92,7 @@ final class GenericClientObjectInput
 
 	void cancel(String reason)
 	{
+		cameraOwner.cancel();
 		menuInput.cancel(reason);
 	}
 
@@ -102,15 +106,16 @@ final class GenericClientObjectInput
 		String itemName,
 		GenericClientActivityContext activityContext)
 	{
+		GenericClientCameraOwner.Operation cameraOperation = cameraOwner.begin();
 		GenericClientMenuInput.TargetResolver resolver = () -> resolveObject(
 			objectId, action, world, within, selectedItem, itemId, itemName);
 		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
 		{
-			if (!shouldFaceAndRetry(receipt))
+			if (!cameraOperation.isActive() || !shouldFaceAndRetry(receipt))
 			{
 				return CompletableFuture.completedFuture(receipt);
 			}
-			return GenericClientCameraZoom.widen(client, clientThread).thenCompose(zoom -> retryWithCamera(
+			return retryWithCamera(
 					resolver,
 					objectId,
 					world,
@@ -118,10 +123,9 @@ final class GenericClientObjectInput
 					action,
 					selectedItem,
 					activityContext,
+					cameraOperation,
 					0,
-					receipt)
-				.whenComplete((ignored, error) ->
-					GenericClientCameraZoom.restore(client, clientThread, zoom)));
+					receipt);
 		});
 	}
 
@@ -133,21 +137,28 @@ final class GenericClientObjectInput
 		String action,
 		boolean selectedItem,
 		GenericClientActivityContext activityContext,
+		GenericClientCameraOwner.Operation cameraOperation,
 		int attempt,
 		Map<String, Object> previousReceipt)
 	{
-		if (attempt >= CAMERA_ATTEMPTS)
+		if (!cameraOperation.isActive() || attempt >= CAMERA_ATTEMPTS)
 		{
 			return CompletableFuture.completedFuture(previousReceipt);
 		}
-		return faceObject(objectId, world, within, action, selectedItem, attempt).thenCompose(target ->
+		return faceObject(
+			objectId, world, within, action, selectedItem, cameraOperation).thenCompose(target ->
 		{
 			if (target == null)
 			{
 				return CompletableFuture.completedFuture(previousReceipt);
 			}
-			return waitForCamera(target, 0).thenCompose(ignored ->
-				menuInput.interact(resolver, activityContext).thenCompose(receipt ->
+			return waitForCamera(target, cameraOperation, 0).thenCompose(ignored ->
+			{
+				if (!cameraOperation.isActive())
+				{
+					return CompletableFuture.completedFuture(previousReceipt);
+				}
+				return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
 					shouldFaceAndRetry(receipt)
 						? retryWithCamera(
 							resolver,
@@ -157,9 +168,11 @@ final class GenericClientObjectInput
 							action,
 							selectedItem,
 							activityContext,
+							cameraOperation,
 							attempt + 1,
 							receipt)
-						: CompletableFuture.completedFuture(receipt)));
+						: CompletableFuture.completedFuture(receipt));
+			});
 		});
 	}
 
@@ -177,11 +190,16 @@ final class GenericClientObjectInput
 		int within,
 		String action,
 		boolean selectedItem,
-		int attempt)
+		GenericClientCameraOwner.Operation cameraOperation)
 	{
 		CompletableFuture<CameraTarget> result = new CompletableFuture<>();
 		clientThread.invoke(() ->
 		{
+			if (!cameraOperation.isActive())
+			{
+				result.complete(null);
+				return;
+			}
 			Player player = client.getLocalPlayer();
 			if (player == null || player.getWorldLocation() == null)
 			{
@@ -195,22 +213,28 @@ final class GenericClientObjectInput
 				result.complete(null);
 				return;
 			}
-			int targetYaw = cameraYawForAttempt(
-				GenericClientGameInput.yawToward(
-					player.getWorldLocation(), matches.get(0).getWorldLocation()),
-				attempt);
-			client.setCameraYawTarget(targetYaw);
-			client.setCameraPitchTarget(GenericClientGameInput.CAMERA_INTERACTION_PITCH);
-			result.complete(new CameraTarget(targetYaw));
+			int targetYaw = cameraYawTarget(GenericClientGameInput.yawToward(
+				player.getWorldLocation(), matches.get(0).getWorldLocation()));
+			boolean started = cameraOperation.face(
+				targetYaw, GenericClientGameInput.CAMERA_INTERACTION_PITCH);
+			result.complete(started ? new CameraTarget(targetYaw) : null);
 		});
 		return result;
 	}
 
-	private CompletableFuture<Void> waitForCamera(CameraTarget target, int attempt)
+	private CompletableFuture<Void> waitForCamera(
+		CameraTarget target,
+		GenericClientCameraOwner.Operation cameraOperation,
+		int attempt)
 	{
 		CompletableFuture<Void> result = new CompletableFuture<>();
-			executor.schedule(() -> clientThread.invoke(() ->
+		executor.schedule(() -> clientThread.invoke(() ->
 		{
+			if (!cameraOperation.isActive())
+			{
+				result.complete(null);
+				return;
+			}
 			boolean settled = GenericClientGameInput.angularDistance(
 				client.getCameraYaw(), target.yaw) <= CAMERA_SETTLED_UNITS &&
 				Math.abs(client.getCameraPitch() - GenericClientGameInput.CAMERA_INTERACTION_PITCH) <=
@@ -221,7 +245,7 @@ final class GenericClientObjectInput
 			}
 			else
 			{
-				waitForCamera(target, attempt + 1).whenComplete((ignored, error) ->
+				waitForCamera(target, cameraOperation, attempt + 1).whenComplete((ignored, error) ->
 				{
 					if (error == null)
 					{
@@ -237,10 +261,9 @@ final class GenericClientObjectInput
 		return result;
 	}
 
-	static int cameraYawForAttempt(int baseYaw, int attempt)
+	static int cameraYawTarget(int baseYaw)
 	{
-		return (baseYaw + (attempt & 3) * GenericClientGameInput.CAMERA_QUARTER_TURN) &
-			GenericClientGameInput.CAMERA_YAW_MASK;
+		return baseYaw & GenericClientGameInput.CAMERA_YAW_MASK;
 	}
 
 	private static final class CameraTarget
