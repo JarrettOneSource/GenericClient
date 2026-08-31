@@ -41,6 +41,7 @@ final class GenericClientControlServer implements AutoCloseable
 	private final Consumer<String> reporter;
 	private final Map<String, RpcHandler> handlers;
 	private final Gson gson = new Gson();
+	private Supplier<Map<String, Object>> healthSupplier = Collections::emptyMap;
 	private HttpServer server;
 	private ExecutorService executor;
 
@@ -93,6 +94,15 @@ final class GenericClientControlServer implements AutoCloseable
 		reporter.accept("CONTROL_SERVER_STARTED url=" + getUrl());
 	}
 
+	void setHealthSupplier(Supplier<Map<String, Object>> healthSupplier)
+	{
+		if (server != null)
+		{
+			throw new IllegalStateException("Health supplier must be set before server start");
+		}
+		this.healthSupplier = healthSupplier == null ? Collections::emptyMap : healthSupplier;
+	}
+
 	String getUrl()
 	{
 		if (server == null)
@@ -109,10 +119,14 @@ final class GenericClientControlServer implements AutoCloseable
 			write(exchange, 405, error("Health requires GET"));
 			return;
 		}
-		Map<String, Object> value = new LinkedHashMap<>();
+		Map<String, Object> supplied = healthSupplier.get();
+		Map<String, Object> value = supplied == null
+			? new LinkedHashMap<>()
+			: new LinkedHashMap<>(supplied);
 		value.put("ok", true);
 		value.put("name", "GenericClient");
 		value.put("protocol", 1);
+		value.put("control_url", getUrl());
 		write(exchange, 200, value);
 	}
 

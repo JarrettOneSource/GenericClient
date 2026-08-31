@@ -18,6 +18,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
+import javax.inject.Provider;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
@@ -68,10 +69,10 @@ public final class GenericClientPlugin extends Plugin
 	private GenericClientMouseEffectOverlay mouseEffectOverlay;
 
 	@Inject
-	private OverlayManager overlayManager;
+	private Provider<OverlayManager> overlayManagerProvider;
 
 	@Inject
-	private ClientToolbar clientToolbar;
+	private Provider<ClientToolbar> clientToolbarProvider;
 
 	@Inject
 	private DrawManager drawManager;
@@ -86,7 +87,7 @@ public final class GenericClientPlugin extends Plugin
 	private MouseManager mouseManager;
 
 	@Inject
-	private Notifier notifier;
+	private Provider<Notifier> notifierProvider;
 
 	private volatile String lifecycle = "CREATED";
 	private volatile String gameStateName = "UNKNOWN";
@@ -128,6 +129,10 @@ public final class GenericClientPlugin extends Plugin
 	private GenericClientAutomationScheduler automationScheduler;
 	private GenericClientRandomEventController randomEventController;
 	private GenericClientScreenshot screenshot;
+	private GenericClientRuntimeOptions runtimeOptions;
+	private GenericClientInstanceRegistration instanceRegistration;
+	private OverlayManager presentationOverlayManager;
+	private ClientToolbar presentationToolbar;
 	private NavigationButton navigationButton;
 	private Path mouseProfilesDirectory;
 	private volatile GenericClientMouseProfile mouseProfile;
@@ -144,13 +149,24 @@ public final class GenericClientPlugin extends Plugin
 		loginMessageShown = false;
 		lifecycle = "RUNNING";
 		gameStateName = client.getGameState().name();
-		lastStatus = "PLUGIN_STARTED stock RuneLite loaded GenericClient";
+		runtimeOptions = GenericClientRuntimeOptions.load(
+			config.controlPort(), net.runelite.client.RuneLite.RUNELITE_DIR.toPath());
+		instanceRegistration = GenericClientInstanceRegistration.create(runtimeOptions);
+		lastStatus = runtimeOptions.isDense()
+			? "PLUGIN_STARTED dense RuneLite loaded GenericClient"
+			: "PLUGIN_STARTED stock RuneLite loaded GenericClient";
 		mouseProfilesDirectory = net.runelite.client.RuneLite.RUNELITE_DIR.toPath()
 			.resolve("genericclient")
 			.resolve("mouse-profiles");
 		GenericClientMouseProfile.installDefault(mouseProfilesDirectory);
 		loadConfiguredMouseProfile();
 		GenericClientCollisionMap collisionMap = GenericClientCollisionMap.loadBundled();
+		if (runtimeOptions.isDense())
+		{
+			client.changeMemoryMode(true);
+			client.setUnlockedFps(true);
+			client.setUnlockedFpsTarget(1);
+		}
 		net.runelite.api.Point mousePosition = client.getMouseCanvasPosition();
 		syntheticMouse = new GenericClientSyntheticMouse(
 			client.getCanvas(),
@@ -389,7 +405,10 @@ public final class GenericClientPlugin extends Plugin
 				GenericClientActivityContext.none()),
 			message ->
 			{
-				notifier.notify(message);
+				if (runtimeOptions.isPresentationEnabled())
+				{
+					notifierProvider.get().notify(message);
+				}
 				postChat(message);
 			},
 			this::publishResult);
@@ -397,12 +416,8 @@ public final class GenericClientPlugin extends Plugin
 			randomEventController::status,
 			randomEventController::solverFinished);
 		screenshot = new GenericClientScreenshot(drawManager, executor);
-		scriptOverlay = new GenericClientScriptOverlay(
-			luaHost::getActiveScriptView,
-			luaHost::getActivity,
-			luaHost::getScriptState);
 		controlServer = new GenericClientControlServer(
-			config.controlPort(),
+			runtimeOptions.getControlPort(),
 			luaHost,
 			automationScheduler,
 			randomEventController,
@@ -414,26 +429,45 @@ public final class GenericClientPlugin extends Plugin
 			screenshot::capture,
 			behaviorController::endActiveBreak,
 			this::publishResult);
+		controlServer.setHealthSupplier(this::instanceHealth);
 		controlServer.start();
-		panel = new GenericClientDashboard(
-			javax.swing.SwingUtilities.getWindowAncestor(client.getCanvas()),
-			dashboardActions(),
-			luaHost,
-			automationScheduler);
-		navigationButton = NavigationButton.builder()
-			.tooltip("GenericClient")
-			.icon(createIcon())
-			.priority(1)
-			.onClick(panel::open)
-			.build();
+		publishInitialInstanceDescriptor();
+		if (runtimeOptions.isPresentationEnabled())
+		{
+			breakOverlay = new GenericClientBreakOverlay(
+				() ->
+				{
+					GenericClientBehaviorController behaviors = behaviorController;
+					return behaviors == null ? null : behaviors.status();
+				},
+				behaviorController::endActiveBreak);
+			scriptOverlay = new GenericClientScriptOverlay(
+				luaHost::getActiveScriptView,
+				luaHost::getActivity,
+				luaHost::getScriptState);
+			panel = new GenericClientDashboard(
+				javax.swing.SwingUtilities.getWindowAncestor(client.getCanvas()),
+				dashboardActions(),
+				luaHost,
+				automationScheduler);
+			navigationButton = NavigationButton.builder()
+				.tooltip("GenericClient")
+				.icon(createIcon())
+				.priority(1)
+				.onClick(panel::open)
+				.build();
 
-		overlayManager.add(mouseEffectOverlay);
-		overlayManager.add(breakOverlay);
-		mouseManager.registerMouseListener(breakOverlay.getMouseListener());
-		overlayManager.add(scriptOverlay);
-		clientToolbar.addNavigation(navigationButton);
-		refreshPanel();
-		panelRefreshFuture = executor.scheduleAtFixedRate(this::refreshPanel, 1L, 1L, TimeUnit.SECONDS);
+			presentationOverlayManager = overlayManagerProvider.get();
+			presentationToolbar = clientToolbarProvider.get();
+			presentationOverlayManager.add(mouseEffectOverlay);
+			presentationOverlayManager.add(breakOverlay);
+			mouseManager.registerMouseListener(breakOverlay.getMouseListener());
+			presentationOverlayManager.add(scriptOverlay);
+			presentationToolbar.addNavigation(navigationButton);
+			refreshPanel();
+			panelRefreshFuture = executor.scheduleAtFixedRate(
+				this::refreshPanel, 1L, 1L, TimeUnit.SECONDS);
+		}
 
 		log.info("{} PLUGIN_STARTED runeliteVersion={} classLoader={} thread={}",
 			LOG_PREFIX,
@@ -485,6 +519,18 @@ public final class GenericClientPlugin extends Plugin
 		{
 			controlServer.close();
 			controlServer = null;
+		}
+		if (instanceRegistration != null)
+		{
+			try
+			{
+				instanceRegistration.close();
+			}
+			catch (IOException exception)
+			{
+				log.warn("Unable to remove GenericClient instance descriptor", exception);
+			}
+			instanceRegistration = null;
 		}
 		if (screenshot != null)
 		{
@@ -584,23 +630,28 @@ public final class GenericClientPlugin extends Plugin
 
 	private void removePluginUi()
 	{
-		overlayManager.remove(mouseEffectOverlay);
+		if (presentationOverlayManager != null)
+		{
+			presentationOverlayManager.remove(mouseEffectOverlay);
+		}
 		if (breakOverlay != null)
 		{
 			mouseManager.unregisterMouseListener(breakOverlay.getMouseListener());
-			overlayManager.remove(breakOverlay);
+			presentationOverlayManager.remove(breakOverlay);
 			breakOverlay = null;
 		}
 		if (scriptOverlay != null)
 		{
-			overlayManager.remove(scriptOverlay);
+			presentationOverlayManager.remove(scriptOverlay);
 			scriptOverlay = null;
 		}
 		if (navigationButton != null)
 		{
-			clientToolbar.removeNavigation(navigationButton);
+			presentationToolbar.removeNavigation(navigationButton);
 			navigationButton = null;
 		}
+		presentationOverlayManager = null;
+		presentationToolbar = null;
 	}
 
 	@Subscribe
@@ -626,6 +677,7 @@ public final class GenericClientPlugin extends Plugin
 			behaviors.setLoggedIn(event.getGameState() == GameState.LOGGED_IN);
 		}
 		publishResult("GAME_STATE_CHANGED state=" + gameStateName);
+		publishInstanceDescriptor();
 		if (event.getGameState() == GameState.LOGGED_IN)
 		{
 			activateBehaviorProfile();
@@ -1027,6 +1079,7 @@ public final class GenericClientPlugin extends Plugin
 		value.put("lifecycle", lifecycle);
 		value.put("game_state", gameStateName);
 		value.put("last_status", lastStatus);
+		value.put("instance", instanceHealth());
 		GenericClientSnapshot snapshot = latestSnapshot;
 		value.put("runtime", snapshot == null ? null : snapshot.read("runtime", null));
 		value.put("player", snapshot == null ? null : snapshot.read("player", null));
@@ -1056,6 +1109,79 @@ public final class GenericClientPlugin extends Plugin
 		GenericClientControlServer bridge = controlServer;
 		value.put("control_url", bridge == null ? null : bridge.getUrl());
 		return value;
+	}
+
+	private Map<String, Object> instanceHealth()
+	{
+		GenericClientInstanceRegistration registration = instanceRegistration;
+		Map<String, Object> value = registration == null
+			? new LinkedHashMap<>()
+			: registration.metadata();
+		value.put("lifecycle", descriptorLifecycle());
+		value.put("game_state", gameStateName);
+		value.put("dense", runtimeOptions != null && runtimeOptions.isDense());
+		GenericClientControlServer bridge = controlServer;
+		value.put("control_url", bridge == null ? null : bridge.getUrl());
+		return value;
+	}
+
+	private void publishInstanceDescriptor()
+	{
+		GenericClientInstanceRegistration registration = instanceRegistration;
+		GenericClientControlServer bridge = controlServer;
+		if (registration == null || bridge == null)
+		{
+			return;
+		}
+		try
+		{
+			registration.publish(
+				bridge.getUrl(),
+				descriptorLifecycle(),
+				client.getLauncherDisplayName(),
+				activeAccountProfileId());
+		}
+		catch (IOException | RuntimeException exception)
+		{
+			log.warn("Unable to publish GenericClient instance descriptor", exception);
+		}
+	}
+
+	private void publishInitialInstanceDescriptor() throws IOException
+	{
+		instanceRegistration.publish(
+			controlServer.getUrl(),
+			descriptorLifecycle(),
+			client.getLauncherDisplayName(),
+			activeAccountProfileId());
+	}
+
+	private String descriptorLifecycle()
+	{
+		if ("STOPPING".equals(lifecycle) || "STOPPED".equals(lifecycle))
+		{
+			return lifecycle.toLowerCase(java.util.Locale.ROOT);
+		}
+		return gameStateName == null
+			? lifecycle.toLowerCase(java.util.Locale.ROOT)
+			: gameStateName.toLowerCase(java.util.Locale.ROOT);
+	}
+
+	@SuppressWarnings("unchecked")
+	private String activeAccountProfileId()
+	{
+		GenericClientBehaviorController behaviors = behaviorController;
+		if (behaviors == null)
+		{
+			return null;
+		}
+		Object profile = behaviors.status().get("profile");
+		if (!(profile instanceof Map))
+		{
+			return null;
+		}
+		Object id = ((Map<String, Object>) profile).get("id");
+		return id == null ? null : String.valueOf(id);
 	}
 
 	private void cancelActiveActions(String reason)

@@ -93,8 +93,20 @@ public class GenericClientControlServerTest
 		try
 		{
 			host.publishGameTick(snapshot(9));
+			server.setHealthSupplier(() ->
+			{
+				Map<String, Object> health = new LinkedHashMap<>();
+				health.put("schema", GenericClientInstanceRegistration.SCHEMA);
+				health.put("instance_id", "control-test");
+				health.put("pid", 1234L);
+				return health;
+			});
 			server.start();
 			assertEquals(400, send(server, "missing.method", new LinkedHashMap<>()).statusCode());
+			Map<String, Object> health = get(server);
+			assertEquals(true, health.get("ok"));
+			assertEquals("control-test", health.get("instance_id"));
+			assertEquals(server.getUrl(), health.get("control_url"));
 
 			Map<String, Object> evalParameters = new LinkedHashMap<>();
 			evalParameters.put("code", "return gc.read('player')");
@@ -224,6 +236,20 @@ public class GenericClientControlServerTest
 			automation.close();
 			host.close();
 		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private static Map<String, Object> get(GenericClientControlServer server) throws Exception
+	{
+		HttpRequest request = HttpRequest.newBuilder()
+			.uri(URI.create(server.getUrl() + "/health"))
+			.GET()
+			.build();
+		HttpResponse<String> response = HttpClient.newHttpClient().send(
+			request,
+			HttpResponse.BodyHandlers.ofString());
+		assertEquals(200, response.statusCode());
+		return new Gson().fromJson(response.body(), Map.class);
 	}
 
 	@SuppressWarnings("unchecked")
