@@ -183,6 +183,13 @@ instance inspector with a 765-pixel frame and nine normalized facts, a working
 launch dialog with focused identity input, and no JavaScript runtime
 exceptions.
 
+The post-rebase run also exposed and fixed a first-capture race: one dense
+client initially supplied its all-black initialization buffer. Screenshot
+capture now copies the frame synchronously before asynchronous PNG encoding and
+skips one blank initialization frame. A fresh-process live check returned the
+rendered 765x503 login screen on its first dashboard request; a unit contract
+also preserves legitimately black clients by returning the second blank frame.
+
 ### What dense headless means
 
 `dense-x11` is displayless, but it is not Java true-headless. Each process still

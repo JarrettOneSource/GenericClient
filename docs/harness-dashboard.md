@@ -90,6 +90,9 @@ content-security, frame, MIME, and referrer headers.
 - Screenshots are not part of SSE. Cards load cached thumbnails independently.
 - A forced screenshot is an explicit action because PNG encoding and a fresh
   rendered frame consume client resources.
+- The client copies the delivered frame before asynchronous PNG encoding. If a
+  dense client exposes an all-black initialization buffer, capture waits for
+  one more frame; a legitimately black second frame is still returned.
 
 ## Page layout
 
