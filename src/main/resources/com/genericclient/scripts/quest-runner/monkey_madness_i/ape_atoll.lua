@@ -45,6 +45,7 @@ end
 local function conversation(target, completed, result, wanted_choice, ticks)
   local initial_dialogue = gc.read("dialogue")
   local talked = { status = "dispatched", result = "existing_dialogue" }
+  local target_talk_dispatched = false
   if initial_dialogue.type == "closed" then
     talked = gc.await {
       action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 24 },
@@ -52,6 +53,7 @@ local function conversation(target, completed, result, wanted_choice, ticks)
       timeout = { game_ticks = 40 },
     }
     if talked.status ~= "dispatched" then return nil, talked end
+    target_talk_dispatched = true
   end
   local opened = initial_dialogue.type ~= "closed"
   local closed_ticks = 0
@@ -90,12 +92,24 @@ local function conversation(target, completed, result, wanted_choice, ticks)
       if progressed and closed_ticks >= 2 then
         return { status = "complete", result = result, receipt = talked }
       end
-      if not progressed and closed_ticks >= 3 then
-        return nil, {
-          status = "monkey_madness_conversation_closed_without_progress",
-          result = result,
-          receipt = talked,
-        }
+      if not progressed and closed_ticks >= 20 then
+        if not target_talk_dispatched then
+          talked = gc.await {
+            action = { type = "npc.interact", id = target.id, action = "Talk-to", within = 24 },
+            breaks = true,
+            timeout = { game_ticks = 40 },
+          }
+          if talked.status ~= "dispatched" then return nil, talked end
+          target_talk_dispatched = true
+          opened = false
+          closed_ticks = 0
+        else
+          return nil, {
+            status = "monkey_madness_conversation_closed_without_progress",
+            result = result,
+            receipt = talked,
+          }
+        end
       end
     end
   end

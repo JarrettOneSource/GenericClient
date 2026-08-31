@@ -56,13 +56,14 @@ local function enter_grand_tree()
   end
   local reached_door = walk(config.points.grand_tree_door, 1)
   if reached_door.status ~= "arrived" then return reached_door end
-  local door
-  for _, id in ipairs(config.objects.grand_tree_doors) do
-    door = object(id, "Open", 8)
-    if door then break end
-  end
   local opened
-  if door then
+  for _ = 1, 3 do
+    local door
+    for _, id in ipairs(config.objects.grand_tree_doors) do
+      door = object(id, "Open", 8)
+      if door then break end
+    end
+    if not door then break end
     gc.activity("travel")
     opened = gc.await {
       action = {
@@ -75,8 +76,17 @@ local function enter_grand_tree()
       breaks = true,
       timeout = { game_ticks = 40 },
     }
-    if opened.status ~= "dispatched" then return opened end
+    if opened.status == "dispatched" then
+      gc.await { event = "game.tick" }
+      break
+    end
+    if opened.result ~= "menu_event_timeout" then return opened end
     gc.await { event = "game.tick" }
+  end
+  if opened and opened.status ~= "dispatched" then
+    for _, id in ipairs(config.objects.grand_tree_doors) do
+      if object(id, "Open", 8) then return opened end
+    end
   end
   local crossed = walk(config.points.grand_tree_ladder_staging, 0)
   if crossed.status ~= "arrived" then

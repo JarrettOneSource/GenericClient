@@ -9,6 +9,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -90,9 +91,11 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		int quantity,
 		int maximumUnitPrice,
 		long minimumCashReserve,
+		String requestedCollectMode,
 		GenericClientActivityContext activityContext)
 	{
 		validateRequest(itemId, itemName, quantity, maximumUnitPrice, minimumCashReserve);
+		String collectMode = collectMode(requestedCollectMode);
 		CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
 		if (closed)
 		{
@@ -106,7 +109,8 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		}
 		activeResult = result;
 		reporter.accept("GE_BUY_STARTED item=" + itemId + " quantity=" + quantity +
-			" maxUnitPrice=" + maximumUnitPrice + " reserve=" + minimumCashReserve);
+			" maxUnitPrice=" + maximumUnitPrice + " reserve=" + minimumCashReserve +
+			" collectMode=" + collectMode);
 
 		clientRead(() -> preflight(
 			itemId, quantity, maximumUnitPrice, minimumCashReserve)).thenCompose(preflight ->
@@ -124,6 +128,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 					quantity,
 					maximumUnitPrice,
 					minimumCashReserve,
+					collectMode,
 					activityContext);
 			}
 			return placeOffer(
@@ -133,6 +138,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				quantity,
 				maximumUnitPrice,
 				minimumCashReserve,
+				collectMode,
 				activityContext);
 		}).whenComplete((receipt, error) ->
 		{
@@ -166,6 +172,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		int quantity,
 		int maximumUnitPrice,
 		long minimumCashReserve,
+		String collectMode,
 		GenericClientActivityContext activityContext)
 	{
 		CompletableFuture<List<Map<String, Object>>> flow =
@@ -208,7 +215,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				return CompletableFuture.completedFuture(offerReceipt(
 					purchase, steps, slot, itemId, quantity, maximumUnitPrice, minimumCashReserve));
 			}
-			return collect(slot, itemId, quantity, activityContext).thenApply(collection ->
+			return collect(slot, itemId, quantity, collectMode, activityContext).thenApply(collection ->
 			{
 				steps.add(collection);
 				return offerReceipt(
@@ -450,6 +457,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		int quantity,
 		int maximumUnitPrice,
 		long minimumCashReserve,
+		String collectMode,
 		GenericClientActivityContext activityContext)
 	{
 		return clientRead(() -> offerAt(slot)).thenCompose(existing ->
@@ -469,6 +477,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 						quantity,
 						maximumUnitPrice,
 						minimumCashReserve,
+						collectMode,
 						activityContext);
 				});
 			}
@@ -487,7 +496,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 						purchase, steps, slot, itemId, quantity, maximumUnitPrice,
 						minimumCashReserve));
 				}
-				return collect(slot, itemId, quantity, activityContext).thenApply(collection ->
+				return collect(slot, itemId, quantity, collectMode, activityContext).thenApply(collection ->
 				{
 					steps.add(collection);
 					return offerReceipt(
@@ -580,7 +589,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 					{
 						return CompletableFuture.completedFuture(details);
 					}
-					return collectItem(ItemID.COINS, activityContext).thenCompose(collected ->
+					return collectItem(ItemID.COINS, "items", activityContext).thenCompose(collected ->
 					{
 						if (!wasAccepted(collected))
 						{
@@ -599,6 +608,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		int slot,
 		int itemId,
 		int quantity,
+		String collectMode,
 		GenericClientActivityContext activityContext)
 	{
 		return clientRead(() -> inventoryQuantity(itemId)).thenCompose(before ->
@@ -619,47 +629,84 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 						{
 							return CompletableFuture.completedFuture(details);
 						}
-						return collectItem(itemId, activityContext).thenCompose(collected ->
-						{
-							if (!wasAccepted(collected))
-							{
-								return CompletableFuture.completedFuture(collected);
-							}
-							return waitUntil(
-								() -> inventoryQuantity(itemId) >= before + quantity || offerEmpty(slot),
-								"ge_collection",
-								VERIFY_ATTEMPTS).thenCompose(itemCollected ->
-							{
-								if (!wasAccepted(itemCollected))
-								{
-									return CompletableFuture.completedFuture(itemCollected);
-								}
-								return clientRead(() -> offerEmpty(slot)).thenCompose(empty ->
-								{
-									if (empty)
-									{
-										return CompletableFuture.completedFuture(itemCollected);
-									}
-									return collectItem(ItemID.COINS, activityContext).thenCompose(refund ->
-									{
-										if (!wasAccepted(refund))
-										{
-											return CompletableFuture.completedFuture(refund);
-										}
-										return waitUntil(
-											() -> offerEmpty(slot),
-											"ge_refund_collection",
-											VERIFY_ATTEMPTS);
-									});
-								});
-							});
-						});
+						return collectCompletedOffer(
+							slot, itemId, quantity, collectMode, before, activityContext);
 					});
 				}));
 	}
 
+	private CompletableFuture<Map<String, Object>> collectCompletedOffer(
+		int slot,
+		int itemId,
+		int quantity,
+		String collectMode,
+		int before,
+		GenericClientActivityContext activityContext)
+	{
+		return clientRead(() -> collectItemPresent(itemId)).thenCompose(itemPresent ->
+		{
+			CompletableFuture<Map<String, Object>> itemCollection = itemPresent
+				? collectItem(itemId, collectMode, activityContext)
+				: CompletableFuture.completedFuture(complete("ge_item_already_collected"));
+			return itemCollection.thenCompose(collected ->
+			{
+				if (!wasAccepted(collected))
+				{
+					return CompletableFuture.completedFuture(collected);
+				}
+				return waitUntil(
+					() -> inventoryQuantity(itemId) >= before + quantity ||
+						offerEmpty(slot) || !collectItemPresent(itemId),
+					"ge_collection",
+					VERIFY_ATTEMPTS).thenCompose(itemCollected ->
+				{
+					if (!wasAccepted(itemCollected))
+					{
+						return CompletableFuture.completedFuture(itemCollected);
+					}
+					return clientRead(() -> offerEmpty(slot)).thenCompose(empty ->
+					{
+						if (empty)
+						{
+							return CompletableFuture.completedFuture(itemCollected);
+						}
+						return collectItem(ItemID.COINS, "items", activityContext).thenCompose(refund ->
+						{
+							if (!wasAccepted(refund))
+							{
+								return CompletableFuture.completedFuture(refund);
+							}
+							return waitUntil(
+								() -> offerEmpty(slot),
+								"ge_refund_collection",
+								VERIFY_ATTEMPTS);
+						});
+					});
+				});
+			});
+		});
+	}
+
+	private boolean collectItemPresent(int itemId)
+	{
+		Widget root = visibleWidget(InterfaceID.GeOffers.DETAILS_COLLECT);
+		if (root == null)
+		{
+			return false;
+		}
+		for (Widget widget : descendants(root))
+		{
+			if (widget.getItemId() == itemId)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private CompletableFuture<Map<String, Object>> collectItem(
 		int itemId,
+		String collectMode,
 		GenericClientActivityContext activityContext)
 	{
 		return menuInput.interact(() ->
@@ -679,12 +726,12 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				return GenericClientMenuInput.Resolution.rejected("collect_offer_not_visible");
 			}
 			Widget target = item;
-			String action = collectAction(target);
+			String action = collectAction(target, collectMode);
 			for (Widget parent = item.getParent(); action == null && parent != null;
 				parent = parent.getParent())
 			{
 				target = parent;
-				action = collectAction(target);
+				action = collectAction(target, collectMode);
 				if (parent == root)
 				{
 					break;
@@ -695,7 +742,7 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				Rectangle itemBounds = item.getBounds();
 				for (Widget candidate : descendants(root))
 				{
-					String candidateAction = collectAction(candidate);
+					String candidateAction = collectAction(candidate, collectMode);
 					Rectangle candidateBounds = candidate.getBounds();
 					if (candidateAction != null && candidateBounds != null && itemBounds != null &&
 						candidateBounds.contains(
@@ -718,8 +765,16 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		}, activityContext);
 	}
 
-	static String collectAction(Widget widget)
+	static String collectAction(Widget widget, String collectMode)
 	{
+		if ("bank".equals(collectMode))
+		{
+			return hasAction(widget, "Bank") ? "Bank" : null;
+		}
+		if ("notes".equals(collectMode))
+		{
+			return hasAction(widget, "Collect-notes") ? "Collect-notes" : null;
+		}
 		if (hasAction(widget, "Collect-items"))
 		{
 			return "Collect-items";
@@ -729,6 +784,17 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 			return "Collect-item";
 		}
 		return hasAction(widget, "Collect") ? "Collect" : null;
+	}
+
+	private static String collectMode(String requested)
+	{
+		String mode = requested == null ? "items" : requested.trim().toLowerCase(Locale.ROOT);
+		if (!"items".equals(mode) && !"notes".equals(mode) && !"bank".equals(mode))
+		{
+			throw new IllegalArgumentException(
+				"ge.buy collect_mode must be items, notes, or bank");
+		}
+		return mode;
 	}
 
 	private CompletableFuture<Map<String, Object>> clickSearchResult(
@@ -1291,14 +1357,6 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		{
 			return Preflight.rejected("grand_exchange_not_open");
 		}
-		long maximumSpend = (long) quantity * maximumUnitPrice;
-		Map<?, ?> cash = cashSnapshot();
-		String cashRejection = cashRejection(cash, maximumSpend, minimumCashReserve);
-		if (cashRejection != null)
-		{
-			return Preflight.rejected(cashRejection);
-		}
-
 		GrandExchangeOffer[] offers = client.getGrandExchangeOffers();
 		if (offers == null || offers.length < OFFER_WIDGETS.length)
 		{
@@ -1326,6 +1384,14 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 				return Preflight.existing(slot);
 			}
 			return Preflight.rejected("conflicting_existing_offer_for_item");
+		}
+
+		long maximumSpend = (long) quantity * maximumUnitPrice;
+		Map<?, ?> cash = cashSnapshot();
+		String cashRejection = cashRejection(cash, maximumSpend, minimumCashReserve);
+		if (cashRejection != null)
+		{
+			return Preflight.rejected(cashRejection);
 		}
 		return empty < 0
 			? Preflight.rejected("no_empty_grand_exchange_slot")
@@ -1515,6 +1581,15 @@ final class GenericClientGrandExchangeInput implements AutoCloseable
 		Map<String, Object> receipt = new LinkedHashMap<>();
 		receipt.put("status", "rejected");
 		receipt.put("result", reason);
+		receipt.put("click_count", 0L);
+		return receipt;
+	}
+
+	private static Map<String, Object> complete(String result)
+	{
+		Map<String, Object> receipt = new LinkedHashMap<>();
+		receipt.put("status", "complete");
+		receipt.put("result", result);
 		receipt.put("click_count", 0L);
 		return receipt;
 	}

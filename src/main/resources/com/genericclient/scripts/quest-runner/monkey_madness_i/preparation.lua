@@ -105,7 +105,8 @@ local function prepare(restock)
     config.id,
     restock,
     config.ape_atoll_loadout,
-    true)
+    true,
+    config.ape_atoll_minimum_free_slots)
   if not prepared then return nil, failure end
   local rearmed, rearm_error = arm_safety()
   if not rearmed then return nil, rearm_error end

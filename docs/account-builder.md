@@ -54,14 +54,16 @@ member-optimized implementation.
 
 ## Current live progress
 
-The 2026-08-30 GenericClient account snapshots verified:
+The 2026-08-31 GenericClient account snapshots verified:
 
-- Attack 40 / 37,467 XP, Strength 30 / 14,050 XP, Defence 1 / 0 XP;
-- Hitpoints 28 / 10,980 XP, Ranged 1 / 12 XP, Prayer 1 / 0 XP, Magic 32 /
-  16,774 XP, Thieving 14 / 2,175 XP, and Agility 25 / 7,888 XP;
+- Attack 44 / 55,867 XP, Strength 30 / 14,050 XP, Defence 1 / 0 XP;
+- Hitpoints 28 / 11,201 XP, Ranged 1 / 12 XP, Prayer 43 / 50,400 XP, Magic 33 /
+  19,729 XP, Thieving 14 / 2,187 XP, and Agility 31 / 15,788 XP;
 - Fight Arena, Tree Gnome Village, Waterfall Quest, Witch's House, Ernest the
   Chicken, X Marks the Spot, and Learning the Ropes complete;
-- known cash was 14,135,734 coins and the 5,000,000 reserve remained intact;
+- Monkey Madness I remains in progress with the Garkor briefing complete;
+- the last exact bank-side cash observation was 11,815,235 coins and the
+  5,000,000 reserve remained intact;
 - the pre-existing Old school bond sell offer remains active and untouched.
 
 ## Live Account Auditor receipt
@@ -291,18 +293,24 @@ Reference surfaces used for this envelope:
 ## Current evidence gate
 
 Monkey Madness I is in progress on Ape Atoll. Live receipts verify Narnode `7`,
-Caranock `3`, Daero `7`, and Lumdo `3`; the shipyard report, Narnode's orders,
-hangar transfer, 153-move sliding puzzle, post-puzzle flight, Crash Island
-intervention, and landing at `(2802, 2707, 0)` are complete. A failed first
-crossing proved that food alone was not a sufficient recovery plan. The shared
-safety guard now carries an exact ring escape, and a forced acceptance test
-verified the full Rub, `Castle Wars Arena.`, and arrival receipt.
+Caranock `3`, Daero `7`, Lumdo `3`, and Garkor `2`; the shipyard report,
+Narnode's orders, hangar transfer, 153-move sliding puzzle, post-puzzle flight,
+Crash Island intervention, south-island crossing, timed jail escape, north
+route, and Garkor briefing are complete. The route drains capture dialogue
+before touching the world, identifies the reachable jail door and guard cycle
+from live state, and stops protection-prayer maintenance before safe dialogue.
 
-The current JIT loadout is 20 lobsters, superantipoison(4), stamina potion(4),
-and a fresh ring of dueling(8). Exact cash after replacing only the lost
-supplies is 14,115,605. An Evil Bob interruption during the hangar route was
-completed through the observed ScapeRune fish cycle and raised Fishing from
-level 1 to level 7 before Monkey Madness resumed.
+AIO Prayer bought and buried exactly 700 dragon bones, gained 50,400 XP, and
+stopped at Prayer 43. The matching GE offer was resumed after the bones reached
+the bank, its 1,211,344-coin refund was collected, and the slot was cleared.
+The last exact bank-side cash observation after Prayer and JIT Ape Atoll
+restocking was 11,815,235 coins.
+
+The current location is beside Garkor at `(2806, 2762, 0)`. The remaining
+carried loadout is 11 lobsters, superantipoison(1), stamina potion(4), ring of
+dueling(5), lockpick, and an empty vial. An Evil Bob interruption during the
+hangar route was completed through the observed ScapeRune fish cycle and raised
+Fishing from level 1 to level 7 before Monkey Madness resumed.
 
 Keep lobster safety armed during the Ape Atoll travel phase. Preserve the
 deliberate reward-training choice, exact Attack and Defence caps, and the

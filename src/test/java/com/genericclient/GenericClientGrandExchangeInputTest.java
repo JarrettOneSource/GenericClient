@@ -141,7 +141,7 @@ public class GenericClientGrandExchangeInputTest
 	}
 
 	@Test
-	public void prefersUnnotedItemCollectionAction()
+	public void selectsTheRequestedCollectionMode()
 	{
 		Widget collect = widget(
 			new Rectangle(100, 100, 36, 32),
@@ -150,7 +150,9 @@ public class GenericClientGrandExchangeInputTest
 			null,
 			new String[]{"Collect-notes", "Collect-items", "Bank"});
 
-		assertEquals("Collect-items", GenericClientGrandExchangeInput.collectAction(collect));
+		assertEquals("Collect-items", GenericClientGrandExchangeInput.collectAction(collect, "items"));
+		assertEquals("Collect-notes", GenericClientGrandExchangeInput.collectAction(collect, "notes"));
+		assertEquals("Bank", GenericClientGrandExchangeInput.collectAction(collect, "bank"));
 	}
 
 	private static Map<String, Object> cash(long knownTotal, long inventoryCoins)

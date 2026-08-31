@@ -116,6 +116,7 @@ public final class GenericClientPlugin extends Plugin
 	private GenericClientGrandExchangeInput grandExchangeInput;
 	private GenericClientSpellInput spellInput;
 	private GenericClientAutocastInput autocastInput;
+	private GenericClientPrayerInput prayerInput;
 	private GenericClientUiInput uiInput;
 	private GenericClientEmergencyController emergencyController;
 	private GenericClientSessionController sessionController;
@@ -221,6 +222,8 @@ public final class GenericClientPlugin extends Plugin
 		spellInput = new GenericClientSpellInput(client, clientThread, executor, menuInput, npcInput);
 		autocastInput = new GenericClientAutocastInput(
 			client, clientThread, executor, menuInput, this::publishResult);
+		prayerInput = new GenericClientPrayerInput(
+			client, clientThread, executor, menuInput, this::publishResult);
 		uiInput = new GenericClientUiInput(
 			client, menuInput, syntheticKeyboard, behaviorController);
 		objectInput = new GenericClientObjectInput(client, clientThread, executor, menuInput);
@@ -290,6 +293,7 @@ public final class GenericClientPlugin extends Plugin
 			grandExchangeInput,
 			spellInput,
 			autocastInput,
+			prayerInput,
 			uiInput,
 			emergencyController);
 		combatInput = new GenericClientCombatInput(
@@ -523,6 +527,7 @@ public final class GenericClientPlugin extends Plugin
 		questActions = null;
 		spellInput = null;
 		autocastInput = null;
+		prayerInput = null;
 		uiInput = null;
 		emergencyController = null;
 		dialogueInput = null;

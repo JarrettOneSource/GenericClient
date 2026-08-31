@@ -15,17 +15,31 @@
       }
     },
     {
-        "id": "aio-magic",
-        "name": "AIO Magic Trainer",
-        "description": "Train Magic to an exact target with GE restocking, verified loadouts, spell selection, and recovery receipts.",
-        "file": "aio-magic.lua",
-        "modules": {
-          "config": "aio-magic/config.lua",
-          "preparation": "aio-magic/preparation.lua",
-          "progress": "aio-magic/progress.lua",
-          "supplies": "aio-magic/supplies.lua",
-          "training": "aio-magic/training.lua"
-        }
+      "id": "aio-magic",
+      "name": "AIO Magic Trainer",
+      "description": "Train Magic to an exact target with GE restocking, verified loadouts, spell selection, and recovery receipts.",
+      "file": "aio-magic.lua",
+      "modules": {
+        "config": "aio-magic/config.lua",
+        "preparation": "aio-magic/preparation.lua",
+        "progress": "aio-magic/progress.lua",
+        "supplies": "aio-magic/supplies.lua",
+        "training": "aio-magic/training.lua"
+      }
+    },
+    {
+      "id": "aio-prayer",
+      "name": "AIO Prayer Trainer",
+      "description": "Train Prayer to an exact target with JIT bone purchasing and verified bank trips.",
+      "file": "aio-prayer.lua",
+      "modules": {
+        "config": "aio-prayer/config.lua",
+        "preparation": "aio-prayer/preparation.lua",
+        "progress": "aio-prayer/progress.lua",
+        "training": "aio-prayer/training.lua",
+        "runner": "aio-prayer/runner.lua",
+        "travel": "quest-runner/shared/travel.lua"
+      }
     },
     {
       "id": "aio-melee",
@@ -131,6 +145,7 @@
           "grand_tree_state": "quest-runner/the_grand_tree/state.lua",
           "monkey_madness_config": "quest-runner/monkey_madness_i/config.lua",
           "monkey_madness_ape_atoll": "quest-runner/monkey_madness_i/ape_atoll.lua",
+          "monkey_madness_garkor": "quest-runner/monkey_madness_i/garkor.lua",
           "monkey_madness_interactions": "quest-runner/monkey_madness_i/interactions.lua",
           "monkey_madness_navigation": "quest-runner/monkey_madness_i/navigation.lua",
           "monkey_madness_puzzle": "quest-runner/monkey_madness_i/puzzle.lua",

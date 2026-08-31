@@ -19,6 +19,7 @@ final class GenericClientQuestActions
 	private final GenericClientGrandExchangeInput grandExchangeInput;
 	private final GenericClientSpellInput spellInput;
 	private final GenericClientAutocastInput autocastInput;
+	private final GenericClientPrayerInput prayerInput;
 	private final GenericClientUiInput uiInput;
 	private final GenericClientEmergencyController emergencyController;
 
@@ -33,6 +34,7 @@ final class GenericClientQuestActions
 		GenericClientGrandExchangeInput grandExchangeInput,
 		GenericClientSpellInput spellInput,
 		GenericClientAutocastInput autocastInput,
+		GenericClientPrayerInput prayerInput,
 		GenericClientUiInput uiInput,
 		GenericClientEmergencyController emergencyController)
 	{
@@ -46,6 +48,7 @@ final class GenericClientQuestActions
 		this.grandExchangeInput = grandExchangeInput;
 		this.spellInput = spellInput;
 		this.autocastInput = autocastInput;
+		this.prayerInput = prayerInput;
 		this.uiInput = uiInput;
 		this.emergencyController = emergencyController;
 	}
@@ -107,6 +110,7 @@ final class GenericClientQuestActions
 						"minimum_cash_reserve",
 						GenericClientGrandExchangeInput.HARD_MINIMUM_CASH_RESERVE,
 						type),
+					optionalText(action.get("collect_mode")),
 					activityContext);
 			case "combat.cast":
 				return spellInput.castOnNpc(
@@ -117,6 +121,11 @@ final class GenericClientQuestActions
 					activityContext);
 			case "combat.set_autocast":
 				return autocastInput.set(requiredText(action, "spell", type), activityContext);
+			case "prayer.set":
+				return prayerInput.set(
+					requiredText(action, "prayer", type),
+					optionalBoolean(action, "enabled", true, type),
+					activityContext);
 			case "ui.close":
 				return uiInput.closeTopLevel(activityContext);
 			case "ui.click":

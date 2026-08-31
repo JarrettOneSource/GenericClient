@@ -119,6 +119,7 @@ in-progress phases but never prove completion.
 | `ge.buy` | Preserve existing offers, enforce the configured cash reserve against known cash, place one bounded buy offer, collect it, and return item/quantity/unit-price/reserve receipts. |
 | `safety.configure` | Arm the framework guard with a hard HP floor, ordered consumables and heal amounts, automatic exact-fit healing, forced healing below 30% max HP, and an escape fallback. |
 | `safety.clear` | Disarm the current emergency guard. |
+| `prayer.set` | Open the active-layout Prayer tab, click an exact supported protection prayer, and verify its live varbit. |
 
 Object, NPC, inventory, and widget clicks should share one internal menu-input
 implementation. Target resolvers differ; hover verification, context-menu row
@@ -156,7 +157,8 @@ loadout retains it and skips reacquiring it. The bank module rejects extra
 items before the tombstone can be targeted.
 
 `ge.buy` is just-in-time. It accepts item ID, quantity, a maximum unit price,
-and minimum cash reserve. It never cancels or replaces an unrelated offer. An
+minimum cash reserve, and optional `items`, `notes`, or `bank` collection mode.
+It never cancels or replaces an unrelated offer. An
 exact matching zero-fill buy below the requested ceiling may be aborted,
 collected, and recreated in the same slot at that ceiling. The first
 two quest definitions may buy only their next phase's missing quantities. A
@@ -173,6 +175,10 @@ price or reserve failure stops with a receipt for review.
   forced point or hard floor.
 - Safe travel may use normal behavior rolls. Hostile rooms and irreversible
   interaction groups use `breaks=false` until a safe checkpoint.
+- Monkey Madness keeps Protect from Missiles active only for the hostile south
+  crossing. Capture dialogue is drained before jail interactions, protection is
+  disabled before waiting on the guard cycle, and Garkor is resolved by his
+  observed name so inventory maintenance cannot interrupt the briefing.
 - The runner checks HP/run/food immediately before every hostile transition and
   after every tick while exposed.
 - A cooperative stop inside a critical section first exits or reaches the next

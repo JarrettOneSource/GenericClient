@@ -25,6 +25,23 @@ return {
     reinitialization_panel = { x = 2394, y = 9883, plane = 0 },
     post_puzzle_daero = { x = 2648, y = 4513, plane = 0 },
     ge_spirit_tree = { x = 3184, y = 3509, plane = 0 },
+    ape_atoll_prison_exit = { x = 2779, y = 2802, plane = 0 },
+    garkor = { x = 2807, y = 2762, plane = 0 },
+  },
+  routes = {
+    ape_atoll_valley = {
+      { x = 2770, y = 2707, plane = 0 },
+      { x = 2738, y = 2728, plane = 0 },
+      { x = 2721, y = 2750, plane = 0 },
+      { x = 2721, y = 2763, plane = 0 },
+    },
+    prison_to_garkor = {
+      { x = 2762, y = 2806, plane = 0 },
+      { x = 2784, y = 2806, plane = 0 },
+      { x = 2784, y = 2770, plane = 0 },
+      { x = 2807, y = 2770, plane = 0 },
+      { x = 2807, y = 2762, plane = 0 },
+    },
   },
   npcs = {
     king_narnode = { 8019, 8020, 1423 },
@@ -33,7 +50,9 @@ return {
     captain_errdo = { 6091, 10467 },
     gandius_pilot = { 10479, 10468 },
     waydar = { 1446, 6675 },
-    lumdo = { 1453 },
+    lumdo = { 1453, 1454 },
+    prison_guard = 5247,
+    garkor = { 7158 },
   },
   objects = {
     spirit_tree = 1295,
@@ -44,10 +63,12 @@ return {
     grand_tree_ladder_top = 56229,
     shipyard_gate = 2438,
     reinitialization_panel = 4871,
+    jail_door = 4799,
   },
   items = {
     royal_seal = 4004,
     narnodes_orders = 4005,
+    lockpick = 1523,
   },
   ape_atoll_loadout = {
     {
@@ -77,7 +98,21 @@ return {
       alternative_ids = { 2554, 2556, 2558, 2560, 2562, 2564, 2566 },
       maximum_unit_price = 10000,
     },
+    {
+      id = 1523,
+      name = "Lockpick",
+      quantity = 1,
+      maximum_unit_price = 5000,
+    },
+    {
+      id = 2434,
+      name = "Prayer potion(4)",
+      quantity = 1,
+      alternative_ids = { 139, 141, 143 },
+      maximum_unit_price = 20000,
+    },
   },
+  ape_atoll_minimum_free_slots = 3,
   interfaces = {
     chapter_message = 225,
   },
@@ -93,6 +128,12 @@ return {
     hangar = { x1 = 2360, x2 = 2420, y1 = 9860, y2 = 9910, plane = 0 },
     post_puzzle_hangar = { x1 = 2620, x2 = 2680, y1 = 4480, y2 = 4540, plane = 0 },
     crash_island = { x1 = 2883, x2 = 2941, y1 = 2693, y2 = 2747, plane = 0 },
-    ape_atoll_south = { x1 = 2687, x2 = 2820, y1 = 2687, y2 = 2765, plane = 0 },
+    ape_atoll_south = { x1 = 2687, x2 = 2820, y1 = 2687, y2 = 2737, plane = 0 },
+    ape_atoll_south_corridor_wide = { x1 = 2713, x2 = 2737, y1 = 2738, y2 = 2743, plane = 0 },
+    ape_atoll_south_corridor_narrow = { x1 = 2718, x2 = 2726, y1 = 2744, y2 = 2765, plane = 0 },
+    ape_atoll_prison = { x1 = 2764, x2 = 2776, y1 = 2793, y2 = 2802, plane = 0 },
+    ape_atoll_north = { x1 = 2682, x2 = 2816, y1 = 2766, y2 = 2817, plane = 0 },
+    ape_atoll_north_west = { x1 = 2687, x2 = 2716, y1 = 2738, y2 = 2765, plane = 0 },
+    ape_atoll_north_east = { x1 = 2735, x2 = 2815, y1 = 2730, y2 = 2765, plane = 0 },
   },
 }

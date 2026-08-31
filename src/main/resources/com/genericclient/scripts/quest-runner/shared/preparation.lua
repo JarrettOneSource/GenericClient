@@ -97,7 +97,7 @@ local function available_dueling_ring(state)
   return nil
 end
 
-local function stage_ge_trip(state, missing, quest, loadout)
+local function stage_ge_trip(state, missing, quest)
   local necklace = available_games_necklace(state)
   local ring = available_dueling_ring(state)
   local transport = necklace or ring
@@ -124,21 +124,6 @@ local function stage_ge_trip(state, missing, quest, loadout)
   end
   add_item(transport, 1)
   add_item(995, coins)
-  for _, requirement in ipairs(loadout) do
-    local selected_id = requirement.id
-    local owned = state_api.total_owned(state, selected_id)
-    if owned == 0 then
-      for _, alternative_id in ipairs(requirement.alternative_ids or {}) do
-        local alternative_owned = state_api.total_owned(state, alternative_id)
-        if alternative_owned > 0 then
-          selected_id = alternative_id
-          owned = alternative_owned
-          break
-        end
-      end
-    end
-    add_item(selected_id, math.min(requirement.quantity, owned))
-  end
   overlay(quest, "prepare_ge_transport")
   local staged = gc.await {
     action = {
@@ -297,7 +282,8 @@ local function acquire_missing(missing, quest)
   return true
 end
 
-local function prepare_items(quest, restock, loadout, exact)
+local function prepare_items(quest, restock, loadout, exact, minimum_free_slots)
+  minimum_free_slots = minimum_free_slots or 4
   local state = state_api.read(quest)
   if #state_api.missing_carried_items(state, loadout) == 0 and
     (not exact or state_api.matches_carried_loadout(state, loadout)) then
@@ -318,7 +304,7 @@ local function prepare_items(quest, restock, loadout, exact)
       return nil, { status = "supplies_missing", items = missing }
     end
     if state_api.distance(gc.read("player").world, ge) > 8 then
-      local staged, stage_error = stage_ge_trip(state, missing, quest, loadout)
+      local staged, stage_error = stage_ge_trip(state, missing, quest)
       if staged == nil then return nil, stage_error end
       if not staged then
         gc.await {
@@ -365,7 +351,7 @@ local function prepare_items(quest, restock, loadout, exact)
     action = {
       type = "bank.loadout",
       items = items,
-      minimum_free_slots = 4,
+      minimum_free_slots = minimum_free_slots,
       close = true,
     },
     breaks = true,

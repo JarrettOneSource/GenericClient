@@ -386,12 +386,35 @@ local autocast = gc.await {
 }
 ```
 
+Protection prayers use a semantic setter and verify the copied prayer varbit:
+
+```lua
+local protection = gc.await {
+  action = {
+    type = "prayer.set",
+    prayer = "protect_from_missiles",
+    enabled = true,
+  },
+  breaks = false,
+}
+```
+
+The initial surface supports Protect from Magic, Missiles, and Melee. It rejects
+insufficient real Prayer levels or depleted current Prayer points instead of
+clicking a disabled widget.
+
 Composite workflows return their individual click receipts. `bank.loadout`
 verifies an exact inventory allowlist; `ge.buy` preserves unrelated offers and
 rejects any maximum spend that would cross the configured cash reserve. A
 same-item zero-fill buy with stale quantity or price is canceled, collected,
 and replaced with the requested JIT offer; partial fills and conflicting
 completed offers remain diagnostic stops.
+
+Large unstackable purchases can set `collect_mode` to `bank`; `notes` and the
+default `items` mode are also supported. Bank collection verifies that the
+requested item left the offer panel, then collects any coin refund and requires
+the offer slot to clear. Resuming an already-funded matching offer does not
+require enough loose coins to fund it a second time.
 
 Combat scripts can arm the framework's tick-priority emergency guard while
 keeping item policy in Lua:

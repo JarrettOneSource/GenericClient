@@ -23,7 +23,7 @@ public class GenericClientScriptRegistryTest
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(
 			temporaryFolder.newFolder("scripts").toPath());
 
-		assertEquals(15, registry.list().size());
+		assertEquals(16, registry.list().size());
 		assertEquals("Account Auditor", registry.get("account-auditor").getName());
 		assertEquals("AIO Agility Trainer", registry.get("aio-agility").getName());
 		assertTrue(registry.readExecutableSource("aio-agility").contains("agility_xp_unverified"));
@@ -31,6 +31,8 @@ public class GenericClientScriptRegistryTest
 			temporaryFolder.getRoot().toPath().resolve("scripts/aio-agility/courses/gnome_stronghold.lua")));
 		assertEquals("AIO Melee Trainer", registry.get("aio-melee").getName());
 		assertEquals("AIO Magic Trainer", registry.get("aio-magic").getName());
+		assertEquals("AIO Prayer Trainer", registry.get("aio-prayer").getName());
+		assertTrue(registry.readExecutableSource("aio-prayer").contains("collect_mode = \"bank\""));
 		assertTrue(registry.readSource("aio-magic").contains("combat.cast"));
 		assertTrue(registry.readExecutableSource("aio-magic").contains("Unknown script module"));
 		assertTrue(registry.readExecutableSource("aio-magic").contains("Port Sarim jail corridor"));
@@ -143,7 +145,7 @@ public class GenericClientScriptRegistryTest
 
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
 
-		assertEquals(16, registry.list().size());
+		assertEquals(17, registry.list().size());
 		assertEquals("Custom", registry.get("custom").getName());
 		assertTrue(registry.readExecutableSource("quest-runner")
 			.contains("local approach = walk(pillar.world, 3, 120)"));

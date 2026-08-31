@@ -3,6 +3,7 @@ local interactions = gc.require("monkey_madness_interactions")
 local puzzle = gc.require("monkey_madness_puzzle")
 local preparation = gc.require("monkey_madness_preparation")
 local ape_atoll = gc.require("monkey_madness_ape_atoll")
+local garkor = gc.require("monkey_madness_garkor")
 
 local function execute(phase, input)
   if phase == "start_quest" then
@@ -51,6 +52,16 @@ local function execute(phase, input)
   end
   if phase == "reach_ape_atoll" then
     return ape_atoll.execute()
+  end
+  if phase == "find_garkor" then
+    return garkor.execute()
+  end
+  if phase == "protect_from_missiles_required" then
+    return {
+      status = "prerequisite_required",
+      result = "prayer_level_43_required_for_ape_atoll_ranged_route",
+      prayer = gc.read("skills").prayer,
+    }
   end
   return { status = "rejected", result = "monkey_madness_phase_not_implemented:" .. tostring(phase) }
 end
