@@ -7,6 +7,28 @@ import { createServer } from "../src/server.mjs";
 
 test("MCP server exposes tools and forwards calls to GenericClient", async (context) => {
   const calls = [];
+  const journey = {
+    status: "completed",
+    value: {
+      status: "interrupted",
+      reason: "dialogue",
+      continuation: "walk-42",
+      via_passed: 1,
+      via_total: 2,
+      active_game_ticks: 12,
+      game_ticks: 40,
+      click_receipts: [{ accepted: true, behavior_before: {}, behavior_after: {} }],
+      edge_memory: [],
+      transports: [{ id: "ladder.down", status: "interrupted", actions: [{ status: "dispatched" }] }],
+      reached: { x: 2906, y: 9876, plane: 0 },
+    },
+  };
+  const code = "return gc.walk.to { destination = {x=2906,y=9876,plane=0}, interrupt_on = {dialogue=true} }";
+  const intentCode = "return gc.intent('bank.open', function() return gc.await {action={type='npc.interact', name='Banker', action='Bank'}} end)";
+  const intentReceipt = {
+    status: "completed",
+    value: { status: "dispatched", intent: "bank.open", click_count: 1, behavior_before: {}, behavior_after: {} },
+  };
   const bridge = {
     async call(method, params = {}) {
       calls.push({ method, params });
@@ -21,6 +43,7 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
           height: 503,
         };
       }
+      if (method === "lua.eval") return params.code === code ? journey : intentReceipt;
       return "ok";
     },
   };
@@ -39,6 +62,8 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
   assert.deepEqual(names, [
     "client_status",
     "client_screenshot",
+    "scene_highlight",
+    "scene_clear",
     "account_snapshot",
     "account_note_get",
     "account_note_set",
@@ -75,6 +100,15 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
   assert.equal(screenshot.content[0].mimeType, "image/png");
   assert.equal(screenshot.content[0].data, "iVBORw0KGgo=");
   assert.match(screenshot.content[1].text, /765/);
+  const sceneMarkers = [
+    { tile: { x: 2746, y: 2799, plane: 0 }, label: "Child safe spot" },
+    { npc_id: 5270, color: "#ff00ff" },
+    { object_id: 4749 },
+    { ground_item_id: 1963 },
+    { player_name: "genericBoss" },
+  ];
+  await client.callTool({ name: "scene_highlight", arguments: { markers: sceneMarkers } });
+  await client.callTool({ name: "scene_clear", arguments: {} });
   await client.callTool({ name: "account_snapshot", arguments: {} });
   await client.callTool({ name: "account_note_get", arguments: {} });
   await client.callTool({ name: "account_note_set", arguments: { text: "Account Goal" } });
@@ -117,9 +151,15 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
     arguments: { id: "walker", inputs: { destination: "varrock_center" } },
   });
   await client.callTool({ name: "script_action", arguments: { action: "snapshot_now" } });
+  const walked = await client.callTool({ name: "lua_eval", arguments: { code } });
+  assert.deepEqual(JSON.parse(walked.content[0].text), journey);
+  const opened = await client.callTool({ name: "lua_eval", arguments: { code: intentCode } });
+  assert.deepEqual(JSON.parse(opened.content[0].text), intentReceipt);
   assert.deepEqual(calls, [
     { method: "status", params: {} },
     { method: "screenshot.capture", params: {} },
+    { method: "scene.highlight", params: { markers: sceneMarkers } },
+    { method: "scene.clear", params: {} },
     { method: "account.snapshot", params: {} },
     { method: "account.note.get", params: {} },
     { method: "account.note.set", params: { text: "Account Goal" } },
@@ -152,5 +192,7 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
       params: { id: "walker", inputs: { destination: "varrock_center" } },
     },
     { method: "scripts.action", params: { action: "snapshot_now" } },
+    { method: "lua.eval", params: { code } },
+    { method: "lua.eval", params: { code: intentCode } },
   ]);
 });

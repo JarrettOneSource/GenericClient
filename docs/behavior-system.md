@@ -1,236 +1,161 @@
-# Seeded behavior system
+# Behavior system
 
-GenericClient derives one stable behavior profile from RuneLite's unique
-per-RuneScape-account hash. The display name is never part of the seed, and the
-raw account hash is never written to logs or profile files.
+This is the implemented scripting API 3 contract. GenericClient owns behavior timing, policy resolution and input cancellation; Lua declares activity and short action sequences. The source and test acceptance state is tracked in [behavior-framework-implementation.md](behavior-framework-implementation.md). Fresh acceptance of the API 3 build in the live client remains pending.
 
-The profile is deterministic. Individual break decisions and durations use a
-fresh runtime random source.
+## Policy and activity
 
-## Profile traits
+`gc.activity(name, policy)` declares the coroutine's activity and optional independent overrides. An await captures that declaration. Its optional `activity` selects another preset for that await, and its `policy` then overrides individual fields. When no activity has been declared, the action type selects the initial preset. `gc.state(name)` changes the script's displayed state without changing policy.
 
-Independent SHA-256 labels derive an attention style and separate micro-break,
-cursor-release, long-break, duration, mouse, dialogue-reading, phase, logout, and idle-edge
-traits. A Gaussian copula softly correlates them without making one decision
-depend on another.
+| Activity | Breaks | Cursor release | Mouse | Expected damage | Prayer owner | Walk refresh | Fidgets |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `general`, `questing` | Yes | `with_break` | `natural` | No | `guard` | No | `full` |
+| `travel` | Yes | `independent` | `natural` | No | `guard` | No | `full` |
+| `skilling` | Yes | `with_break` | `natural` | No | `script` | No | `full` |
+| `combat` | No | `none` | `fast` | Yes | `guard` | No | `drift` |
+| `hazardous_travel` | No | `none` | `fast` | Yes | `guard` | Yes | `drift` |
+| `dialogue`, `banking`, `trading` | No | `none` | `natural` | No | `guard` | No | `none` |
+| `manual` | No | `none` | `natural` | No | `script` | No | `none` |
 
-| Trait | Envelope |
+The Lua policy fields are `breaks`, `cursor_release`, `mouse`, `damage_expected`, `prayer_owner`, `walk_refresh`, and `fidget`. The boolean fields require booleans; the other fields accept the names in the table. Unknown fields and values are rejected.
+
+Repeatable combat can explicitly permit breaks while keeping combat's mouse, damage and prayer policy:
+
+```lua
+gc.activity("combat", { breaks = true })
+```
+
+A single urgent action can suppress every discretionary behavior:
+
+```lua
+return gc.await {
+  action = { type = "consumable.cure_poison" },
+  policy = { breaks = false, cursor_release = "none", fidget = "none" },
+}
+```
+
+The fields are independent: disabling breaks alone does not disable an independent cursor release or fidgets. The retired per-await `breaks` field is rejected.
+
+The resolver applies current observations to the captured policy:
+
+- Disabling automatic combat prayer assigns prayer ownership to the script.
+- An observed threat or the damage grace suppresses breaks, releases and fidgets and selects the fast mouse when damage is unexpected.
+- Unavailable snapshots, physical takeover, random-event ownership, emergency recovery and an active intent suppress discretionary behavior.
+- Plain execution suppresses discretionary behavior and selects the natural mouse while retaining the declared damage, prayer and walk settings.
+
+The activity label remains the declared activity. `declared_policy`, `effective_policy`, and `policy_reasons` explain the resolution in behavior status and `BEHAVIOR_POLICY` logs.
+
+## Semantic boundaries and intents
+
+The Lua host owns one boundary around each semantic action. Target resolution and native input occur after the entry check. Entry may wait for an already active, permitted break; it does not start a new break. Successful input completion permits the post-action evaluation. A verified action result survives an error in that post-action evaluation, with the error attached to its behavior receipt.
+
+An item-use operation, bank loadout, prayer change, or context-menu selection may contain several native clicks. Those clicks share the operation's boundary. Native input primitives do not make their own break decisions.
+
+A journey performs the entry check once and gives each route click its own boundary. Run toggles, door attempts and transport steps do not add break boundaries. Journey completion does not duplicate the final click's evaluation. Reads, tick waits, checkpoints, safety configuration, client behavior configuration and explicit mouse parking do not introduce discretionary boundaries.
+
+Use an intent for a short sequence whose steps belong together:
+
+```lua
+-- Reach the bank before entering this scope.
+local banking = gc.require("shared_bank")
+return gc.intent("bank.withdraw", function()
+  local bank, failure = banking.open()
+  if not bank then return failure end
+  return gc.await {
+    action = {
+      type = "bank.loadout",
+      items = { { id = 526, quantity = 28 } },
+      minimum_free_slots = 0,
+      close = true,
+    },
+  }
+end)
+```
+
+`gc.intent(name, fn)` opens one outer boundary and runs `fn` with discretionary behavior suppressed. Nested intents share the outer boundary and receipt name. Normal returns preserve all values, including `nil`; errors unwind the scope and propagate. An awaited timeout is still a receipt that Lua may handle. Cancellation revokes the scope's input, and emergency pauses preserve its progress and verified results.
+
+Scopes longer than 30 seconds produce one `INTENT_LONG` warning after entry. Long approaches, whole quests and training loops stay outside scopes. Urgent recovery actions retain explicit policy where waiting for an existing ordinary break would be inappropriate.
+
+Receipts inside the scope include `intent`. `gc.read("behavior")` adds `intent`, `intent_depth`, `intent_elapsed_millis` and `last_intent`. Logs include `INTENT_STARTED` and `INTENT_ENDED`.
+
+## Account profile
+
+SHA-256 labels derived from RuneLite's account hash generate stable traits. A Gaussian copula correlates related traits; the raw account hash and display name are not persisted as the seed. Runtime decisions use a fresh JDK random source.
+
+| Seeded trait | Envelope |
 | --- | --- |
-| Post-action micro probability | 2-100%, population midpoint 35% |
-| Post-action cursor release | 15-95% |
-| Micro body median | 2-6 seconds |
-| Micro tail | 1-4% chance of a log-uniform 12-120 second duration |
-| Micro hard bounds | At least 1 second and strictly below 120 seconds |
-| Long cadence | 40-300 active minutes, population midpoint about 110 |
-| Long median | 7-22 minutes |
-| Long hard bounds | 3-60 minutes |
-| Phase short weight | Equivalent to 1-4 ordinary short chances |
-| Long-mode reversal | 2-15% chance of the non-favored AFK/logout choice |
-| Idle edge | One stable choice from left, right, top, or bottom |
-| Mouse move duration | 300-650 milliseconds in 25 ms steps |
-| Typing speed | 35-100 WPM in 5 WPM steps |
-| Dialogue reading | 0-100 in 5-point steps, from immediate skipping to slow reading |
+| Base micro rate | 0.72–36 per owned active hour, before activity weighting and phase boosts |
+| Cursor release during an eligible micro break | 15–95% |
+| Micro body median | 2–6 seconds |
+| Micro tail | 1–4% chance of a 12–120 second tail; increased at a phase |
+| Micro duration | 1,000–119,999 milliseconds |
+| Long cadence | About 40–300 owned active minutes |
+| Long duration median | 7–22 minutes; sampled duration bounded to 3–60 minutes |
+| Long mode reversal | 2–15% chance of the non-favored AFK/logout mode |
+| Mouse path duration | 300–650 milliseconds in 25 ms steps |
+| Typing | 35–100 WPM in 5 WPM steps |
+| Dialogue reading | 0–100 in 5-point steps |
+| Ordinary walk cadence | Usual 2–6 second gaps, with occasional longer gaps |
+| Near walk target | Profile-selected chance of 60–90% of projectable route reach |
 
-The dashboard and MCP status expose a title and plain-language summary generated
-only from these numeric values. That text never feeds back into behavior.
+Settings can override the exposed account controls. The profile reports effective values and whether it is customized. The serialized `micro_break_probability` field supplies the fraction of the 36-per-hour reference rate; `micro_rate_per_active_hour` reports that rate directly. The title and summary describe numeric traits and do not influence decisions. Profile-derived cursor and walk traits remain stable when unrelated manual settings change.
 
-While a break is active, a small top-center overlay shows its kind, remaining
-time, and a compact × that ends either break type without sending the click to
-the game. It disappears completely when the profile is ready.
-Long breaks also show a transient **Break** banner above the dashboard's
-connection status. Its × button manually ends only the active long break;
-micro breaks keep their original timer.
+## Owned time and micro pressure
 
-### Manual overrides
+The controller accrues time only while logged in and a standalone script owns automatic input. Tick waits can still represent owned work. Idle, operator-only, manual, logged-out and active-break time do not accrue pressure. Each observed interval contributes at most five seconds, preventing a suspended process from charging a large unobserved gap.
 
-The Settings page can override the understandable profile controls per account:
-micro chance and duration, long-micro chance, cursor-release chance, long-break
-interval and duration, phase boost, preferred AFK/logout style, style-switch
-chance, idle edge, mouse move duration, typing speed from 20-180 WPM, and the
-dialogue-reading scale.
-Derived refractory, hazard scale, summary, and downtime are recomputed from the
-custom values. **Use seeded** deletes the override and restores the exact
-account-derived profile.
-
-Overrides live beside runtime state as `overrides-<profile-id>.json`. The
-profile ID is a one-way derived identifier; the raw account hash is not stored.
-
-## Activity and action contract
-
-Each Lua coroutine owns two separate descriptors. `gc.activity(name)` is the
-framework-level global state: a task-agnostic category such as `travel`,
-`combat`, or `banking` that drives default behavior policy. `gc.state(name)` is
-the script's own state-machine position, such as `fight_black_demon`; it is
-shown beside the global state but does not change behavior by itself.
-`gc.phase(name, { activity = name })` changes script state and performs the
-profile's heavier major-transition evaluation. Every await captures an
-immutable activity context, so the standalone script and REPL cannot leak
-behavior state into one another.
-One interaction can override the descriptor without changing later actions by
-putting `activity = "banking"` beside its `action` in the `gc.await` request.
-
-Semantic actions refine broad workflow labels such as `questing`:
-
-| Activity | Breaks | Cursor release |
-| --- | --- | --- |
-| `general`, `questing`, `travel`, `skilling` | Allowed | Allowed |
-| `dialogue`, `combat`, `banking`, `trading` | Suppressed | Suppressed |
-
-`walk.*`, `bank.loadout`, `ge.buy`, dialogue actions, combat actions, NPC
-`Talk-to`, and NPC `Attack` select their safe leaf activity automatically.
-This means a quest can travel with normal behavior, then bank or fight without
-either behavior, without treating the whole quest as one coarse policy.
-
-Dialogue reading is paced independently of breaks. A profile at the skip end
-adds no delay. Other profiles derive a reading speed continuously from the
-0-100 scale: low values skim, middle values read normally, and high values read
-slowly. `dialogue.continue` calculates its delay from the visible page's word
-count. `dialogue.choose` uses the combined text of every visible option so the
-account has time to inspect the choice before selecting one. The delay is
-bounded at nine seconds so existing dialogue action deadlines remain stable.
-Action receipts expose the scale, human-readable style, word count, effective
-WPM, and applied milliseconds.
-
-Time-critical quest prompts can set `reading = false` on `dialogue.continue` or
-`dialogue.choose`. This skips only the reading delay for that exact semantic
-action; it does not change the account profile or disable later dialogue pace.
-
-A composite client interaction evaluates the two independent post-action
-decisions allowed by its activity. For walking, one interaction contains any
-needed camera turn, one recorded-template cursor movement, and the click that
-advances the interaction. Context-menu walking treats its right-click and
-menu-selection click as one interaction. Post-action behavior begins only after
-both the synthetic click and its matching RuneLite menu event complete.
-Every dispatched route interaction runs its own evaluation. A `walk.to` task
-containing eight route clicks therefore performs eight eligible micro rolls and
-eight eligible cursor-release rolls, not one pair around the whole task.
-Low-level mouse path samples do not roll independently.
-
-Automated Lua and MCP actions default to breaks enabled:
-
-```lua
-local result = gc.await {
-  action = {
-    type = "walk.to",
-    destination = { x = 3210, y = 3424, plane = 0 },
-  },
-}
-```
-
-A time-sensitive sequence can bypass all discretionary behavior for every
-composite interaction it performs:
-
-```lua
-local result = gc.await {
-  action = { type = "walk.random" },
-  breaks = false,
-}
-```
-
-Explicit dashboard actions are operator commands and bypass behavior. Status,
-reads, logging, script stop/reset, manifest editing, and MCP control remain
-responsive during a break.
-
-## Independent breaks and cursor release
-
-A cursor-release roll occurs after each eligible dispatched composite
-interaction. If selected, the recorded matcher moves the synthetic client
-cursor to the account's stable off-canvas edge and the action receipt waits only
-for that movement. The next action re-enters from a randomized point on the same
-edge.
-
-A separate micro roll can pause the same action. It does not move the cursor.
-The four outcomes are therefore all valid: neither behavior, release only,
-break only, or release followed by a break. Long breaks likewise do not force a
-cursor move.
-
-An explicit `mouse.offscreen` action remains available when a script must park
-the cursor deterministically at completion.
-
-## Long breaks
-
-Long pressure is an independent active-time renewal process. For profile cadence
-`M`, refractory `R = clamp(0.3M, 10, 60)` minutes, and
-`lambda = (M - R) / 0.886226925`, cumulative hazard after `s` active minutes is:
+For owned active hours `dt`, profile fraction `p`, and activity weight `w`:
 
 ```text
-H(s) = (max(0, s - R) / lambda)^2
+micro pressure increment = dt × 36 × p × w
 ```
 
-A fresh exponential budget is persisted. Long becomes due when cumulative
-hazard reaches that budget and begins at the next eligible safe boundary.
-`breaks=false` and long-running composite interactions preserve accumulated pressure.
-Micro breaks never reset or suppress it. If long and micro are both selected,
-long wins.
+General activity uses weight 0.8; travel and hazardous travel use 0.6; manual uses zero; other activities use 1.0. The standalone script supplies that activity even while an operator REPL call is active. A policy that temporarily forbids breaks can defer the next boundary without losing accumulated pressure.
 
-At long-break start, the profile fresh-rolls its stable AFK/logout preference.
-The cursor stays wherever the independent post-action roll left it.
-At the deadline GenericClient uses the Jagex Launcher session to return to the
-world if the client logged out naturally or deliberately. A completed long
-break resets both behavior processes and suppresses the first post-return micro
-roll.
+One sampled exponential budget remains in force until pressure reaches it and an eligible completed action or phase can start the break. Repeated boundary checks do not resample the cumulative chance. Starting a micro break consumes all accumulated pressure and samples the next budget, so a delayed boundary cannot queue a burst of old breaks.
 
-The waiting semantic menu action resolves its target again after the restored
-client is live. A completed long break gives canvas and widget geometry up to
-five seconds to settle, so inventory, equipment, NPC, object, and widget actions
-do not dispatch against pre-logout bounds.
+A qualifying phase adds profile-derived micro pressure. Phase boosts have a two-minute global and five-minute per-name cooldown in owned active time. Repeating a phase cannot repeatedly charge the same boost.
 
-Manually ending a long break follows the same completion path: it cancels the
-remaining timer, restores the Jagex-backed session when needed, resets long
-pressure, suppresses the first micro roll, and only then resumes the waiting
-script action.
+## Long breaks and phases
 
-Manually ending a micro break cancels its remaining timer and resumes the same
-waiting action immediately. The in-game overlay exposes the same control for
-both break types; the dashboard's larger transient banner remains specific to
-long breaks.
+A long break uses one persisted exponential hazard budget. Its cumulative hazard is quadratic after the account's refractory period. The controller compares that budget at completed actions and phases, allowing for observed boundary spacing. It never starts a new long break between target resolution and input.
 
-## Phase transitions
+A new standalone session gets 6–14 owned active minutes of grace for post-action long breaks. Explicit phases can still acknowledge an existing due obligation. Phase bonuses grow with long-clock maturity and are subject to the phase cooldowns. A declared policy or current safety condition can defer evaluation.
 
-`gc.phase` marks a major completed state and evaluates a heavier profile-shaped
-break roll before the next phase runs:
+Completing a long break resets the long clock and budget, clears micro pressure, and suppresses the next micro evaluation. Ending one early preserves the long obligation and marks it deferred. It becomes eligible again at a phase after the profile's active-time refractory period. Receipts report the actual `elapsed_millis` and `end_reason`; an early end is not credited as the full scheduled rest. A sufficiently long partial rest also clears micro pressure.
 
-```lua
-gc.phase("banking.complete")
-```
+AFK and logout breaks use the same lifecycle. Logout mode waits for login and world readiness before releasing the suspended action. A running break persists across a client restart. The in-game countdown can end either break kind; the dashboard's long-break banner ends only that long break.
 
-The phase uses the coroutine's current activity policy. A protected banking,
-trading, dialogue, or combat phase does not roll; scripts can transition and
-set the next activity atomically with
-`gc.phase("route.start", { activity = "travel" })`.
+`gc.phase(name, options)` records a major transition. `options.activity` updates the declaration before evaluation, while `options.policy` and `options.humanize` apply to that phase request. `gc.state` only updates the displayed script state.
 
-Repeating the current phase is a no-op. Accepted heavy evaluations have a
-two-active-minute global cooldown and a five-active-minute per-name cooldown.
-The short chance is `1 - (1 - p)^k`, where `k` is the profile's 1-4 phase
-weight. The long bonus grows with the square of long-cycle maturity, so an
-early phase cannot repeatedly force extended breaks.
+## Cursor behavior and input ownership
 
-## Persistence and diagnostics
+A micro-break cursor release is selected after the break starts and appears under that break's `cursor_release` receipt. An independent travel glance belongs to the cursor model and requires another minute of owned active time between glances.
 
-State files live in:
+The cursor model uses a sampled pressure budget during eligible quiet windows. Its `full` policy permits small drift, occasional relocation, declared-target anticipation and eligible travel glances; `drift` permits only small motion. It requires enough quiet time for the motion plus an input margin and uses captured viewport anchors. Idle parking requires a stable idle window and a known account profile.
 
-```text
-~/.runelite/genericclient/behavior/
-```
+Every rest movement has its own child scope. When the window ends, it cancels only that rest movement. It cannot cancel an independently owned break or explicit offscreen action. A newly dispatched action revokes stale rest input before taking the cursor.
 
-They contain only the derived profile ID, active-time progress, fresh hazard
-budget, phase cooldowns, break/cursor counts, and an in-progress break deadline. Writes are
-atomic. An in-progress break resumes after a plugin restart.
+Action, journey and click scopes carry cancellation tickets. Native queued events and delayed callbacks must still hold their original authority. A pause/resume or replacement run cannot revive an old selected click, prayer change, configuration update or transport step. Native operations execute outside the walker monitor.
 
-`client_status`, `behavior_profile`, `behavior_status`, and
-`gc.read("behavior")` expose structured diagnostics. `session_logout` and
-`session_login` expose the same synthetic widget/login controller used by long
-breaks for direct diagnostics and orchestration.
+Physical pointer input pauses ordinary automation and cancels its synthetic input. A 1.5-second quiet interval permits resumption. Physical Escape is the manual-stop boundary for the script, REPL, script safety and scheduler. Synthetic mouse/keyboard events are distinguished from physical input. Emergency recovery uses separate authority and remains independent of discretionary scopes.
 
-## Synthetic input
+## Damage and prayer
 
-Every automated mouse movement, click, and keystroke is delivered as AWT
-client-canvas events.
-The existing recorded template matcher still generates the complete path, but
-GenericClient no longer reads or moves the operating-system pointer. Returning
-from off-canvas idle emits focus/enter events at the actual randomized edge
-crossing; leaving emits exit/focus-loss events. Synthetic events are marked so
-manual mouse-profile recording ignores them. Walking rotates the client camera through RuneLite's injected camera yaw
-target before recomputing the canvas/minimap projection; it never moves the
-operating-system cursor. Synthetic text timing uses the account profile's WPM
-with per-key variance and waits for the Jagex input mode before typing.
+The combat guard publishes observed attackers and a bounded, 60-second damage grace. Copied hitsplats and consecutive HP/poison observations distinguish supported poison or venom damage from ordinary hits. Matching poison/venom evidence does not start or refresh damage grace. Missing or conflicting evidence does not become an exemption.
+
+`damage_expected` controls the discretionary response; forced healing and emergency escape keep their own thresholds. `prayer_owner` decides who changes protection prayer. Guard input is revoked on reset, policy handoff or emergency takeover, and late prayer/potion completions cannot mutate a replacement owner. The guard releases only prayer it owns and respects physical takeover while idle.
+
+## Persistence, ownership and checks
+
+Behavior state uses `genericclient_behavior_state.v3`. It persists the long clock and budget, deferred obligation, micro pressure and budget, phase history, counters and an active break. Earlier supported state versions retain their long state and initialize micro pressure through the explicit migration. State and override writes use the shared atomic-file writer under the account-derived profile ID.
+
+| Owner | Responsibility |
+| --- | --- |
+| `GenericClientBehaviorProfile` | Stable traits and duration/cadence sampling |
+| `GenericClientBehaviorPolicy`, `GenericClientPolicyResolver` | Independent fields and current effective policy |
+| `GenericClientBehaviorController`, `GenericClientBehaviorState`, `GenericClientBehaviorStore` | Owned time, pressure, break lifecycle and persistence |
+| `GenericClientActionBoundary`, `GenericClientLuaIntent` | Semantic boundaries, nested scopes and cancellation |
+| `GenericClientCursorBehavior` | Quiet-window cursor motion and rest ownership |
+| `GenericClientCombatGuard`, `GenericClientDamageTracker` | Threat/damage observations and guard-owned prayer |
+
+Use `./gradlew --offline qualityReport`, the native-input tests under Xvfb where required, and the catalog's `python3 tools/validate.py`. Tests cover dense/sparse boundary schedules, persistence, session grace, interrupted long breaks, policy precedence, native queued input, cursor cancellation and scope placement. Passing those checks is separate from packaging, installation and fresh live acceptance.

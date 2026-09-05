@@ -125,6 +125,92 @@ public class GenericClientRandomEventControllerTest
 	}
 
 	@Test
+	public void deferredIdleEventCompletesWithoutReleasingUnownedRuntime() throws Exception
+	{
+		RuntimeStub runtime = new RuntimeStub();
+		runtime.automationActive = false;
+		GenericClientRandomEventController controller =
+			controller(runtime, id -> "certer");
+		Player player = player(null);
+		NPC niles = npc(
+			NpcID.MACRO_NILES,
+			"Niles",
+			4,
+			new WorldPoint(2439, 3089, 0),
+			new String[]{"Talk-to", "Dismiss"});
+
+		controller.onInteractingChanged(player, new InteractingChanged(niles, player), 10L);
+		assertEquals("deferred_idle", controller.status().get("solver_status"));
+		assertFalse(runtime.interrupted);
+
+		Map<String, Object> completed = controller.complete("despawn_observed", false)
+			.get(2, TimeUnit.SECONDS);
+
+		assertFalse((Boolean) completed.get("active"));
+		assertEquals("completed", completed.get("state"));
+		assertFalse(runtime.released);
+	}
+
+	@Test
+	public void hazardousTravelDefersTheEventWithoutInterruptingMovement()
+	{
+		RuntimeStub runtime = new RuntimeStub();
+		runtime.randomEventDeferralActivity = "hazardous_travel";
+		GenericClientRandomEventController controller = controller(runtime, id -> null);
+		Player player = player(null);
+		NPC sandwichLady = npc(
+			NpcID.MACRO_SANDWICH_LADY_NPC,
+			"Sandwich lady",
+			8,
+			new WorldPoint(2726, 2735, 0),
+			new String[]{"Talk-to", "Dismiss"});
+
+		controller.onInteractingChanged(
+			player, new InteractingChanged(sandwichLady, player), 499L);
+
+		Map<String, Object> status = controller.status();
+		assertTrue((Boolean) status.get("active"));
+		assertFalse((Boolean) status.get("blocks_automation"));
+		assertFalse((Boolean) status.get("attention_required"));
+		assertEquals("deferred_activity", status.get("state"));
+		assertEquals("hazardous_travel", status.get("deferred_activity"));
+		assertFalse(runtime.interrupted);
+
+		controller.onNpcDespawned(new NpcDespawned(sandwichLady), 516L);
+		status = controller.status();
+		assertFalse((Boolean) status.get("active"));
+		assertEquals("completed", status.get("state"));
+		assertEquals("deferred_activity_despawned", status.get("resolution"));
+	}
+
+	@Test
+	public void combatDefersTheEventWithoutInterruptingTheFight()
+	{
+		RuntimeStub runtime = new RuntimeStub();
+		runtime.randomEventDeferralActivity = "combat";
+		GenericClientRandomEventController controller = controller(runtime, id -> null);
+		Player player = player(null);
+		NPC mysteriousOldMan = npc(
+			NpcID.MACRO_MYSTERIOUS_OLD_MAN,
+			"Mysterious Old Man",
+			8,
+			new WorldPoint(2702, 9172, 1),
+			new String[]{"Talk-to", "Dismiss"});
+
+		controller.onInteractingChanged(
+			player, new InteractingChanged(mysteriousOldMan, player), 1497L);
+
+		Map<String, Object> status = controller.status();
+		assertTrue((Boolean) status.get("active"));
+		assertFalse((Boolean) status.get("blocks_automation"));
+		assertFalse((Boolean) status.get("attention_required"));
+		assertEquals("deferred_activity", status.get("state"));
+		assertEquals("combat", status.get("deferred_activity"));
+		assertEquals("not_started", status.get("auto_talk_status"));
+		assertFalse(runtime.interrupted);
+	}
+
+	@Test
 	public void unknownEventAutoTalksAfterInterruptAndRemainsLatched()
 	{
 		RuntimeStub runtime = new RuntimeStub();
@@ -367,10 +453,24 @@ public class GenericClientRandomEventControllerTest
 
 	private static final class RuntimeStub implements GenericClientRandomEventController.Runtime
 	{
+		private boolean automationActive = true;
+		private String randomEventDeferralActivity;
 		private boolean interrupted;
 		private boolean released;
 		private boolean resumeInterrupted;
 		private String solverScript;
+
+		@Override
+		public String randomEventDeferralActivity()
+		{
+			return randomEventDeferralActivity;
+		}
+
+		@Override
+		public boolean isAutomationActive()
+		{
+			return automationActive;
+		}
 
 		@Override
 		public CompletableFuture<String> interrupt(String eventKey, String solverScript)

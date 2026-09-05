@@ -1,16 +1,15 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientErrors.rootMessage;
+
 import java.awt.Canvas;
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.event.MouseEvent;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -45,22 +44,18 @@ final class GenericClientCombatInput implements AutoCloseable
 
 	private final Client client;
 	private final ClientThread clientThread;
-	private final ScheduledExecutorService executor;
 	private final GenericClientSyntheticMouse syntheticMouse;
-	private final GenericClientBehaviorController behavior;
 	private final Consumer<String> reporter;
 	private final AtomicBoolean running = new AtomicBoolean();
-	private final java.util.List<ScheduledFuture<?>> pending = new CopyOnWriteArrayList<>();
 
 	private volatile CompletableFuture<Map<String, Object>> activeResult;
+	private final GenericClientInputCallbacks callbacks;
 	private volatile int requestedStyle;
 	private volatile boolean requestedAutoRetaliate;
 	private volatile Operation operation = Operation.STYLE;
 	private volatile GenericClientActivityContext activityContext;
 	private volatile int clickCount;
 	private volatile long deadlineNanos;
-	private volatile Map<String, Object> behaviorBefore = Collections.emptyMap();
-	private volatile Map<String, Object> behaviorAfter = Collections.emptyMap();
 	private volatile boolean closed;
 
 	GenericClientCombatInput(
@@ -68,14 +63,12 @@ final class GenericClientCombatInput implements AutoCloseable
 		ClientThread clientThread,
 		ScheduledExecutorService executor,
 		GenericClientSyntheticMouse syntheticMouse,
-		GenericClientBehaviorController behavior,
 		Consumer<String> reporter)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
-		this.executor = executor;
+		this.callbacks = new GenericClientInputCallbacks(this, () -> this.activeResult, executor);
 		this.syntheticMouse = syntheticMouse;
-		this.behavior = behavior;
 		this.reporter = reporter;
 	}
 
@@ -106,16 +99,17 @@ final class GenericClientCombatInput implements AutoCloseable
 		throw new IllegalArgumentException("Unsupported combat mode: " + mode);
 	}
 
-	private CompletableFuture<Map<String, Object>> start(
+	private synchronized CompletableFuture<Map<String, Object>> start(
 		Operation operation,
 		int style,
 		boolean autoRetaliate,
 		GenericClientActivityContext activityContext)
 	{
 		CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
-		if (closed)
+		if (closed || !activityContext.isInputAllowed())
 		{
-			result.complete(immediateReceipt(operation, style, autoRetaliate, "input_closed"));
+			result.complete(immediateReceipt(operation, style, autoRetaliate,
+				closed ? "input_closed" : "action_cancelled"));
 			return result;
 		}
 		if (!running.compareAndSet(false, true))
@@ -131,13 +125,11 @@ final class GenericClientCombatInput implements AutoCloseable
 		activeResult = result;
 		this.activityContext = activityContext;
 		clickCount = 0;
-		behaviorBefore = Collections.emptyMap();
-		behaviorAfter = Collections.emptyMap();
 		deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(STYLE_TIMEOUT_MILLIS);
 		reporter.accept(operation == Operation.STYLE
 			? "COMBAT_STYLE_SELECTING index=" + style
 			: "COMBAT_AUTO_RETALIATE_SELECTING enabled=" + autoRetaliate);
-		clientThread.invoke(operation == Operation.STYLE
+		invokeCurrent(operation == Operation.STYLE
 			? this::prepareStyleOnClientThread
 			: this::prepareAutoRetaliateOnClientThread);
 		return result;
@@ -148,7 +140,7 @@ final class GenericClientCombatInput implements AutoCloseable
 		return running.get();
 	}
 
-	void cancel(String reason)
+	synchronized void cancel(String reason)
 	{
 		if (running.get())
 		{
@@ -181,7 +173,7 @@ final class GenericClientCombatInput implements AutoCloseable
 				this::clickStyle);
 			return;
 		}
-		openCombatTab(this::selectStyleAfterTab);
+		openCombatControls(this::selectStyleAfterTab);
 	}
 
 	private void selectStyleAfterTab()
@@ -194,16 +186,16 @@ final class GenericClientCombatInput implements AutoCloseable
 
 	private void clickStyle(Widget style)
 	{
-		clickWidget(style).whenComplete((ignored, error) ->
+		clickWidget(style).whenComplete(callbacks.bind((ignored, error) ->
 		{
 			if (error != null)
 			{
 				finish("rejected", "combat_style_click: " + rootMessage(error));
 				return;
 			}
-			finishAction(() -> schedule(
-				() -> clientThread.invoke(this::checkSelectedStyle), UI_SETTLE_MILLIS));
-		});
+			finishAction(() -> callbacks.schedule(
+				() -> invokeCurrent(this::checkSelectedStyle), UI_SETTLE_MILLIS));
+		}));
 	}
 
 	private void checkSelectedStyle()
@@ -218,7 +210,7 @@ final class GenericClientCombatInput implements AutoCloseable
 			finish("rejected", "combat_style_did_not_change");
 			return;
 		}
-		schedule(() -> clientThread.invoke(this::checkSelectedStyle), 50L);
+		callbacks.schedule(() -> invokeCurrent(this::checkSelectedStyle), 50L);
 	}
 
 	private void prepareAutoRetaliateOnClientThread()
@@ -246,7 +238,7 @@ final class GenericClientCombatInput implements AutoCloseable
 				this::clickAutoRetaliate);
 			return;
 		}
-		openCombatTab(this::selectAutoRetaliateAfterTab);
+		openCombatControls(this::selectAutoRetaliateAfterTab);
 	}
 
 	private void selectAutoRetaliateAfterTab()
@@ -259,16 +251,16 @@ final class GenericClientCombatInput implements AutoCloseable
 
 	private void clickAutoRetaliate(Widget retaliate)
 	{
-		clickWidget(retaliate).whenComplete((ignored, error) ->
+		clickWidget(retaliate).whenComplete(callbacks.bind((ignored, error) ->
 		{
 			if (error != null)
 			{
 				finish("rejected", "auto_retaliate_click: " + rootMessage(error));
 				return;
 			}
-			finishAction(() -> schedule(
-				() -> clientThread.invoke(this::checkAutoRetaliate), UI_SETTLE_MILLIS));
-		});
+			finishAction(() -> callbacks.schedule(
+				() -> invokeCurrent(this::checkAutoRetaliate), UI_SETTLE_MILLIS));
+		}));
 	}
 
 	private void checkAutoRetaliate()
@@ -283,12 +275,34 @@ final class GenericClientCombatInput implements AutoCloseable
 			finish("rejected", "auto_retaliate_did_not_change");
 			return;
 		}
-		schedule(() -> clientThread.invoke(this::checkAutoRetaliate), 50L);
+		callbacks.schedule(() -> invokeCurrent(this::checkAutoRetaliate), 50L);
 	}
 
 	private boolean autoRetaliateEnabled()
 	{
 		return client.getVarpValue(VarPlayerID.OPTION_NODEF) == 0;
+	}
+
+	private void openCombatControls(Runnable afterOpen)
+	{
+		if (visibleWidget(InterfaceID.Autocast.INFO) != null)
+		{
+			beginWidgetAction(
+				new int[]{InterfaceID.Autocast.INFO},
+				"autocast_cancel_not_visible",
+				cancel -> clickWidget(cancel).whenComplete(callbacks.bind((ignored, error) ->
+				{
+					if (error != null)
+					{
+						finish("rejected", "autocast_cancel_click: " + rootMessage(error));
+						return;
+					}
+					finishAction(() -> callbacks.schedule(
+						() -> invokeCurrent(afterOpen), UI_SETTLE_MILLIS));
+				})));
+			return;
+		}
+		openCombatTab(afterOpen);
 	}
 
 	private void openCombatTab(Runnable afterOpen)
@@ -300,15 +314,15 @@ final class GenericClientCombatInput implements AutoCloseable
 			return;
 		}
 		beginWidgetAction(COMBAT_TABS, "combat_tab_not_visible", currentTab ->
-			clickWidget(currentTab).whenComplete((ignored, error) ->
+			clickWidget(currentTab).whenComplete(callbacks.bind((ignored, error) ->
 		{
 			if (error != null)
 			{
 				finish("rejected", "combat_tab_click: " + rootMessage(error));
 				return;
 			}
-			finishAction(() -> schedule(() -> clientThread.invoke(afterOpen), UI_SETTLE_MILLIS));
-		}));
+			finishAction(() -> callbacks.schedule(() -> invokeCurrent(afterOpen), UI_SETTLE_MILLIS));
+		})));
 	}
 
 	private void beginWidgetAction(
@@ -330,30 +344,12 @@ final class GenericClientCombatInput implements AutoCloseable
 
 	private void beginAction(Runnable action)
 	{
-		behavior.beforeAction(activityContext).whenComplete((before, error) ->
-		{
-			if (error != null)
-			{
-				finish("rejected", "behavior_before: " + rootMessage(error));
-				return;
-			}
-			behaviorBefore = before;
-			clientThread.invoke(action);
-		});
+		invokeCurrent(action);
 	}
 
 	private void finishAction(Runnable continuation)
 	{
-		behavior.afterAction(activityContext).whenComplete((after, error) ->
-		{
-			if (error != null)
-			{
-				finish("rejected", "behavior_after: " + rootMessage(error));
-				return;
-			}
-			behaviorAfter = after;
-			continuation.run();
-		});
+		continuation.run();
 	}
 
 	private CompletableFuture<String> clickWidget(Widget widget)
@@ -368,7 +364,8 @@ final class GenericClientCombatInput implements AutoCloseable
 		}
 		Point point = new Point(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
 		clickCount++;
-		return syntheticMouse.move(point).thenCompose(ignored -> syntheticMouse.click(MouseEvent.BUTTON1));
+		return syntheticMouse.move(point, activityContext)
+			.thenCompose(callbacks.bind(ignored -> syntheticMouse.click(MouseEvent.BUTTON1, activityContext)));
 	}
 
 	private Widget visibleWidget(int... ids)
@@ -388,13 +385,13 @@ final class GenericClientCombatInput implements AutoCloseable
 		return null;
 	}
 
-	private void finish(String status, String result)
+	private synchronized void finish(String status, String result)
 	{
 		if (!running.getAndSet(false))
 		{
 			return;
 		}
-		cancelPending();
+		callbacks.cancelPending();
 		Map<String, Object> receipt = receipt(status, result);
 		reporter.accept(operation == Operation.STYLE
 			? "COMBAT_STYLE_COMPLETED index=" + requestedStyle +
@@ -405,7 +402,7 @@ final class GenericClientCombatInput implements AutoCloseable
 		activeResult = null;
 		if (completion != null)
 		{
-			completion.complete(receipt);
+			completion.completeAsync(() -> receipt);
 		}
 	}
 
@@ -423,11 +420,6 @@ final class GenericClientCombatInput implements AutoCloseable
 			receipt.put("enabled", requestedAutoRetaliate);
 		}
 		receipt.put("click_count", (long) clickCount);
-		receipt.put("behavior_before", behaviorBefore);
-		if (!behaviorAfter.isEmpty())
-		{
-			receipt.put("behavior_after", behaviorAfter);
-		}
 		return receipt;
 	}
 
@@ -449,40 +441,17 @@ final class GenericClientCombatInput implements AutoCloseable
 			receipt.put("enabled", autoRetaliate);
 		}
 		receipt.put("click_count", 0L);
-		receipt.put("behavior_before", Collections.emptyMap());
 		return receipt;
 	}
 
-	private void schedule(Runnable runnable, long delayMillis)
+	private void invokeCurrent(Runnable action)
 	{
-		ScheduledFuture<?> future = executor.schedule(() ->
-		{
-			if (running.get())
-			{
-				runnable.run();
-			}
-		}, delayMillis, TimeUnit.MILLISECONDS);
-		pending.add(future);
+		clientThread.invoke(callbacks.bind(() -> {
+			if (activityContext.isInputAllowed()) action.run();
+			else finish("rejected", "action_cancelled");
+		}));
 	}
 
-	private void cancelPending()
-	{
-		for (ScheduledFuture<?> future : pending)
-		{
-			future.cancel(false);
-		}
-		pending.clear();
-	}
-
-	private static String rootMessage(Throwable error)
-	{
-		Throwable current = error;
-		while (current.getCause() != null)
-		{
-			current = current.getCause();
-		}
-		return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
-	}
 
 	private enum Operation
 	{
@@ -491,7 +460,7 @@ final class GenericClientCombatInput implements AutoCloseable
 	}
 
 	@Override
-	public void close()
+	public synchronized void close()
 	{
 		closed = true;
 		if (running.get())
@@ -500,7 +469,7 @@ final class GenericClientCombatInput implements AutoCloseable
 		}
 		else
 		{
-			cancelPending();
+			callbacks.cancelPending();
 		}
 	}
 }

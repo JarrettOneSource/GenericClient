@@ -6,10 +6,9 @@ import com.google.gson.JsonParseException;
 import java.io.IOException;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.util.function.DoubleSupplier;
 
 final class GenericClientBehaviorStore
 {
@@ -22,7 +21,7 @@ final class GenericClientBehaviorStore
 		Files.createDirectories(directory);
 	}
 
-	GenericClientBehaviorState load(String profileId) throws IOException
+	GenericClientBehaviorState load(String profileId, DoubleSupplier initialMicroBudget) throws IOException
 	{
 		Path path = path(profileId);
 		if (!Files.isRegularFile(path))
@@ -36,6 +35,7 @@ final class GenericClientBehaviorStore
 			{
 				throw new IOException("Behavior state is empty: " + path);
 			}
+			state.migrate(initialMicroBudget);
 			state.validate(profileId);
 			return state;
 		}
@@ -49,7 +49,7 @@ final class GenericClientBehaviorStore
 	{
 		state.validate(state.getProfileId());
 		state.markSaved(epochMillis);
-		writeAtomically(path(state.getProfileId()), gson.toJson(state) + System.lineSeparator());
+		GenericClientAtomicFile.write(path(state.getProfileId()), gson.toJson(state) + System.lineSeparator());
 	}
 
 	GenericClientBehaviorOverrides loadOverrides(String profileId) throws IOException
@@ -79,7 +79,7 @@ final class GenericClientBehaviorStore
 	{
 		validateProfileId(profileId);
 		overrides.validate();
-		writeAtomically(overridePath(profileId), gson.toJson(overrides) + System.lineSeparator());
+		GenericClientAtomicFile.write(overridePath(profileId), gson.toJson(overrides) + System.lineSeparator());
 	}
 
 	void deleteOverrides(String profileId) throws IOException
@@ -87,21 +87,6 @@ final class GenericClientBehaviorStore
 		Files.deleteIfExists(overridePath(profileId));
 	}
 
-	private static void writeAtomically(Path target, String value) throws IOException
-	{
-		Path temporary = target.resolveSibling(target.getFileName() + ".tmp");
-		Files.writeString(temporary, value, StandardCharsets.UTF_8);
-		try
-		{
-			Files.move(temporary, target,
-				StandardCopyOption.ATOMIC_MOVE,
-				StandardCopyOption.REPLACE_EXISTING);
-		}
-		catch (AtomicMoveNotSupportedException exception)
-		{
-			Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
-		}
-	}
 
 	private Path path(String profileId)
 	{

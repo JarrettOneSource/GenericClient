@@ -41,6 +41,49 @@ dependencies {
 
 group = 'com.genericclient'
 
+sourceSets {
+	routeAudit {
+		compileClasspath += sourceSets.main.output + configurations.testRuntimeClasspath
+		runtimeClasspath += output + compileClasspath
+	}
+}
+
+def routeAuditFile = layout.buildDirectory.file('route-audit/routes.tsv')
+tasks.register('exportRoutes', Exec) {
+	workingDir providers.gradleProperty('scriptCatalog').getOrElse('../GenericClientScripts')
+	doFirst { routeAuditFile.get().asFile.parentFile.mkdirs() }
+	commandLine 'lua5.4', 'tools/export-routes.lua', routeAuditFile.get().asFile.absolutePath
+}
+
+tasks.register('routeAudit', JavaExec) {
+	group = 'verification'
+	description = 'Plan the Lua catalog routes against bundled navigation data.'
+	dependsOn 'classes', 'routeAuditClasses', 'exportRoutes'
+	classpath = sourceSets.routeAudit.runtimeClasspath
+	mainClass = 'com.genericclient.GenericClientRouteAudit'
+	args routeAuditFile.get().asFile.absolutePath
+}
+
+tasks.register('scriptCatalogAudit', JavaExec) {
+	group = 'verification'
+	description = 'Load every external script descriptor with the client registry and native Lua VM.'
+	dependsOn 'testClasses'
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.genericclient.GenericClientScriptCatalogAudit'
+	args file(providers.gradleProperty('scriptCatalog').getOrElse('../GenericClientScripts')).absolutePath
+}
+
+tasks.register('plannerBenchmark', JavaExec) {
+	group = 'verification'
+	description = 'Measure deterministic offline planner latency and allocation.'
+	dependsOn 'classes', 'routeAuditClasses'
+	classpath = sourceSets.routeAudit.runtimeClasspath
+	mainClass = 'com.genericclient.GenericClientPlannerBenchmark'
+	if (providers.gradleProperty('plannerRecording').isPresent()) {
+		args providers.gradleProperty('plannerRecording').get()
+	}
+}
+
 tasks.named('jar') {
 	archiveFileName.set('GenericClient-thin.jar')
 }
@@ -63,6 +106,8 @@ pmd {
 }
 
 pitest {
+	// Native input tests need the same AWT display as the ordinary test task.
+	features = ['-macos_focus']
 	targetClasses = providers.gradleProperty('pitestTargetClasses')
 		.map { value -> value.split(',') as List }
 		.getOrElse(['com.genericclient.*'])

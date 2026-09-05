@@ -10,37 +10,38 @@ import net.runelite.api.QuestState;
 final class GenericClientQuestCache
 {
 	private static final int REFRESH_INTERVAL_TICKS = 10;
+	// Native quest_progress_get; SDK 1.12.38 has no named constant. See navigation-map-revisions.md.
+	private static final int QUEST_PROGRESS_GET = 4024;
 
-	private List<GenericClientAccountSnapshot.QuestSnapshot> quests;
+	private GenericClientAccountSnapshot.QuestListSnapshot snapshot;
 	private long refreshedGameTick = -1;
 
 	GenericClientAccountSnapshot.QuestListSnapshot capture(Client client, long gameTick)
 	{
-		if (quests == null || gameTick - refreshedGameTick >= REFRESH_INTERVAL_TICKS)
+		if (snapshot == null || gameTick - refreshedGameTick >= REFRESH_INTERVAL_TICKS)
 		{
 			List<GenericClientAccountSnapshot.QuestSnapshot> refreshed = new ArrayList<>();
 			for (Quest quest : Quest.values())
 			{
 				QuestState state = quest.getState(client);
+				client.runScript(QUEST_PROGRESS_GET, quest.getId());
+				int progress = client.getIntStack()[0];
 				refreshed.add(new GenericClientAccountSnapshot.QuestSnapshot(
 					quest.name().toLowerCase(Locale.ROOT),
 					quest.getId(),
 					quest.getName(),
-					state.name().toLowerCase(Locale.ROOT)));
+					state.name().toLowerCase(Locale.ROOT), progress));
 			}
-			quests = refreshed;
 			refreshedGameTick = gameTick;
+			snapshot = new GenericClientAccountSnapshot.QuestListSnapshot(true, gameTick, refreshed);
 		}
 
-		return new GenericClientAccountSnapshot.QuestListSnapshot(
-			true,
-			refreshedGameTick,
-			quests);
+		return snapshot;
 	}
 
 	void clear()
 	{
-		quests = null;
+		snapshot = null;
 		refreshedGameTick = -1;
 	}
 }

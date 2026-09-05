@@ -22,7 +22,7 @@ import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import javax.swing.SwingUtilities;
 
-final class GenericClientSyntheticMouse implements AutoCloseable
+final class GenericClientSyntheticMouse implements AutoCloseable, GenericClientCursorBehavior.Motion
 {
 	private final Canvas canvas;
 	private final ScheduledExecutorService executor;
@@ -31,6 +31,7 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 	private final Consumer<String> reporter;
 	private final Supplier<Random> randomSupplier;
 	private final GenericClientMouseEffectOverlay effects;
+	private final Consumer<Point> physicalMovementListener;
 	private final MouseAdapter realMouseListener = new MouseAdapter()
 	{
 		@Override
@@ -41,6 +42,12 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 
 		@Override
 		public void mouseDragged(MouseEvent event)
+		{
+			captureRealPosition(event, false);
+		}
+
+		@Override
+		public void mousePressed(MouseEvent event)
 		{
 			captureRealPosition(event, false);
 		}
@@ -60,9 +67,14 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 	private final List<ScheduledFuture<?>> pending = new CopyOnWriteArrayList<>();
 
 	private Point position;
+	private Point lastClick;
 	private boolean outside;
 	private boolean moving;
-	private boolean closed;
+	private boolean preemptibleMove;
+	private GenericClientActivityContext moveContext;
+	private volatile boolean closed;
+	private int pendingClicks;
+	private volatile long clickGeneration;
 	private CompletableFuture<String> activeMove;
 
 	GenericClientSyntheticMouse(
@@ -72,10 +84,11 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		IntSupplier durationMillis,
 		Point initialPosition,
 		GenericClientMouseEffectOverlay effects,
-		Consumer<String> reporter)
+		Consumer<String> reporter,
+		Consumer<Point> physicalMovementListener)
 	{
 		this(canvas, executor, profileSupplier, durationMillis, initialPosition, effects, reporter,
-			() -> ThreadLocalRandom.current());
+			() -> ThreadLocalRandom.current(), physicalMovementListener);
 	}
 
 	GenericClientSyntheticMouse(
@@ -86,7 +99,8 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		Point initialPosition,
 		GenericClientMouseEffectOverlay effects,
 		Consumer<String> reporter,
-		Supplier<Random> randomSupplier)
+		Supplier<Random> randomSupplier,
+		Consumer<Point> physicalMovementListener)
 	{
 		this.canvas = canvas;
 		this.executor = executor;
@@ -97,12 +111,34 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		this.effects = effects;
 		this.reporter = reporter;
 		this.randomSupplier = randomSupplier;
+		this.physicalMovementListener = physicalMovementListener;
 		effects.updateCursor(this.position, this.outside);
 		canvas.addMouseMotionListener(realMouseListener);
 		canvas.addMouseListener(realMouseListener);
 	}
 
 	CompletableFuture<String> move(Point destination)
+	{
+		return move(destination, null, 0);
+	}
+
+	CompletableFuture<String> move(
+		Point destination,
+		GenericClientActivityContext activityContext)
+	{
+		return move(destination, activityContext, 0);
+	}
+
+	public CompletableFuture<String> moveRest(Point destination, int duration, GenericClientActivityContext context)
+	{
+		if (duration <= 0) throw new IllegalArgumentException("Rest movement duration must be positive");
+		return move(destination, context, duration);
+	}
+
+	private CompletableFuture<String> move(
+		Point destination,
+		GenericClientActivityContext activityContext,
+		int restDuration)
 	{
 		if (destination == null)
 		{
@@ -114,48 +150,72 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		final boolean entering;
 		final Point previousStart;
 		final Point pathStart;
-		synchronized (this)
+		CompletableFuture<String> superseded = null;
+		try
 		{
-			ensureOpen();
-			if (moving)
+			synchronized (this)
 			{
-				return failed("Synthetic mouse is already moving");
-			}
-			try
-			{
-				GenericClientMouseProfile profile = profileSupplier.get();
-				if (profile == null)
+				ensureOpen();
+				if (activityContext != null && !activityContext.isInputAllowed()) return failed("action_cancelled");
+				if (pendingClicks > 0) return failed("Synthetic mouse click is pending");
+				if (moving)
 				{
-					return failed("Synthetic mouse profile is unavailable");
+					if (!preemptibleMove)
+					{
+						return failed("Synthetic mouse is already moving");
+					}
+					superseded = detachMove();
 				}
-				duration = Math.max(25, durationMillis.getAsInt());
-				Rectangle viewport = new Rectangle(
-					0, 0, Math.max(1, canvas.getWidth()), Math.max(1, canvas.getHeight()));
-				Random random = randomSupplier.get();
-				outside = !viewport.contains(position);
-				entering = outside && viewport.contains(destination);
-				previousStart = new Point(position);
-				pathStart = entering
-					? randomizedReentryStart(previousStart, viewport.width, viewport.height, random)
-					: previousStart;
-				if (entering)
+				try
 				{
-					position = new Point(pathStart);
+					GenericClientMouseProfile profile = profileSupplier.get();
+					if (profile == null)
+					{
+						return failed("Synthetic mouse profile is unavailable");
+					}
+					int profileDuration = Math.max(25, durationMillis.getAsInt());
+					duration = restDuration > 0 ? restDuration : activityContext == null
+						? profileDuration : activityContext.mouseMoveDurationMillis(profileDuration);
+					Rectangle viewport = new Rectangle(
+						0, 0, Math.max(1, canvas.getWidth()), Math.max(1, canvas.getHeight()));
+					Random random = randomSupplier.get();
+					outside = !viewport.contains(position);
+					entering = outside && viewport.contains(destination);
+					previousStart = new Point(position);
+					pathStart = entering
+						? randomizedReentryStart(previousStart, viewport.width, viewport.height, random)
+						: previousStart;
+					if (entering)
+					{
+						position = new Point(pathStart);
+					}
+					path = restDuration > 0 ? GenericClientMouseMatcher.generateRest(pathStart, destination, duration)
+						: GenericClientMouseMatcher.generate(
+						profile,
+						pathStart,
+						new Point(destination),
+						viewport,
+						duration,
+						random);
+					moving = true;
+					preemptibleMove = restDuration > 0;
+					moveContext = activityContext;
+					completion = new CompletableFuture<>();
+					activeMove = completion;
 				}
-				path = GenericClientMouseMatcher.generate(
-					profile,
-					pathStart,
-					new Point(destination),
-					viewport,
-					duration,
-					random);
-				moving = true;
-				completion = new CompletableFuture<>();
-				activeMove = completion;
+				catch (RuntimeException exception)
+				{
+					return failed("Synthetic mouse path generation failed: " + exception.getMessage());
+				}
 			}
-			catch (RuntimeException exception)
+
+		}
+		finally
+		{
+			if (superseded != null)
 			{
-				return failed("Synthetic mouse path generation failed: " + exception.getMessage());
+				superseded.completeExceptionally(new IllegalStateException("Synthetic mouse cancelled: rest_preempted"));
+				reporter.accept("SYNTHETIC_MOUSE_CANCELLED reason=rest_preempted");
 			}
 		}
 
@@ -174,21 +234,24 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 			int pathIndex = index;
 			GenericClientMouseMatcher.PathPoint point = path.get(index);
 			Point next = new Point((int) Math.round(point.x), (int) Math.round(point.y));
-			schedule(() -> dispatchMove(next, pathIndex), Math.round(point.timeMillis));
+			schedule(() -> dispatchMove(next, pathIndex), Math.round(point.timeMillis), completion, activityContext);
 		}
-		schedule(() -> finishMove(destination, completion), duration + 1L);
+		schedule(() -> finishMove(destination, completion), duration + 1L, completion, activityContext);
 		return completion;
 	}
 
-	CompletableFuture<String> moveOffscreen(GenericClientBehaviorProfile.Edge edge)
+	CompletableFuture<String> moveOffscreen(GenericClientBehaviorProfile.Edge edge, GenericClientActivityContext context)
+	{
+		if (edge == null) throw new IllegalArgumentException("Offscreen edge cannot be null");
+		if (isOutside()) return CompletableFuture.completedFuture("SYNTHETIC_MOUSE_ALREADY_OFFSCREEN edge=" + edge);
+		return moveRest(offscreenTarget(edge), 400 + randomSupplier.get().nextInt(501), context);
+	}
+
+	public Point offscreenTarget(GenericClientBehaviorProfile.Edge edge)
 	{
 		if (edge == null)
 		{
 			throw new IllegalArgumentException("Offscreen edge cannot be null");
-		}
-		if (isOutside())
-		{
-			return CompletableFuture.completedFuture("SYNTHETIC_MOUSE_ALREADY_OFFSCREEN edge=" + edge);
 		}
 		Random random = randomSupplier.get();
 		int distance = 5 + random.nextInt(71);
@@ -215,16 +278,24 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 			default:
 				throw new IllegalStateException("Unsupported offscreen edge: " + edge);
 		}
-		return move(new Point(x, y));
+		return new Point(x, y);
 	}
 
 	CompletableFuture<String> click(int button)
+	{
+		return click(button, null);
+	}
+
+	CompletableFuture<String> click(int button, GenericClientActivityContext activityContext)
 	{
 		if (!(button == MouseEvent.BUTTON1 || button == MouseEvent.BUTTON3))
 		{
 			throw new IllegalArgumentException("Synthetic click supports only left or right buttons");
 		}
+		if (activityContext != null && !activityContext.isInputAllowed()) return failed("action_cancelled");
+		cancelRest("action_started", null);
 		final Point current;
+		final long generation;
 		synchronized (this)
 		{
 			ensureOpen();
@@ -237,31 +308,42 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 				return failed("Synthetic mouse cannot click outside the canvas");
 			}
 			current = new Point(position);
+			generation = clickGeneration;
+			pendingClicks++;
 		}
 
 		CompletableFuture<String> completion = new CompletableFuture<>();
 		SwingUtilities.invokeLater(() ->
 		{
-			int mask = button == MouseEvent.BUTTON1
-				? InputEvent.BUTTON1_DOWN_MASK
-				: InputEvent.BUTTON3_DOWN_MASK;
-			boolean popup = button == MouseEvent.BUTTON3;
-			dispatchMouse(MouseEvent.MOUSE_PRESSED, current, mask, button, popup);
-			dispatchMouse(MouseEvent.MOUSE_RELEASED, current, 0, button, popup);
-			dispatchMouse(MouseEvent.MOUSE_CLICKED, current, 0, button, popup);
-			completion.complete(button == MouseEvent.BUTTON1
-				? "SYNTHETIC_LEFT_CLICK"
-				: "SYNTHETIC_RIGHT_CLICK");
+			RuntimeException failure = null;
+			try
+			{
+				if (closed || clickGeneration != generation || activityContext != null && !activityContext.isInputAllowed())
+					throw new IllegalStateException("action_cancelled");
+				int mask = button == MouseEvent.BUTTON1 ? InputEvent.BUTTON1_DOWN_MASK : InputEvent.BUTTON3_DOWN_MASK;
+				boolean popup = button == MouseEvent.BUTTON3;
+				dispatchMouse(MouseEvent.MOUSE_PRESSED, current, mask, button, popup);
+				dispatchMouse(MouseEvent.MOUSE_RELEASED, current, 0, button, popup);
+				dispatchMouse(MouseEvent.MOUSE_CLICKED, current, 0, button, popup);
+				synchronized (this) { lastClick = new Point(current); }
+			}
+			catch (RuntimeException exception) { failure = exception; }
+			finally { synchronized (this) { pendingClicks--; } }
+			if (failure != null) completion.completeExceptionally(failure);
+			else completion.complete(button == MouseEvent.BUTTON1 ? "SYNTHETIC_LEFT_CLICK" : "SYNTHETIC_RIGHT_CLICK");
 		});
 		return completion;
 	}
 
-	synchronized Point getPosition()
+	public synchronized Point getPosition()
 	{
 		return new Point(position);
 	}
 
-	synchronized boolean isOutside()
+	synchronized Point getLastClick() { return lastClick == null ? null : new Point(lastClick); }
+	synchronized boolean isActionActive() { return pendingClicks > 0 || moving && !preemptibleMove; }
+
+	public synchronized boolean isOutside()
 	{
 		outside = !inside(position);
 		return outside;
@@ -272,27 +354,42 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		return moving;
 	}
 
-	synchronized void cancel(String reason)
+	void cancel(String reason)
 	{
-		if (!moving)
+		synchronized (this) { clickGeneration++; }
+		cancel(null, reason);
+	}
+
+	public void cancelRest(String reason, GenericClientActivityContext context)
+	{
+		CompletableFuture<String> rest;
+		synchronized (this) { rest = preemptibleMove && (context == null || moveContext == context) ? activeMove : null; }
+		if (rest != null) cancel(rest, reason);
+	}
+
+	private void cancel(CompletableFuture<String> owner, String reason)
+	{
+		CompletableFuture<String> completion;
+		synchronized (this)
 		{
-			return;
+			if (!moving || owner != null && activeMove != owner) return;
+			completion = detachMove();
 		}
+		if (completion != null) completion.completeExceptionally(new IllegalStateException("Synthetic mouse cancelled: " + reason));
+		reporter.accept("SYNTHETIC_MOUSE_CANCELLED reason=" + reason);
+	}
+
+	private CompletableFuture<String> detachMove()
+	{
 		moving = false;
-		for (ScheduledFuture<?> future : new ArrayList<>(pending))
-		{
-			future.cancel(false);
-		}
+		preemptibleMove = false;
+		moveContext = null;
+		for (ScheduledFuture<?> future : new ArrayList<>(pending)) future.cancel(false);
 		pending.clear();
 		effects.endPath();
 		CompletableFuture<String> completion = activeMove;
 		activeMove = null;
-		if (completion != null)
-		{
-			completion.completeExceptionally(
-				new IllegalStateException("Synthetic mouse cancelled: " + reason));
-		}
-		reporter.accept("SYNTHETIC_MOUSE_CANCELLED reason=" + reason);
+		return completion;
 	}
 
 	private void dispatchMove(Point point, int pathIndex)
@@ -319,16 +416,25 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		effects.advancePath(pathIndex);
 	}
 
-	private synchronized void captureRealPosition(MouseEvent event, boolean exited)
+	private void captureRealPosition(MouseEvent event, boolean exited)
 	{
 		if (event instanceof GenericClientSyntheticMouseEvent)
 		{
 			return;
 		}
-		position = event.getPoint();
-		outside = exited || !inside(position);
-		effects.updateCursor(position, outside);
-		effects.recordPoint(position);
+		Point physical = event.getPoint();
+		boolean physicalOutside;
+		synchronized (this)
+		{
+			position = physical;
+			outside = exited || !inside(position);
+			physicalOutside = outside;
+			if (event.getID() == MouseEvent.MOUSE_PRESSED) lastClick = new Point(physical);
+		}
+		cancelRest("physical_input", null);
+		effects.updateCursor(physical, physicalOutside);
+		effects.recordPoint(physical);
+		physicalMovementListener.accept(new Point(physical));
 	}
 
 	private void finishMove(Point destination, CompletableFuture<String> completion)
@@ -350,6 +456,8 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 			position = new Point(destination);
 			outside = destinationOutside;
 			moving = false;
+			preemptibleMove = false;
+			moveContext = null;
 			activeMove = null;
 			pending.removeIf(ScheduledFuture::isDone);
 		}
@@ -416,19 +524,22 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 		}
 	}
 
-	private void schedule(Runnable runnable, long delayMillis)
+	private void schedule(Runnable runnable, long delayMillis, CompletableFuture<String> owner,
+		GenericClientActivityContext context)
 	{
-		ScheduledFuture<?> future = executor.schedule(() ->
+		ScheduledFuture<?> future = executor.schedule(() -> SwingUtilities.invokeLater(() ->
 		{
-			synchronized (GenericClientSyntheticMouse.this)
+			synchronized (this)
 			{
-				if (closed || !moving)
-				{
-					return;
-				}
+				if (closed || !moving || activeMove != owner) return;
+			}
+			if (context != null && !context.isInputAllowed())
+			{
+				cancel(owner, "action_cancelled");
+				return;
 			}
 			runnable.run();
-		}, Math.max(0L, delayMillis), TimeUnit.MILLISECONDS);
+		}), Math.max(0L, delayMillis), TimeUnit.MILLISECONDS);
 		pending.add(future);
 	}
 
@@ -503,26 +614,17 @@ final class GenericClientSyntheticMouse implements AutoCloseable
 	}
 
 	@Override
-	public synchronized void close()
+	public void close()
 	{
-		if (closed)
+		CompletableFuture<String> completion;
+		synchronized (this)
 		{
-			return;
+			if (closed) return;
+			closed = true;
+			completion = detachMove();
 		}
-		closed = true;
-		moving = false;
-		for (ScheduledFuture<?> future : new ArrayList<>(pending))
-		{
-			future.cancel(false);
-		}
-		pending.clear();
-		effects.endPath();
 		canvas.removeMouseMotionListener(realMouseListener);
 		canvas.removeMouseListener(realMouseListener);
-		if (activeMove != null)
-		{
-			activeMove.completeExceptionally(new IllegalStateException("Synthetic mouse closed"));
-			activeMove = null;
-		}
+		if (completion != null) completion.completeExceptionally(new IllegalStateException("Synthetic mouse closed"));
 	}
 }

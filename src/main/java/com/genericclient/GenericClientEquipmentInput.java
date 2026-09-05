@@ -259,7 +259,7 @@ final class GenericClientEquipmentInput
 		for (int id : ids)
 		{
 			Widget widget = client.getWidget(id);
-			if (!GenericClientInventoryInput.isVisible(widget))
+			if (!GenericClientWidgets.isVisible(widget))
 			{
 				continue;
 			}

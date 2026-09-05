@@ -65,6 +65,7 @@ final class GenericClientSessionController implements AutoCloseable
 
 	private CompletableFuture<String> activeOperation;
 	private boolean loginClickIssued;
+	private volatile boolean loginAttemptObserved;
 	private long loginWorldSettleDeadline;
 	private int loginScreenAttempt;
 	private int logoutEscapeAttempts;
@@ -190,9 +191,9 @@ final class GenericClientSessionController implements AutoCloseable
 						return;
 					}
 					long when = System.currentTimeMillis();
-					canvas.dispatchEvent(new KeyEvent(
+					canvas.dispatchEvent(new GenericClientSyntheticKeyEvent(
 						canvas, KeyEvent.KEY_PRESSED, when, 0, KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED));
-					canvas.dispatchEvent(new KeyEvent(
+					canvas.dispatchEvent(new GenericClientSyntheticKeyEvent(
 						canvas, KeyEvent.KEY_RELEASED, when, 0, KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED));
 					result.complete("escape");
 				});
@@ -243,6 +244,8 @@ final class GenericClientSessionController implements AutoCloseable
 			}
 			activeOperation = new CompletableFuture<>();
 			operation = activeOperation;
+			loginClickIssued = false;
+			loginAttemptObserved = false;
 			loginScreenAttempt = 0;
 			loginWorldSettleDeadline = 0L;
 		}
@@ -363,6 +366,12 @@ final class GenericClientSessionController implements AutoCloseable
 		}
 		if (gameState == GameState.LOGIN_SCREEN)
 		{
+			if (loginAttemptObserved)
+			{
+				reporter.accept("SESSION_LOGIN_REJECTED returned_to_login_screen");
+				failActive("Login attempt returned to the login screen");
+				return;
+			}
 			if (view.launcherDisplayName() == null || view.launcherDisplayName().trim().isEmpty())
 			{
 				failActive("Jagex Launcher session is unavailable");
@@ -384,6 +393,14 @@ final class GenericClientSessionController implements AutoCloseable
 			return;
 		}
 		schedule(() -> advanceLogin(deadline), pollMillis);
+	}
+
+	synchronized void onGameStateChanged(GameState gameState)
+	{
+		if (gameState == GameState.LOGGING_IN && activeOperation != null && loginClickIssued)
+		{
+			loginAttemptObserved = true;
+		}
 	}
 
 	private void dismissClickToPlay(long deadline)

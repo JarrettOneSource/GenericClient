@@ -46,6 +46,7 @@ public class GenericClientControlServerTest
 			text -> CompletableFuture.completedFuture("ACCOUNT_NOTE_UPDATED"),
 			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
 			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			new GenericClientSceneHighlights(Collections::emptyList),
 			messages::add);
 		try
 		{
@@ -98,6 +99,8 @@ public class GenericClientControlServerTest
 			},
 			message -> { },
 			message -> { });
+		GenericClientSceneHighlights sceneHighlights = new GenericClientSceneHighlights(
+			Collections::emptyList);
 		GenericClientControlServer server = new GenericClientControlServer(
 			0,
 			host,
@@ -126,6 +129,7 @@ public class GenericClientControlServerTest
 			},
 			() -> CompletableFuture.completedFuture(screenshot),
 			() -> CompletableFuture.completedFuture(endedBreak),
+			sceneHighlights,
 			message -> { });
 		try
 		{
@@ -193,6 +197,21 @@ public class GenericClientControlServerTest
 				server, "screenshot.capture", new LinkedHashMap<>());
 			assertEquals("image/png",
 				((Map<String, Object>) screenshotResponse.get("result")).get("mime_type"));
+			Map<String, Object> tile = new LinkedHashMap<>();
+			tile.put("x", 2746);
+			tile.put("y", 2799);
+			tile.put("plane", 0);
+			Map<String, Object> marker = new LinkedHashMap<>();
+			marker.put("tile", tile);
+			Map<String, Object> highlightParameters = new LinkedHashMap<>();
+			highlightParameters.put("markers", Collections.singletonList(marker));
+			Map<String, Object> highlighted = post(
+				server, "scene.highlight", highlightParameters);
+			assertEquals(1.0,
+				((Map<String, Object>) highlighted.get("result")).get("marker_count"));
+			assertEquals(1, sceneHighlights.visibleMarkers().size());
+			post(server, "scene.clear", new LinkedHashMap<>());
+			assertTrue(sceneHighlights.visibleMarkers().isEmpty());
 			Map<String, Object> accountResponse = post(server, "account.snapshot", new LinkedHashMap<>());
 			Map<String, Object> account = (Map<String, Object>) accountResponse.get("result");
 			assertEquals("Player", ((Map<String, Object>) account.get("player")).get("name"));
@@ -325,7 +344,7 @@ public class GenericClientControlServerTest
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
+			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
 			Collections.emptyList());
 	}
 }

@@ -69,6 +69,35 @@ public class GenericClientScriptOverlayTest
 		assertEquals("1:05", GenericClientScriptOverlay.formatRuntime(65_000L));
 	}
 
+	@Test
+	public void sizesForFullScriptNameAndStateWithoutTruncatingThem()
+	{
+		GenericClientActiveScript script = new GenericClientActiveScript(
+			"long-name",
+			"Monkey Madness prison automation with a deliberately long name",
+			"Long overlay text.",
+			"WAITING",
+			0L,
+			Collections.emptyList(),
+			Collections.emptyMap(),
+			Collections.emptyList(),
+			Collections.emptyList());
+		GenericClientScriptOverlay overlay = new GenericClientScriptOverlay(
+			() -> script,
+			() -> "questing",
+			() -> "waiting_for_the_complete_prison_guard_route_to_clear");
+		BufferedImage image = new BufferedImage(700, 100, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D graphics = image.createGraphics();
+		try
+		{
+			assertTrue(overlay.render(graphics).width > 350);
+		}
+		finally
+		{
+			graphics.dispose();
+		}
+	}
+
 	private static Map<String, Object> row(String label, String value)
 	{
 		Map<String, Object> row = new java.util.LinkedHashMap<>();

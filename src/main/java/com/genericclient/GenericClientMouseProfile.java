@@ -6,10 +6,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -104,18 +102,7 @@ final class GenericClientMouseProfile
 		}
 
 		Files.createDirectories(path.getParent());
-		Path temporary = path.resolveSibling(path.getFileName() + ".tmp");
-		Files.writeString(temporary, new Gson().toJson(file), StandardCharsets.UTF_8);
-		try
-		{
-			Files.move(temporary, path,
-				StandardCopyOption.ATOMIC_MOVE,
-				StandardCopyOption.REPLACE_EXISTING);
-		}
-		catch (AtomicMoveNotSupportedException exception)
-		{
-			Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
-		}
+		GenericClientAtomicFile.write(path, new Gson().toJson(file));
 	}
 
 	String getProfileId()

@@ -12,6 +12,19 @@ import org.junit.Test;
 public class GenericClientBehaviorProfileTest
 {
 	@Test
+	public void reportsSeededRestRatesAndPreservesThemAcrossUnrelatedOverrides()
+	{
+		GenericClientBehaviorProfile generated = GenericClientBehaviorProfile.fromAccountHash(123);
+		Map<String, Object> profile = generated.toMap();
+		assertTrue("Rest rates must be part of the account profile", profile.get("cursor_rest") instanceof Map);
+		GenericClientBehaviorProfile custom = generated.withOverrides(new GenericClientBehaviorOverrides(
+			0.5, 0.5, 5, 0.02, 100, 20, 2, GenericClientBehaviorProfile.LongBreakMode.AFK,
+			0.1, GenericClientBehaviorProfile.Edge.LEFT, 500, 60, 50, GenericClientBehaviorProfile.DialogueInputMode.MOUSE));
+		assertEquals(profile.get("cursor_rest"), custom.toMap().get("cursor_rest"));
+		assertNotEquals(profile.get("cursor_rest"), GenericClientBehaviorProfile.fromAccountHash(456).toMap().get("cursor_rest"));
+	}
+
+	@Test
 	public void derivesAStableProfileWithoutExposingTheAccountHash()
 	{
 		long accountHash = 0x123456789ABCDEFL;
@@ -24,7 +37,7 @@ public class GenericClientBehaviorProfileTest
 		assertFalse(first.getSummary().contains(Long.toString(accountHash)));
 		assertFalse(first.toMap().toString().contains(Long.toString(accountHash)));
 		assertTrue(first.getTitle().contains(";"));
-		assertTrue(first.getSummary().contains("composite client interactions"));
+		assertTrue(first.getSummary().contains("per active hour"));
 	}
 
 	@Test(expected = IllegalArgumentException.class)
@@ -55,6 +68,13 @@ public class GenericClientBehaviorProfileTest
 			assertBetween(profile.getTypingWordsPerMinute(), 35, 100);
 			assertBetween(profile.getDialogueReadingPercent(), 0, 100);
 			assertBetween(profile.getReferenceDowntimePercent(), 0.0, 50.0);
+			assertBetween(profile.getWalkClickTypicalSeconds(), 2.0, 6.0);
+			assertBetween(profile.getWalkNearClickProbability(), 0.10, 0.30);
+			GenericClientBehaviorProfile.CursorStyle rest = profile.getCursorStyle();
+			assertBetween(rest.fidgetsPerMinute, 1, 8);
+			assertBetween(rest.driftPixels, 2, 8);
+			assertBetween(rest.relocationShare, 0.05, 0.25);
+			assertBetween(rest.anticipationProbability, 0.15, 0.55);
 			edges.add(profile.getIdleEdge());
 		}
 		assertEquals(EnumSet.allOf(GenericClientBehaviorProfile.Edge.class), edges);
@@ -123,6 +143,8 @@ public class GenericClientBehaviorProfileTest
 		assertEquals(profile.getDialogueReadingStyle(), value.get("dialogue_reading_style"));
 		assertEquals((long) profile.getDialogueWordsPerMinute(),
 			value.get("dialogue_words_per_minute"));
+		assertEquals(profile.getDialogueInputMode().name().toLowerCase(java.util.Locale.ROOT),
+			value.get("dialogue_input_mode"));
 	}
 
 	@Test
@@ -142,11 +164,16 @@ public class GenericClientBehaviorProfileTest
 			GenericClientBehaviorProfile.Edge.BOTTOM,
 			775,
 			90,
-			90));
+			90,
+			GenericClientBehaviorProfile.DialogueInputMode.KEYBOARD));
 
 		assertTrue(custom.isCustomized());
 		assertEquals(generated.getId(), custom.getId());
+		assertEquals(generated.getWalkClickTypicalSeconds(), custom.getWalkClickTypicalSeconds(), 0.0);
+		assertEquals(generated.getWalkNearClickProbability(), custom.getWalkNearClickProbability(), 0.0);
 		assertEquals(0.90, custom.getMicroBreakProbability(), 0.0);
+		assertEquals(GenericClientBehaviorProfile.DialogueInputMode.KEYBOARD,
+			custom.getDialogueInputMode());
 		assertEquals(0.70, custom.getCursorReleaseProbability(), 0.0);
 		assertEquals(10.0, custom.getShortBodyMedianSeconds(), 0.0);
 		assertEquals(0.25, custom.getShortTailProbability(), 0.0);
@@ -163,7 +190,7 @@ public class GenericClientBehaviorProfileTest
 		assertEquals(90, custom.getDialogueReadingPercent());
 		assertEquals("slow reader", custom.getDialogueReadingStyle());
 		assertTrue((Boolean) custom.toMap().get("customized"));
-		assertTrue(custom.getSummary().contains("90%"));
+		assertTrue(custom.getSummary().contains("32.4 micro breaks per active hour"));
 		assertTrue(custom.getSummary().contains("200 active minutes"));
 	}
 

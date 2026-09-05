@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
@@ -24,12 +25,13 @@ final class GenericClientSettingsPanel extends JPanel
 		GenericClientDashboardStyle.combo(new JComboBox<>(), 220);
 	private final JLabel recordingState = GenericClientDashboardStyle.small("");
 	private final JButton record = GenericClientDashboardStyle.button("Record");
+	private final JCheckBox showMouseTile = new JCheckBox("Show mouse tile");
 
 	private final GenericClientDashboardStyle.Chip profileChip =
 		GenericClientDashboardStyle.chip("Offline", GenericClientDashboardStyle.MUTED);
 	private final JLabel profileTitle = GenericClientDashboardStyle.strong("Profile loads after login");
 	private final JLabel breakState = GenericClientDashboardStyle.small("");
-	private final JSpinner microChance = spinner(35, 0, 100, 1);
+	private final JSpinner microRate = spinner(12.6, 0.0, GenericClientBehaviorProfile.MAX_MICRO_RATE_PER_ACTIVE_HOUR, 0.1);
 	private final JSpinner cursorReleaseChance = spinner(50, 0, 100, 1);
 	private final JSpinner microLength = spinner(5.0, 1.0, 119.0, 0.5);
 	private final JSpinner microTail = spinner(8, 0, 100, 1);
@@ -55,6 +57,9 @@ final class GenericClientSettingsPanel extends JPanel
 		5);
 	private final JSpinner dialogueReading = spinner(50, 0, 100, 5);
 	private final JLabel dialogueReadingStyle = GenericClientDashboardStyle.small("reads dialogue");
+	private final JComboBox<GenericClientBehaviorProfile.DialogueInputMode> dialogueInputMode =
+		GenericClientDashboardStyle.combo(
+			new JComboBox<>(GenericClientBehaviorProfile.DialogueInputMode.values()), 140);
 	private final JButton save = GenericClientDashboardStyle.primaryButton("Save custom");
 	private final JButton seeded = GenericClientDashboardStyle.ghostButton("Use seeded");
 	private final JLabel saveResult = GenericClientDashboardStyle.small("");
@@ -86,9 +91,14 @@ final class GenericClientSettingsPanel extends JPanel
 			}
 		});
 		GenericClientDashboardStyle.Card mouse = GenericClientDashboardStyle.card("Mouse", reload);
+		showMouseTile.setOpaque(false);
+		showMouseTile.setFocusPainted(false);
+		showMouseTile.setFont(GenericClientDashboardStyle.BODY_FONT);
+		showMouseTile.setForeground(GenericClientDashboardStyle.TEXT_SECONDARY);
 		mouse.put(GenericClientDashboardStyle.row("Effect", mouseEffect))
 			.put(GenericClientDashboardStyle.row("Profile", mouseProfile))
-			.put(GenericClientDashboardStyle.row("Recording", recordingState, record));
+			.put(GenericClientDashboardStyle.row("Recording", recordingState, record))
+			.put(showMouseTile);
 
 		save.addActionListener(event -> saveBehavior());
 		seeded.addActionListener(event ->
@@ -101,12 +111,13 @@ final class GenericClientSettingsPanel extends JPanel
 		footer.add(GenericClientDashboardStyle.inline(8, save, seeded), BorderLayout.WEST);
 		footer.add(saveResult, BorderLayout.CENTER);
 
+		microRate.setToolTipText("Skilling and questing rate. General activity uses 80%; travel uses 60%.");
 		GenericClientDashboardStyle.Card behavior = GenericClientDashboardStyle.card("Behavior");
 		behavior.put(GenericClientDashboardStyle.inline(10, profileChip, profileTitle, breakState))
 			.gap(18)
 			.put(GenericClientDashboardStyle.columns(28,
 				GenericClientDashboardStyle.group("Micro breaks",
-					GenericClientDashboardStyle.row("Chance", microChance, "%"),
+					GenericClientDashboardStyle.row("Rate", microRate, "/ active h"),
 					GenericClientDashboardStyle.row("Length", microLength, "s"),
 					GenericClientDashboardStyle.row("Tail", microTail, "%"),
 					GenericClientDashboardStyle.row("Phase boost", phaseBoost, "×")),
@@ -118,19 +129,21 @@ final class GenericClientSettingsPanel extends JPanel
 			.gap(18)
 			.put(GenericClientDashboardStyle.columns(28,
 				GenericClientDashboardStyle.group("Input",
-					GenericClientDashboardStyle.row("Offscreen chance", cursorReleaseChance, "%"),
+					GenericClientDashboardStyle.row("Offscreen chance", cursorReleaseChance, "% / break"),
 					GenericClientDashboardStyle.row("Idle side", idleEdge, ""),
 					GenericClientDashboardStyle.row("Move duration", mouseDuration, "ms"),
 					GenericClientDashboardStyle.row("Typing speed", typingWordsPerMinute, "WPM"),
+					GenericClientDashboardStyle.row("Dialogue input", dialogueInputMode, ""),
 					GenericClientDashboardStyle.row(
 						"Dialogue reading", dialogueReading, dialogueReadingStyle)),
 				GenericClientDashboardStyle.spacer()))
 			.gap(20)
 			.put(footer);
 		behaviorControls = Arrays.asList(
-			microChance, microLength, microTail, phaseBoost, cursorReleaseChance,
+			microRate, microLength, microTail, phaseBoost, cursorReleaseChance,
 			longInterval, longLength, longStyle, styleSwitchChance,
-			idleEdge, mouseDuration, typingWordsPerMinute, dialogueReading, save, seeded);
+			idleEdge, mouseDuration, typingWordsPerMinute, dialogueInputMode,
+			dialogueReading, save, seeded);
 
 		JPanel page = GenericClientDashboardStyle.page();
 		page.add(GenericClientDashboardStyle.stack(16,
@@ -149,7 +162,8 @@ final class GenericClientSettingsPanel extends JPanel
 		List<String> profiles,
 		GenericClientMouseEffect effect,
 		boolean recordingActive,
-		int recordedTemplates)
+		int recordedTemplates,
+		boolean mouseTileVisible)
 	{
 		updatingMouse = true;
 		try
@@ -169,6 +183,7 @@ final class GenericClientSettingsPanel extends JPanel
 			}
 			mouseProfile.setSelectedItem(currentProfile);
 			mouseEffect.setSelectedItem(effect);
+			showMouseTile.setSelected(mouseTileVisible);
 			recording = recordingActive;
 			recordingState.setText(recording ? recordedTemplates + " samples captured" : "");
 			record.setText(recording ? "Stop recording" : "Record");
@@ -198,7 +213,7 @@ final class GenericClientSettingsPanel extends JPanel
 		profileChip.setText(customized ? "Custom" : "Seeded");
 		profileChip.setTone(customized ? GenericClientDashboardStyle.ACCENT : GenericClientDashboardStyle.MUTED);
 		profileTitle.setText(String.valueOf(profile.get("title")));
-		breakState.setText("ready".equals(state)
+		breakState.setText("long_break_deferred".equals(state) ? "Long break deferred" : "ready".equals(state)
 			? ""
 			: GenericClientDashboardStyle.humanize(state) + " · " + formatDuration(remaining) + " left");
 		setBehaviorAvailable(true);
@@ -211,7 +226,7 @@ final class GenericClientSettingsPanel extends JPanel
 		updatingBehavior = true;
 		try
 		{
-			microChance.setValue(percent(profile.get("micro_break_probability")));
+			microRate.setValue(number(profile.get("micro_rate_per_active_hour")).doubleValue());
 			cursorReleaseChance.setValue(percent(profile.get("cursor_release_probability")));
 			microLength.setValue(roundTo(number(profile.get("short_body_median_seconds")).doubleValue(), 0.5));
 			microTail.setValue(percent(profile.get("short_tail_probability")));
@@ -226,6 +241,8 @@ final class GenericClientSettingsPanel extends JPanel
 			mouseDuration.setValue(number(profile.get("mouse_move_duration_millis")).intValue());
 			typingWordsPerMinute.setValue(number(profile.get("typing_words_per_minute")).intValue());
 			dialogueReading.setValue(number(profile.get("dialogue_reading_percent")).intValue());
+			dialogueInputMode.setSelectedItem(GenericClientBehaviorProfile.DialogueInputMode.valueOf(
+				String.valueOf(profile.get("dialogue_input_mode")).toUpperCase(Locale.ROOT)));
 			dialogueReadingStyle.setText(String.valueOf(profile.get("dialogue_reading_style")));
 			profileKey = nextKey;
 			behaviorDirty = false;
@@ -260,12 +277,19 @@ final class GenericClientSettingsPanel extends JPanel
 				actions.setMouseProfile(String.valueOf(mouseProfile.getSelectedItem()));
 			}
 		});
+		showMouseTile.addActionListener(event ->
+		{
+			if (!updatingMouse)
+			{
+				actions.setShowMouseTile(showMouseTile.isSelected());
+			}
+		});
 	}
 
 	private void wireBehaviorDirtyState()
 	{
 		ChangeListener change = event -> markBehaviorDirty();
-		microChance.addChangeListener(change);
+		microRate.addChangeListener(change);
 		cursorReleaseChance.addChangeListener(change);
 		microLength.addChangeListener(change);
 		microTail.addChangeListener(change);
@@ -283,6 +307,7 @@ final class GenericClientSettingsPanel extends JPanel
 		});
 		longStyle.addActionListener(event -> markBehaviorDirty());
 		idleEdge.addActionListener(event -> markBehaviorDirty());
+		dialogueInputMode.addActionListener(event -> markBehaviorDirty());
 	}
 
 	private void markBehaviorDirty()
@@ -299,7 +324,7 @@ final class GenericClientSettingsPanel extends JPanel
 		try
 		{
 			GenericClientBehaviorOverrides overrides = new GenericClientBehaviorOverrides(
-				((Number) microChance.getValue()).doubleValue() / 100.0,
+				((Number) microRate.getValue()).doubleValue() / GenericClientBehaviorProfile.MAX_MICRO_RATE_PER_ACTIVE_HOUR,
 				((Number) cursorReleaseChance.getValue()).doubleValue() / 100.0,
 				((Number) microLength.getValue()).doubleValue(),
 				((Number) microTail.getValue()).doubleValue() / 100.0,
@@ -311,7 +336,8 @@ final class GenericClientSettingsPanel extends JPanel
 				(GenericClientBehaviorProfile.Edge) idleEdge.getSelectedItem(),
 				((Number) mouseDuration.getValue()).intValue(),
 				((Number) typingWordsPerMinute.getValue()).intValue(),
-				((Number) dialogueReading.getValue()).intValue());
+				((Number) dialogueReading.getValue()).intValue(),
+				(GenericClientBehaviorProfile.DialogueInputMode) dialogueInputMode.getSelectedItem());
 			setSaveResult(actions.saveBehaviorOverrides(overrides), GenericClientDashboardStyle.MUTED);
 			behaviorDirty = false;
 			profileKey = null;

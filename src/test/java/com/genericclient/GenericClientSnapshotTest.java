@@ -2,6 +2,7 @@ package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.awt.Point;
@@ -17,6 +18,21 @@ import org.junit.Test;
 public class GenericClientSnapshotTest
 {
 	@Test
+	public void lockedObstacleFeedbackIgnoresPlayerChatAndDifferentWords()
+	{
+		for (GenericClientGameMessageBuffer.Message message : Arrays.asList(
+			new GenericClientGameMessageBuffer.Message(15, "publicchat", "Other", "", "This door is locked."),
+			new GenericClientGameMessageBuffer.Message(15, "privatechat", "Other", "", "It is locked."),
+			new GenericClientGameMessageBuffer.Message(15, "gamemessage", "", "", "Your path is blocked."),
+			new GenericClientGameMessageBuffer.Message(15, "spam", "", "", "You have unlocked the door.")))
+		{
+			GenericClientSnapshot snapshot = new GenericClientSnapshot(15, "LOGGED_IN", 240, null, List.of(),
+				GenericClientAccountSnapshot.empty(), GenericClientQuestSnapshot.empty(), List.of(message));
+			assertNull(message.getText(), snapshot.lockedObstacleMessageSince(15));
+		}
+	}
+
+	@Test
 	@SuppressWarnings("unchecked")
 	public void queriesNearbyNpcsByNameActionAndLimit()
 	{
@@ -24,13 +40,13 @@ public class GenericClientSnapshotTest
 			42,
 			"LOGGED_IN",
 			231,
-			new GenericClientSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
+			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
 			Arrays.asList(
-				new GenericClientSnapshot.NpcSnapshot(
+				new GenericClientWorldSnapshot.NpcSnapshot(
 					1, 100, "Banker", 3201, 3200, 0, 1, 0, -1, null, Arrays.asList("Talk-to", "Bank")),
-				new GenericClientSnapshot.NpcSnapshot(
+				new GenericClientWorldSnapshot.NpcSnapshot(
 					2, 101, "Banker", 3205, 3200, 0, 5, 0, -1, null, Collections.singletonList("Talk-to")),
-				new GenericClientSnapshot.NpcSnapshot(
+				new GenericClientWorldSnapshot.NpcSnapshot(
 					3, 102, "Guard", 3202, 3200, 0, 2, 21, -1, null, Collections.singletonList("Attack"))));
 
 		Map<String, Object> where = new LinkedHashMap<>();
@@ -56,8 +72,8 @@ public class GenericClientSnapshotTest
 			42,
 			"LOGGED_IN",
 			231,
-			new GenericClientSnapshot.PlayerSnapshot("Player", 2936, 3460, 0, -1),
-			Collections.singletonList(new GenericClientSnapshot.NpcSnapshot(
+			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 2936, 3460, 0, -1),
+			Collections.singletonList(new GenericClientWorldSnapshot.NpcSnapshot(
 				7, 3999, "Experiment", 2935, 3461, 0, 1, 53, -1, null, 2,
 				Collections.singletonList("Attack"))));
 		Map<String, Object> query = new LinkedHashMap<>();
@@ -79,8 +95,8 @@ public class GenericClientSnapshotTest
 			42,
 			"LOGGED_IN",
 			231,
-			new GenericClientSnapshot.PlayerSnapshot("Player", 3017, 3194, 0, 0),
-			Collections.singletonList(new GenericClientSnapshot.NpcSnapshot(
+			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3017, 3194, 0, 0),
+			Collections.singletonList(new GenericClientWorldSnapshot.NpcSnapshot(
 				7, 1448, "Thief", 3013, 3196, 0, 4, 16, -1, null, 1,
 				Collections.singletonList("Attack"), true, true, false, false, -1, -1,
 				new Point(119, 127), new Rectangle(90, 100, 50, 80))));
@@ -110,7 +126,7 @@ public class GenericClientSnapshotTest
 			15,
 			"LOGGED_IN",
 			231,
-			new GenericClientSnapshot.PlayerSnapshot("Player", 3017, 3194, 0, 0),
+			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3017, 3194, 0, 0),
 			Collections.emptyList(),
 			GenericClientAccountSnapshot.empty(),
 			GenericClientQuestSnapshot.empty(),
@@ -143,7 +159,7 @@ public class GenericClientSnapshotTest
 			true,
 			new int[0],
 			Collections.singletonList(new GenericClientQuestSnapshot.ObjectSnapshot(
-				2000, "Door", "wall", 102, 201, 0, 1, Collections.singletonList("Open"), 1, 0)),
+				2000, "Door", "wall", 102, 201, 0, 1, Collections.singletonList("Open"), 1, 0, 1, 1)),
 			GenericClientQuestSnapshot.DialogueSnapshot.closed());
 		GenericClientSnapshot doorSnapshot = sceneSnapshot(flags, withDoor);
 		GenericClientQuestSnapshot withDrawers = new GenericClientQuestSnapshot(
@@ -151,7 +167,7 @@ public class GenericClientSnapshotTest
 			new int[0],
 			Collections.singletonList(new GenericClientQuestSnapshot.ObjectSnapshot(
 				2001, "Drawers", "game", 102, 201, 0, 1,
-				Collections.singletonList("Open"), 0, 0)),
+				Collections.singletonList("Open"), 0, 0, 1, 1)),
 			GenericClientQuestSnapshot.DialogueSnapshot.closed());
 		GenericClientSnapshot drawersSnapshot = sceneSnapshot(flags, withDrawers);
 		GenericClientQuestSnapshot withGate = new GenericClientQuestSnapshot(
@@ -159,7 +175,7 @@ public class GenericClientSnapshotTest
 			new int[0],
 			Collections.singletonList(new GenericClientQuestSnapshot.ObjectSnapshot(
 				190, "Gate", "game", 102, 201, 0, 1,
-				Collections.singletonList("Open"), 0, 0)),
+				Collections.singletonList("Open"), 0, 0, 1, 1)),
 			GenericClientQuestSnapshot.DialogueSnapshot.closed());
 		GenericClientSnapshot gateSnapshot = sceneSnapshot(flags, withGate);
 		GenericClientSnapshot wallSnapshot = sceneSnapshot(flags, GenericClientQuestSnapshot.empty());
@@ -179,13 +195,31 @@ public class GenericClientSnapshotTest
 			15,
 			"LOGGED_IN",
 			240,
-			new GenericClientSnapshot.PlayerSnapshot("Player", 101, 201, 0, 0),
+			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 101, 201, 0, 0),
 			Collections.emptyList(),
 			GenericClientAccountSnapshot.empty(),
 			quest,
 			Collections.emptyList(),
 			new GenericClientSceneCollision(true, 100, 200, 0, flags));
 	}
+
+	@Test
+	public void matchesEvenSizedDoorFootprintsAndKeepsClosedDoorCrossingsCardinal()
+	{
+		int[][] flags = new int[8][8];
+		for (int x = 2; x <= 5; x++)
+			for (int y = 2; y <= 5; y++) flags[x][y] = CollisionDataFlag.BLOCK_MOVEMENT_FULL;
+		GenericClientSnapshot snapshot = sceneSnapshot(flags, new GenericClientQuestSnapshot(true, new int[0],
+			Collections.singletonList(new GenericClientQuestSnapshot.ObjectSnapshot(
+				1967, "Tree door", "game", 103, 203, 0, 2, Collections.singletonList("Open"), 0, 0, 2, 4)),
+			GenericClientQuestSnapshot.DialogueSnapshot.closed()));
+		assertTrue(snapshot.canPlanMove(104, 201, 0, 0, 1, false));
+		assertTrue(snapshot.canPlanMove(104, 205, 0, 0, 1, false));
+		assertFalse(snapshot.canPlanMove(102, 201, 0, 0, 1, false));
+		assertFalse(snapshot.canPlanMove(105, 201, 0, 0, 1, false));
+		assertFalse(snapshot.canPlanMove(103, 201, 0, 1, 1, false));
+	}
+
 
 	@Test
 	@SuppressWarnings("unchecked")
@@ -195,7 +229,7 @@ public class GenericClientSnapshotTest
 			43,
 			"LOGGED_IN",
 			231,
-			new GenericClientSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
+			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
 			Collections.emptyList(),
 			new GenericClientAccountSnapshot(
 				true,
@@ -241,13 +275,15 @@ public class GenericClientSnapshotTest
 			44,
 			"LOGGED_IN",
 			231,
-			new GenericClientSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
+			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
 			Collections.emptyList());
 
 		Map<String, Object> account = (Map<String, Object>) snapshot.read("account", Collections.emptyMap());
 		Map<String, Object> runtime = (Map<String, Object>) account.get("runtime");
 		Map<String, Object> player = (Map<String, Object>) account.get("player");
 
+		assertEquals(3L, runtime.get("api_version"));
+		assertEquals(runtime, snapshot.read("runtime", Collections.emptyMap()));
 		assertEquals(44L, runtime.get("game_tick"));
 		assertEquals("Player", player.get("name"));
 		assertTrue(account.containsKey("skills"));
@@ -268,7 +304,7 @@ public class GenericClientSnapshotTest
 			45,
 			"LOGGED_IN",
 			231,
-			new GenericClientSnapshot.PlayerSnapshot(
+			new GenericClientWorldSnapshot.PlayerSnapshot(
 				"Player", 3200, 3200, 0, -1, 422, "Goblin"),
 			Collections.emptyList());
 
@@ -286,7 +322,7 @@ public class GenericClientSnapshotTest
 			46,
 			"LOGGED_IN",
 			231,
-			new GenericClientSnapshot.PlayerSnapshot(
+			new GenericClientWorldSnapshot.PlayerSnapshot(
 				"Player",
 				3200,
 				3200,

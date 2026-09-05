@@ -14,8 +14,18 @@ final class GenericClientCameraOwner
 
 	synchronized Operation begin()
 	{
-		active = new Operation(this);
+		return begin(GenericClientActivityContext.none());
+	}
+
+	synchronized Operation begin(GenericClientActivityContext context)
+	{
+		active = new Operation(this, context);
 		return active;
+	}
+
+	synchronized void cancel(GenericClientActivityContext context)
+	{
+		if (active != null && active.context.ownsSameInput(context)) active = null;
 	}
 
 	synchronized void cancel()
@@ -25,12 +35,12 @@ final class GenericClientCameraOwner
 
 	private synchronized boolean isActive(Operation operation)
 	{
-		return active == operation;
+		return active == operation && operation.context.isInputAllowed();
 	}
 
 	private synchronized boolean face(Operation operation, int yaw, int pitch)
 	{
-		if (active != operation)
+		if (!isActive(operation))
 		{
 			return false;
 		}
@@ -42,10 +52,12 @@ final class GenericClientCameraOwner
 	static final class Operation
 	{
 		private final GenericClientCameraOwner owner;
+		private final GenericClientActivityContext context;
 
-		private Operation(GenericClientCameraOwner owner)
+		private Operation(GenericClientCameraOwner owner, GenericClientActivityContext context)
 		{
 			this.owner = owner;
+			this.context = context;
 		}
 
 		boolean isActive()

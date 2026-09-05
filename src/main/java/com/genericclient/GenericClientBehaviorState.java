@@ -2,10 +2,11 @@ package com.genericclient;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.DoubleSupplier;
 
 final class GenericClientBehaviorState
 {
-	static final String SCHEMA = "genericclient_behavior_state.v1";
+	static final String SCHEMA = "genericclient_behavior_state.v3";
 	private static final int MAX_PHASE_HISTORY = 256;
 
 	private String schema = SCHEMA;
@@ -13,9 +14,15 @@ final class GenericClientBehaviorState
 	private long totalActiveMillis;
 	private long activeMillisSinceLongBreak;
 	private double longHazardBudget;
+	private double microPressure;
+	private double microBudget;
 	private String breakType = "none";
 	private String longBreakMode = "none";
 	private long breakEndEpochMillis;
+	private long breakStartedEpochMillis;
+	private String breakEndReason = "completed";
+	private boolean longBreakDeferred;
+	private long longDeferredUntilActiveMillis;
 	private long microBreakCount;
 	private long longBreakCount;
 	private long cursorReleaseCount;
@@ -28,10 +35,20 @@ final class GenericClientBehaviorState
 	{
 	}
 
-	GenericClientBehaviorState(String profileId, double longHazardBudget)
+	GenericClientBehaviorState(String profileId, double longHazardBudget, double microBudget)
 	{
 		this.profileId = profileId;
 		this.longHazardBudget = longHazardBudget;
+		this.microBudget = microBudget;
+	}
+
+	double getMicroPressure() { return microPressure; }
+	double getMicroBudget() { return microBudget; }
+	void addMicroPressure(double pressure) { microPressure += pressure; }
+	void resetMicroPressure(double nextBudget)
+	{
+		microPressure = 0.0;
+		microBudget = nextBudget;
 	}
 
 	String getProfileId()
@@ -60,7 +77,21 @@ final class GenericClientBehaviorState
 	{
 		activeMillisSinceLongBreak = 0L;
 		longHazardBudget = nextBudget;
+		longBreakDeferred = false;
+		longDeferredUntilActiveMillis = 0L;
 	}
+
+	void deferLongBreak(long refractoryMillis)
+	{
+		longBreakDeferred = true;
+		longDeferredUntilActiveMillis = Math.addExact(totalActiveMillis, refractoryMillis);
+	}
+
+	boolean isLongBreakDeferred() { return longBreakDeferred; }
+	long getLongDeferredUntilActiveMillis() { return longDeferredUntilActiveMillis; }
+	long getBreakStartedEpochMillis() { return breakStartedEpochMillis; }
+	String getBreakEndReason() { return breakEndReason; }
+	void interruptBreak(String reason) { breakEndReason = reason; }
 
 	double getLongHazardBudget()
 	{
@@ -82,11 +113,13 @@ final class GenericClientBehaviorState
 		return breakEndEpochMillis;
 	}
 
-	void startBreak(String type, String mode, long endEpochMillis)
+	void startBreak(String type, String mode, long startedEpochMillis, long endEpochMillis)
 	{
 		breakType = type;
 		longBreakMode = mode;
 		breakEndEpochMillis = endEpochMillis;
+		breakStartedEpochMillis = startedEpochMillis;
+		breakEndReason = "completed";
 		if ("micro".equals(type))
 		{
 			microBreakCount++;
@@ -102,6 +135,8 @@ final class GenericClientBehaviorState
 		breakType = "none";
 		longBreakMode = "none";
 		breakEndEpochMillis = 0L;
+		breakStartedEpochMillis = 0L;
+		breakEndReason = "completed";
 	}
 
 	long getMicroBreakCount()
@@ -167,10 +202,28 @@ final class GenericClientBehaviorState
 		savedAtEpochMillis = epochMillis;
 	}
 
+	void migrate(DoubleSupplier initialMicroBudget)
+	{
+		if ("genericclient_behavior_state.v1".equals(schema))
+		{
+			schema = "genericclient_behavior_state.v2";
+			breakStartedEpochMillis = "none".equals(breakType) ? 0L : Math.min(savedAtEpochMillis, breakEndEpochMillis);
+			breakEndReason = "completed";
+		}
+		if ("genericclient_behavior_state.v2".equals(schema))
+		{
+			schema = SCHEMA;
+			resetMicroPressure(initialMicroBudget.getAsDouble());
+		}
+	}
+
 	void validate(String expectedProfileId)
 	{
 		validateIdentity(expectedProfileId);
 		validateProgress();
+		if (!Double.isFinite(microPressure) || microPressure < 0.0 ||
+			!Double.isFinite(microBudget) || microBudget <= 0.0)
+			throw new IllegalArgumentException("Behavior state has invalid micro-break pressure");
 		validateBreak();
 		validatePhaseHistory();
 	}
@@ -192,7 +245,9 @@ final class GenericClientBehaviorState
 		if (totalActiveMillis < 0L || activeMillisSinceLongBreak < 0L ||
 			activeMillisSinceLongBreak > totalActiveMillis ||
 			!Double.isFinite(longHazardBudget) || longHazardBudget <= 0.0 ||
-			microBreakCount < 0L || longBreakCount < 0L || cursorReleaseCount < 0L)
+			microBreakCount < 0L || longBreakCount < 0L || cursorReleaseCount < 0L ||
+			longDeferredUntilActiveMillis < 0L || breakStartedEpochMillis < 0L ||
+			breakEndReason == null || breakEndReason.isBlank())
 		{
 			throw new IllegalArgumentException("Behavior state has invalid long-break progress");
 		}
@@ -243,9 +298,15 @@ final class GenericClientBehaviorState
 		value.put("total_active_millis", totalActiveMillis);
 		value.put("active_millis_since_long_break", activeMillisSinceLongBreak);
 		value.put("long_hazard_budget", longHazardBudget);
+		value.put("micro_pressure", microPressure);
+		value.put("micro_budget", microBudget);
 		value.put("break_type", breakType);
 		value.put("long_break_mode", longBreakMode);
 		value.put("break_end_epoch_millis", breakEndEpochMillis);
+		value.put("break_started_epoch_millis", breakStartedEpochMillis);
+		value.put("break_end_reason", breakEndReason);
+		value.put("long_break_deferred", longBreakDeferred);
+		value.put("long_deferred_until_active_millis", longDeferredUntilActiveMillis);
 		value.put("micro_break_count", microBreakCount);
 		value.put("long_break_count", longBreakCount);
 		value.put("cursor_release_count", cursorReleaseCount);

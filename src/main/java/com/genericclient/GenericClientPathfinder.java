@@ -4,17 +4,16 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
-import java.util.Set;
 import net.runelite.api.coords.WorldPoint;
 
 final class GenericClientPathfinder
 {
 	private static final int MAX_COORDINATE = 0x7FFF;
 	private static final int MAX_EXPANDED_NODES = 250_000;
+	static final int DOOR_TRAVERSAL_COST = 80;
 	private static final int[][] DIRECTIONS =
 	{
 		{-1, 0},
@@ -28,10 +27,23 @@ final class GenericClientPathfinder
 	};
 
 	private final GenericClientCollisionMap collisionMap;
+	private final int doorTraversalCost;
 
 	GenericClientPathfinder(GenericClientCollisionMap collisionMap)
 	{
+		this(collisionMap, DOOR_TRAVERSAL_COST);
+	}
+
+	GenericClientPathfinder(
+		GenericClientCollisionMap collisionMap,
+		int doorTraversalCost)
+	{
 		this.collisionMap = collisionMap;
+		if (doorTraversalCost < 0)
+		{
+			throw new IllegalArgumentException("Door traversal cost cannot be negative");
+		}
+		this.doorTraversalCost = doorTraversalCost;
 	}
 
 	Result find(WorldPoint start, WorldPoint destination, int within)
@@ -45,20 +57,19 @@ final class GenericClientPathfinder
 		int within,
 		EdgePolicy edgePolicy)
 	{
-		return find(start, destination, within, edgePolicy, MAX_EXPANDED_NODES);
+		return find(start, destination, within, edgePolicy, List.of());
 	}
 
-	private Result find(
-		WorldPoint start,
-		WorldPoint destination,
-		int within,
-		EdgePolicy edgePolicy,
-		int maximumExpandedNodes)
+	Result find(WorldPoint start, WorldPoint destination, int within,
+		EdgePolicy edgePolicy, List<GenericClientTransport> transports)
 	{
-		if (start.getPlane() != destination.getPlane())
-		{
-			return Result.failed(Status.UNSUPPORTED_PLANE, 0);
-		}
+		return find(start, destination, within, edgePolicy, MAX_EXPANDED_NODES, List.of(),
+			new GenericClientTransportGraph(transports));
+	}
+
+	private Result find(WorldPoint start, WorldPoint destination, int within,
+		EdgePolicy edgePolicy, int maximumExpandedNodes, List<WorldPoint> arrivalTiles, GenericClientTransportGraph graph)
+	{
 		if (within < 0)
 		{
 			throw new IllegalArgumentException("Arrival radius cannot be negative");
@@ -68,20 +79,33 @@ final class GenericClientPathfinder
 		{
 			return Result.failed(Status.UNREACHABLE, 0);
 		}
+		GenericClientTransportGraph.Estimate estimate = graph.toward(destination, within);
+		if (!estimate.connects(start)) return Result.failed(Status.UNSUPPORTED_PLANE, 0);
 
-		return new Search(start, destination, within, edgePolicy, maximumExpandedNodes).run();
+		return search(start, new Goal()
+		{
+			@Override public boolean reached(int x, int y, int plane)
+			{
+				return plane == destination.getPlane() && chebyshev(x, y, destination.getX(), destination.getY()) <= within &&
+					(arrivalTiles.isEmpty() || arrivalTiles.contains(new WorldPoint(x, y, plane)));
+			}
+			@Override public int estimate(int x, int y, int plane) { return estimate.at(x, y, plane); }
+		}, edgePolicy, maximumExpandedNodes, graph);
+	}
+
+	private Result search(WorldPoint start, Goal goal, EdgePolicy policy, int maximumExpandedNodes, GenericClientTransportGraph graph)
+	{
+		return new Search(start, goal, policy, maximumExpandedNodes, graph).run();
 	}
 
 	private final class Search
 	{
-		private final WorldPoint destination;
-		private final int within;
+		private final Goal goal;
 		private final EdgePolicy edgePolicy;
 		private final int maximumExpandedNodes;
 		private final int startPacked;
-		private final Map<Integer, Integer> costs = new HashMap<>();
-		private final Map<Integer, Integer> parents = new HashMap<>();
-		private final Set<Integer> closed = new HashSet<>();
+		private final GenericClientTransportGraph graph;
+		private final SearchNodes nodes = new SearchNodes();
 		private final PriorityQueue<Node> open = new PriorityQueue<>(Comparator
 			.comparingInt(Node::score)
 			.thenComparingInt(Node::getHeuristic)
@@ -91,21 +115,20 @@ final class GenericClientPathfinder
 
 		private Search(
 			WorldPoint start,
-			WorldPoint destination,
-			int within,
+			Goal goal,
 			EdgePolicy edgePolicy,
-			int maximumExpandedNodes)
+			int maximumExpandedNodes, GenericClientTransportGraph graph)
 		{
-			this.destination = destination;
-			this.within = within;
+			this.goal = goal;
 			this.edgePolicy = edgePolicy;
 			this.maximumExpandedNodes = maximumExpandedNodes;
+			this.graph = graph;
 			this.startPacked = pack(start.getX(), start.getY(), start.getPlane());
-			costs.put(startPacked, 0);
+			nodes.improve(startPacked, 0, startPacked, null);
 			open.add(new Node(
 				startPacked,
 				0,
-				heuristic(start.getX(), start.getY(), destination, within),
+				goal.estimate(start.getX(), start.getY(), start.getPlane()),
 				sequence++));
 		}
 
@@ -114,8 +137,7 @@ final class GenericClientPathfinder
 			while (!open.isEmpty())
 			{
 				Node current = open.poll();
-				Integer bestCost = costs.get(current.position);
-				if (bestCost == null || current.cost != bestCost || !closed.add(current.position))
+				if (!nodes.close(current.position, current.cost))
 				{
 					continue;
 				}
@@ -123,9 +145,9 @@ final class GenericClientPathfinder
 				int x = unpackX(current.position);
 				int y = unpackY(current.position);
 				int plane = unpackPlane(current.position);
-				if (chebyshev(x, y, destination.getX(), destination.getY()) <= within)
+				if (goal.reached(x, y, plane))
 				{
-					return Result.found(reconstruct(current.position, startPacked, parents), expanded);
+					return reconstruct(current.position, startPacked, nodes, expanded);
 				}
 				if (++expanded >= maximumExpandedNodes)
 				{
@@ -134,6 +156,11 @@ final class GenericClientPathfinder
 				for (int[] direction : DIRECTIONS)
 				{
 					expand(current, x, y, plane, direction);
+				}
+				for (GenericClientTransport transport : graph.from(current.position))
+				{
+					WorldPoint next = transport.destination;
+					add(current, next.getX(), next.getY(), next.getPlane(), transport.cost, transport);
 				}
 			}
 			return Result.failed(Status.UNREACHABLE, expanded);
@@ -149,73 +176,176 @@ final class GenericClientPathfinder
 			{
 				return;
 			}
-			int next = pack(nextX, nextY, plane);
-			if (closed.contains(next))
-			{
-				return;
-			}
 			int stepCost = direction[0] == 0 || direction[1] == 0 ? 10 : 14;
+			if (collisionMap.crossesDoor(x, y, plane, direction[0], direction[1])) stepCost += doorTraversalCost;
+			add(current, nextX, nextY, plane, stepCost, null);
+		}
+
+		private void add(Node current, int nextX, int nextY, int plane, int stepCost, GenericClientTransport transport)
+		{
+			int next = pack(nextX, nextY, plane);
 			int nextCost = current.cost + stepCost;
-			if (nextCost >= costs.getOrDefault(next, Integer.MAX_VALUE))
+			if (!nodes.improve(next, nextCost, current.position, transport))
 			{
 				return;
 			}
-			costs.put(next, nextCost);
-			parents.put(next, current.position);
 			open.add(new Node(
 				next,
 				nextCost,
-				heuristic(nextX, nextY, destination, within),
+				goal.estimate(nextX, nextY, plane),
 				sequence++));
 		}
 	}
 
-	Result findSegment(
-		WorldPoint start,
-		WorldPoint destination,
-		int within,
-		EdgePolicy edgePolicy,
-		int maximumPathTiles)
+	Result findThrough(WorldPoint start, GenericClientWalkRequest request, int firstVia, EdgePolicy policy)
 	{
-		if (maximumPathTiles < 2)
+		return findThrough(start, request, firstVia, policy, List.of());
+	}
+
+	Result findThrough(WorldPoint start, GenericClientWalkRequest request, int firstVia, EdgePolicy policy,
+		List<GenericClientTransport> transports)
+	{
+		if (firstVia < 0 || firstVia > request.via.size()) throw new IllegalArgumentException("Invalid via progress");
+		List<WorldPoint> path = new ArrayList<>();
+		List<Integer> viaIndices = new ArrayList<>();
+		Map<Integer, GenericClientTransport> chosen = new HashMap<>();
+		GenericClientTransportGraph graph = new GenericClientTransportGraph(transports);
+		WorldPoint cursor = start;
+		int expanded = 0;
+		for (int segment = firstVia; segment <= request.via.size(); segment++)
 		{
-			throw new IllegalArgumentException("Segment path limit must be at least two tiles");
+			boolean finalSegment = segment == request.via.size();
+			Result result = find(cursor, finalSegment ? request.destination : request.via.get(segment),
+				finalSegment ? request.within : 2, policy, Math.max(1, MAX_EXPANDED_NODES - expanded),
+				finalSegment ? request.arrivalTiles : List.of(), graph);
+			expanded += result.expandedNodes;
+			if (result.status != Status.FOUND)
+				return new Result(result.status, Collections.emptyList(), expanded, Collections.emptyList(), segment + 1, Map.of());
+			int offset = path.isEmpty() ? 0 : path.size() - 1;
+			result.transports.forEach((index, transport) -> chosen.put(index + offset, transport));
+			path.addAll(result.path.subList(path.isEmpty() ? 0 : 1, result.path.size()));
+			cursor = result.path.get(result.path.size() - 1);
+			if (!finalSegment) viaIndices.add(path.size() - 1);
 		}
-		if (chebyshev(
-			start.getX(), start.getY(), destination.getX(), destination.getY()) < maximumPathTiles)
+		return new Result(Status.FOUND, List.copyOf(path), expanded, List.copyOf(viaIndices), 0, Map.copyOf(chosen));
+	}
+
+	Result rejoin(WorldPoint start, List<WorldPoint> route, int fromIndex,
+		List<Integer> remainingViaIndices, Map<Integer, GenericClientTransport> transports, EdgePolicy policy)
+	{
+		int end = remainingViaIndices.isEmpty() ? route.size() - 1 : remainingViaIndices.get(0);
+		for (int origin : transports.keySet()) if (origin >= fromIndex) end = Math.min(end, origin);
+		Map<Integer, Integer> goals = new HashMap<>();
+		for (int index = Math.max(0, fromIndex); index <= end; index++)
 		{
-			int localSearchLimit = maximumPathTiles * maximumPathTiles * DIRECTIONS.length;
-			Result local = find(
-				start, destination, within, edgePolicy, localSearchLimit);
-			if (local.status == Status.FOUND)
+			WorldPoint point = route.get(index);
+			if (point.getPlane() == start.getPlane() &&
+				chebyshev(point.getX(), point.getY(), start.getX(), start.getY()) <= 32)
+				goals.put(pack(point.getX(), point.getY(), point.getPlane()), index);
+		}
+		if (goals.isEmpty()) return Result.failed(Status.UNREACHABLE, 0);
+		Result connector = search(start, new Goal()
+		{
+			@Override public boolean reached(int x, int y, int plane) { return goals.containsKey(pack(x, y, plane)); }
+			@Override public int estimate(int x, int y, int plane) { return 0; }
+		}, policy, 4096, new GenericClientTransportGraph(List.of()));
+		if (connector.status != Status.FOUND) return connector;
+		WorldPoint joined = connector.path.get(connector.path.size() - 1);
+		int index = goals.get(pack(joined.getX(), joined.getY(), joined.getPlane()));
+		List<WorldPoint> path = new ArrayList<>(connector.path);
+		path.addAll(route.subList(index + 1, route.size()));
+		List<Integer> via = new ArrayList<>();
+		for (int marker : remainingViaIndices) via.add(connector.path.size() - 1 + marker - index);
+		Map<Integer, GenericClientTransport> chosen = new HashMap<>();
+		transports.forEach((origin, transport) -> {
+			if (origin >= index) chosen.put(connector.path.size() - 1 + origin - index, transport);
+		});
+		return new Result(Status.FOUND, List.copyOf(path), connector.expandedNodes, List.copyOf(via), 0, Map.copyOf(chosen));
+	}
+
+	/** Primitive sparse storage covers the whole coordinate domain without clipping detours. */
+	private static final class SearchNodes
+	{
+		private int[] positions = new int[128];
+		private int[] costs = new int[128];
+		private int[] parents = new int[128];
+		private GenericClientTransport[] transports;
+		private int size;
+
+		// Zero is unused, cost + 1 is open, and the sign bit marks closed nodes.
+		private boolean improve(int position, int cost, int parent, GenericClientTransport transport)
+		{
+			int index = index(position);
+			int previous = costs[index];
+			if (previous < 0 || previous > 0 && cost + 1 >= previous) return false;
+			if (previous == 0 && (size + 1) * 4 >= positions.length * 3)
 			{
-				return local.limitPathTiles(maximumPathTiles);
+				grow();
+				index = index(position);
 			}
-		}
-		Result global = find(start, destination, within, edgePolicy);
-		if (global.status != Status.FOUND)
-		{
-			return global;
-		}
-		if (global.path.size() <= maximumPathTiles)
-		{
-			return find(start, destination, within, edgePolicy)
-				.withAdditionalExpandedNodes(global.expandedNodes)
-				.limitPathTiles(maximumPathTiles);
+			if (previous == 0) size++;
+			positions[index] = position;
+			costs[index] = cost + 1;
+			parents[index] = parent;
+			if (transport != null && transports == null) transports = new GenericClientTransport[positions.length];
+			if (transports != null) transports[index] = transport;
+			return true;
 		}
 
-		int expanded = global.expandedNodes;
-		for (int guideIndex = maximumPathTiles - 1; guideIndex > 0;
-			guideIndex = Math.max(0, guideIndex - 8))
+		private boolean close(int position, int cost)
 		{
-			Result local = find(start, global.path.get(guideIndex), 0, edgePolicy);
-			expanded += local.expandedNodes;
-			if (local.status == Status.FOUND)
+			int index = index(position);
+			if (costs[index] != cost + 1) return false;
+			costs[index] |= Integer.MIN_VALUE;
+			return true;
+		}
+
+		private int parent(int position)
+		{
+			int index = index(position);
+			if (costs[index] == 0) throw new IllegalStateException("Path parent chain ended before the start tile");
+			return parents[index];
+		}
+
+		private int index(int position)
+		{
+			int hash = position ^ (position >>> 16);
+			hash *= 0x7feb352d;
+			hash ^= hash >>> 15;
+			hash *= 0x846ca68b;
+			hash ^= hash >>> 16;
+			int mask = positions.length - 1;
+			int index = hash & mask;
+			while (costs[index] != 0 && positions[index] != position) index = (index + 1) & mask;
+			return index;
+		}
+
+		private void grow()
+		{
+			int[] oldPositions = positions;
+			int[] oldCosts = costs;
+			int[] oldParents = parents;
+			GenericClientTransport[] oldTransports = transports;
+			positions = new int[oldPositions.length * 2];
+			costs = new int[positions.length];
+			parents = new int[positions.length];
+			if (oldTransports != null) transports = new GenericClientTransport[positions.length];
+			for (int old = 0; old < oldPositions.length; old++)
 			{
-				return local.withExpandedNodes(expanded).limitPathTiles(maximumPathTiles);
+				if (oldCosts[old] == 0) continue;
+				int index = index(oldPositions[old]);
+				positions[index] = oldPositions[old];
+				costs[index] = oldCosts[old];
+				parents[index] = oldParents[old];
+				if (oldTransports != null) transports[index] = oldTransports[old];
 			}
 		}
-		return Result.failed(Status.UNREACHABLE, expanded);
+	}
+
+	private interface Goal
+	{
+		boolean reached(int x, int y, int plane);
+		int estimate(int x, int y, int plane);
 	}
 
 	@FunctionalInterface
@@ -224,9 +354,11 @@ final class GenericClientPathfinder
 		boolean canMove(int x, int y, int plane, int dx, int dy, boolean staticAllowed);
 	}
 
-	private static List<WorldPoint> reconstruct(int goal, int start, Map<Integer, Integer> parents)
+	private static Result reconstruct(int goal, int start, SearchNodes nodes, int expanded)
 	{
 		List<WorldPoint> reversed = new ArrayList<>();
+		Map<Integer, GenericClientTransport> chosen = new HashMap<>();
+		Map<Integer, GenericClientTransport> reversedTransports = new HashMap<>();
 		int current = goal;
 		while (true)
 		{
@@ -235,23 +367,13 @@ final class GenericClientPathfinder
 			{
 				break;
 			}
-			Integer parent = parents.get(current);
-			if (parent == null)
-			{
-				throw new IllegalStateException("Path parent chain ended before the start tile");
-			}
-			current = parent;
+			GenericClientTransport transport = nodes.transports == null ? null : nodes.transports[nodes.index(current)];
+			if (transport != null) reversedTransports.put(reversed.size(), transport);
+			current = nodes.parent(current);
 		}
 		Collections.reverse(reversed);
-		return Collections.unmodifiableList(reversed);
-	}
-
-	private static int heuristic(int x, int y, WorldPoint destination, int within)
-	{
-		int dx = Math.max(0, Math.abs(x - destination.getX()) - within);
-		int dy = Math.max(0, Math.abs(y - destination.getY()) - within);
-		int diagonal = Math.min(dx, dy);
-		return diagonal * 14 + (Math.max(dx, dy) - diagonal) * 10;
+		reversedTransports.forEach((index, transport) -> chosen.put(reversed.size() - index - 1, transport));
+		return new Result(Status.FOUND, List.copyOf(reversed), expanded, List.of(), 0, Map.copyOf(chosen));
 	}
 
 	private static int chebyshev(int x1, int y1, int x2, int y2)
@@ -264,7 +386,7 @@ final class GenericClientPathfinder
 		return x >= 0 && x <= MAX_COORDINATE && y >= 0 && y <= MAX_COORDINATE;
 	}
 
-	private static int pack(int x, int y, int plane)
+	static int pack(int x, int y, int plane)
 	{
 		return (x & MAX_COORDINATE) | ((y & MAX_COORDINATE) << 15) | ((plane & 3) << 30);
 	}
@@ -297,18 +419,29 @@ final class GenericClientPathfinder
 		private final Status status;
 		private final List<WorldPoint> path;
 		private final int expandedNodes;
+		private final List<Integer> viaIndices;
+		private final int failedSegment;
+		private final Map<Integer, GenericClientTransport> transports;
 
 		private Result(Status status, List<WorldPoint> path, int expandedNodes)
+		{
+			this(status, path, expandedNodes, Collections.emptyList(), 0, Map.of());
+		}
+
+		private Result(Status status, List<WorldPoint> path, int expandedNodes,
+			List<Integer> viaIndices, int failedSegment, Map<Integer, GenericClientTransport> transports)
 		{
 			this.status = status;
 			this.path = path;
 			this.expandedNodes = expandedNodes;
+			this.viaIndices = viaIndices;
+			this.failedSegment = failedSegment;
+			this.transports = transports;
 		}
 
-		private static Result found(List<WorldPoint> path, int expandedNodes)
-		{
-			return new Result(Status.FOUND, path, expandedNodes);
-		}
+		List<Integer> getViaIndices() { return viaIndices; }
+		int getFailedSegment() { return failedSegment; }
+		Map<Integer, GenericClientTransport> getTransports() { return transports; }
 
 		private static Result failed(Status status, int expandedNodes)
 		{
@@ -330,26 +463,9 @@ final class GenericClientPathfinder
 			return expandedNodes;
 		}
 
-		private Result withAdditionalExpandedNodes(int additional)
+		Result withAdditionalExpandedNodes(int additional)
 		{
-			return withExpandedNodes(expandedNodes + additional);
-		}
-
-		private Result withExpandedNodes(int expanded)
-		{
-			return new Result(status, path, expanded);
-		}
-
-		private Result limitPathTiles(int maximum)
-		{
-			if (status != Status.FOUND || path.size() <= maximum)
-			{
-				return this;
-			}
-			return new Result(
-				status,
-				Collections.unmodifiableList(new ArrayList<>(path.subList(0, maximum))),
-				expandedNodes);
+			return new Result(status, path, expandedNodes + additional, viaIndices, failedSegment, transports);
 		}
 	}
 

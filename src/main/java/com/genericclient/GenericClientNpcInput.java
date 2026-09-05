@@ -129,7 +129,7 @@ final class GenericClientNpcInput
 		SelectedWidget requestedSelection,
 		GenericClientActivityContext activityContext)
 	{
-		GenericClientCameraOwner.Operation cameraOperation = cameraOwner.begin();
+		GenericClientCameraOwner.Operation cameraOperation = cameraOwner.begin(activityContext);
 		GenericClientMenuInput.TargetResolver resolver = () -> resolveNpc(
 			name, id, action, within, requestedSelection);
 		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
@@ -137,12 +137,6 @@ final class GenericClientNpcInput
 			if (!cameraOperation.isActive())
 			{
 				return CompletableFuture.completedFuture(receipt);
-			}
-			if (!isCameraRetryable(receipt.get("result")))
-			{
-				return retryWithCamera(
-					resolver, receipt, name, id, within, activityContext,
-					cameraOperation, 0, 0);
 			}
 			return retryWithCamera(
 				resolver, receipt, name, id, within, activityContext,

@@ -7,6 +7,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 
 final class GenericClientBehaviorProfile
 {
@@ -24,10 +25,11 @@ final class GenericClientBehaviorProfile
 	static final int DIALOGUE_READING_PERCENT_MIN = 0;
 	static final int DIALOGUE_READING_PERCENT_MAX = 100;
 
+	private static final double SHORT_TAIL_MIN_SECONDS = 12.0;
 	private static final String DOMAIN = "genericclient.behavior.v1";
 	private static final double[] SHORT_QUANTILES = {0.0, 0.10, 0.25, 0.50, 0.75, 0.90, 1.0};
 	private static final double[] SHORT_PROBABILITIES = {0.02, 0.05, 0.12, 0.35, 0.65, 0.85, 1.0};
-	private static final double REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR = 36.0;
+	static final double MAX_MICRO_RATE_PER_ACTIVE_HOUR = 36.0;
 
 	private final String id;
 	private final double microBreakProbability;
@@ -46,10 +48,14 @@ final class GenericClientBehaviorProfile
 	private final int mouseMoveDurationMillis;
 	private final int typingWordsPerMinute;
 	private final int dialogueReadingPercent;
+	private final DialogueInputMode dialogueInputMode;
 	private final String title;
 	private final String summary;
 	private final double referenceDowntimePercent;
 	private final boolean customized;
+	private final double walkClickTypicalSeconds;
+	private final double walkNearClickProbability;
+	private final CursorStyle cursorStyle;
 
 	private GenericClientBehaviorProfile(
 		String id,
@@ -69,6 +75,10 @@ final class GenericClientBehaviorProfile
 		int mouseMoveDurationMillis,
 		int typingWordsPerMinute,
 		int dialogueReadingPercent,
+		DialogueInputMode dialogueInputMode,
+		double walkClickTypicalSeconds,
+		double walkNearClickProbability,
+		CursorStyle cursorStyle,
 		boolean customized)
 	{
 		this.id = id;
@@ -88,7 +98,11 @@ final class GenericClientBehaviorProfile
 		this.mouseMoveDurationMillis = mouseMoveDurationMillis;
 		this.typingWordsPerMinute = typingWordsPerMinute;
 		this.dialogueReadingPercent = dialogueReadingPercent;
+		this.dialogueInputMode = dialogueInputMode;
 		this.customized = customized;
+		this.walkClickTypicalSeconds = walkClickTypicalSeconds;
+		this.walkNearClickProbability = walkNearClickProbability;
+		this.cursorStyle = cursorStyle;
 		this.referenceDowntimePercent = calculateReferenceDowntimePercent();
 		this.title = buildTitle();
 		this.summary = buildSummary();
@@ -139,6 +153,15 @@ final class GenericClientBehaviorProfile
 			roundToStep(300.0 + 350.0 * mouseDurationQuantile, 25),
 			roundToStep(35.0 + 65.0 * typingQuantile, 5),
 			roundToStep(100.0 * dialogueReadingQuantile, 5),
+			unit(accountHash, "dialogue.input") < 0.5
+				? DialogueInputMode.KEYBOARD
+				: DialogueInputMode.MOUSE,
+			2.0 + 4.0 * correlatedUnit(accountHash, "walk.cadence", styleZ, 0.30),
+			0.10 + 0.20 * correlatedUnit(accountHash, "walk.near", styleZ, 0.20),
+			new CursorStyle(1.0 + 7.0 * correlatedUnit(accountHash, "cursor.rate", styleZ, 0.50),
+				2.0 + 6.0 * correlatedUnit(accountHash, "cursor.amplitude", styleZ, 0.30),
+				0.05 + 0.20 * correlatedUnit(accountHash, "cursor.relocation", styleZ, 0.35),
+				0.15 + 0.40 * correlatedUnit(accountHash, "cursor.anticipation", styleZ, 0.25)),
 			false);
 	}
 
@@ -172,6 +195,12 @@ final class GenericClientBehaviorProfile
 			overrides.getDialogueReadingPercent() == null
 				? dialogueReadingPercent
 				: overrides.getDialogueReadingPercent(),
+			overrides.getDialogueInputMode() == null
+				? dialogueInputMode
+				: overrides.getDialogueInputMode(),
+			walkClickTypicalSeconds,
+			walkNearClickProbability,
+			cursorStyle,
 			true);
 	}
 
@@ -179,6 +208,10 @@ final class GenericClientBehaviorProfile
 	{
 		return id;
 	}
+
+	double getWalkClickTypicalSeconds() { return walkClickTypicalSeconds; }
+	double getWalkNearClickProbability() { return walkNearClickProbability; }
+	CursorStyle getCursorStyle() { return cursorStyle; }
 
 	double getMicroBreakProbability()
 	{
@@ -270,6 +303,11 @@ final class GenericClientBehaviorProfile
 		return dialogueWordsPerMinute(dialogueReadingPercent);
 	}
 
+	DialogueInputMode getDialogueInputMode()
+	{
+		return dialogueInputMode;
+	}
+
 	String getTitle()
 	{
 		return title;
@@ -297,11 +335,92 @@ final class GenericClientBehaviorProfile
 		return scaled * scaled;
 	}
 
+	double activeMinutesAtLongHazard(double budget)
+	{
+		return longRefractoryMinutes + longScaleMinutes * Math.sqrt(budget);
+	}
+
+	double getSessionGraceMinutes()
+	{
+		return Math.max(6.0, Math.min(14.0, longCadenceMinutes * 0.12));
+	}
+
+	double microPressurePerMinute(GenericClientActivityContext.Activity activity)
+	{
+		double multiplier;
+		switch (activity)
+		{
+			case GENERAL: multiplier = 0.8; break;
+			case TRAVEL:
+			case HAZARDOUS_TRAVEL: multiplier = 0.6; break;
+			case MANUAL: multiplier = 0.0; break;
+			default: multiplier = 1.0; break;
+		}
+		return microBreakProbability * MAX_MICRO_RATE_PER_ACTIVE_HOUR / 60.0 * multiplier;
+	}
+
+	double phaseMicroPressure()
+	{
+		return -phaseShortChances * Math.log1p(-Math.min(microBreakProbability, Math.nextDown(1.0)));
+	}
+
+	double sampleMicroSeconds(Random random, boolean phase)
+	{
+		double tailChance = Math.min(0.30,
+			phase ? shortTailProbability * 2.0 : shortTailProbability);
+		if (random.nextDouble() < tailChance)
+		{
+			return Math.min(Math.nextDown(SHORT_DURATION_MAX_SECONDS),
+				SHORT_TAIL_MIN_SECONDS * Math.pow(10.0, random.nextDouble()));
+		}
+		double body = 1.0 + (shortBodyMedianSeconds - 1.0) *
+			Math.exp(0.5 * random.nextGaussian());
+		return clamp(body,
+			SHORT_DURATION_MIN_SECONDS,
+			Math.nextDown(SHORT_DURATION_MAX_SECONDS));
+	}
+
+	double sampleLongMinutes(Random random)
+	{
+		double duration = 3.0 + (longMedianMinutes - 3.0) *
+			Math.exp(0.5 * random.nextGaussian());
+		return clamp(duration,
+			LONG_DURATION_MIN_MINUTES,
+			LONG_DURATION_MAX_MINUTES);
+	}
+
+	static double sampleExponentialBudget(Random random)
+	{
+		double unit = clamp(random.nextDouble(), 0.000000000001, Math.nextDown(1.0));
+		return -Math.log(1.0 - unit);
+	}
+
+	int sampleWalkClickDelayTicks(Random random)
+	{
+		double seconds = clamp(walkClickTypicalSeconds * (0.75 + 0.5 * random.nextDouble()), 2.0, 6.0);
+		if (random.nextDouble() < 0.08) seconds += 4.0 + 4.0 * random.nextDouble();
+		return (int) Math.ceil(seconds / 0.6);
+	}
+
+	double sampleWalkReachFraction(Random random)
+	{
+		return random.nextDouble() < walkNearClickProbability ? 0.6 + 0.3 * random.nextDouble() : 1.0;
+	}
+
+	LongBreakMode sampleLongBreakMode(Random random)
+	{
+		if (random.nextDouble() >= oppositeLongBreakProbability) return favoredLongBreakMode;
+		return favoredLongBreakMode == LongBreakMode.AFK ? LongBreakMode.LOGOUT : LongBreakMode.AFK;
+	}
+
 	Map<String, Object> toMap()
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
 		value.put("schema", SCHEMA);
 		value.put("id", id);
+		value.put("walk_click_typical_seconds", walkClickTypicalSeconds);
+		value.put("walk_near_click_probability", walkNearClickProbability);
+		value.put("cursor_rest", cursorStyle.toMap());
 		value.put("title", title);
 		value.put("summary", summary);
 		value.put("customized", customized);
@@ -324,7 +443,8 @@ final class GenericClientBehaviorProfile
 		value.put("dialogue_reading_percent", (long) dialogueReadingPercent);
 		value.put("dialogue_reading_style", getDialogueReadingStyle());
 		value.put("dialogue_words_per_minute", (long) getDialogueWordsPerMinute());
-		value.put("reference_eligible_interactions_per_hour", REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR);
+		value.put("dialogue_input_mode", dialogueInputMode.name().toLowerCase(Locale.ROOT));
+		value.put("micro_rate_per_active_hour", MAX_MICRO_RATE_PER_ACTIVE_HOUR * microBreakProbability);
 		value.put("reference_forced_downtime_percent", referenceDowntimePercent);
 		return value;
 	}
@@ -354,14 +474,15 @@ final class GenericClientBehaviorProfile
 	private String buildSummary()
 	{
 		return String.format(Locale.ROOT,
-			"Takes a micro break after about %.0f%% of eligible composite client interactions. " +
-				"Moves the cursor off-screen after about %.0f%% of eligible interactions. " +
+			"Accrues about %.1f micro breaks per active hour of skilling or questing, less during general activity and travel. " +
+				"Moves the cursor off-screen during about %.0f%% of eligible micro breaks. " +
 				"Typical forced pauses center near %.1f seconds, with a %.0f%% chance of a 12-120 second tail. " +
 				"Long breaks average about %.0f active minutes apart and center near %.1f minutes; usually %s, " +
-				"with the opposite choice about %.0f%% of the time. Major phases apply %.1f ordinary short-break chances. " +
+				"with the opposite choice about %.0f%% of the time. Major phases add %.1f units of micro pressure. " +
 				"Recorded mouse paths play over %d milliseconds and text entry averages %d WPM. %s. " +
-				"At %.0f eligible actions per hour, estimated forced downtime is %.0f%%.",
-			microBreakProbability * 100.0,
+				"Dialogue interaction uses %s only. " +
+				"Estimated downtime during skilling or questing is %.0f%% before phase bonuses and boundary delays.",
+			microBreakProbability * MAX_MICRO_RATE_PER_ACTIVE_HOUR,
 			cursorReleaseProbability * 100.0,
 			shortBodyMedianSeconds,
 			shortTailProbability * 100.0,
@@ -369,11 +490,11 @@ final class GenericClientBehaviorProfile
 			longMedianMinutes,
 			favoredLongBreakMode == LongBreakMode.AFK ? "remains AFK" : "logs out",
 			oppositeLongBreakProbability * 100.0,
-			phaseShortChances,
+			phaseMicroPressure(),
 			mouseMoveDurationMillis,
 			typingWordsPerMinute,
 			dialogueReadingSummary(),
-			REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR,
+			dialogueInputMode == DialogueInputMode.KEYBOARD ? "keyboard buttons" : "the mouse",
 			referenceDowntimePercent);
 	}
 
@@ -425,13 +546,11 @@ final class GenericClientBehaviorProfile
 		double tailMeanSeconds = 108.0 / Math.log(10.0);
 		double shortMeanSeconds = (1.0 - shortTailProbability) * bodyMeanSeconds +
 			shortTailProbability * tailMeanSeconds;
-		double shortMinutes = REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR * microBreakProbability *
+		double shortMinutes = MAX_MICRO_RATE_PER_ACTIVE_HOUR * microBreakProbability *
 			shortMeanSeconds / 60.0;
-		double cursorMinutes = REFERENCE_ELIGIBLE_INTERACTIONS_PER_HOUR * cursorReleaseProbability *
-			mouseMoveDurationMillis / 60_000.0;
 		double longMeanMinutes = 3.0 + (longMedianMinutes - 3.0) * Math.exp(0.125);
 		double longMinutes = 60.0 / longCadenceMinutes * longMeanMinutes;
-		double forcedMinutes = shortMinutes + cursorMinutes + longMinutes;
+		double forcedMinutes = shortMinutes + longMinutes;
 		return 100.0 * forcedMinutes / (60.0 + forcedMinutes);
 	}
 
@@ -571,6 +690,28 @@ final class GenericClientBehaviorProfile
 		return Math.max(minimum, Math.min(maximum, value));
 	}
 
+	static final class CursorStyle
+	{
+		final double fidgetsPerMinute;
+		final double driftPixels;
+		final double relocationShare;
+		final double anticipationProbability;
+
+		CursorStyle(double fidgetsPerMinute, double driftPixels, double relocationShare, double anticipationProbability)
+		{
+			this.fidgetsPerMinute = fidgetsPerMinute;
+			this.driftPixels = driftPixels;
+			this.relocationShare = relocationShare;
+			this.anticipationProbability = anticipationProbability;
+		}
+
+		Map<String, Object> toMap()
+		{
+			return Map.of("fidgets_per_minute", fidgetsPerMinute, "drift_pixels", driftPixels,
+				"relocation_share", relocationShare, "anticipation_probability", anticipationProbability);
+		}
+	}
+
 	enum Edge
 	{
 		LEFT,
@@ -583,5 +724,24 @@ final class GenericClientBehaviorProfile
 	{
 		AFK,
 		LOGOUT
+	}
+
+	enum DialogueInputMode
+	{
+		KEYBOARD("Keyboard only"),
+		MOUSE("Mouse only");
+
+		private final String label;
+
+		DialogueInputMode(String label)
+		{
+			this.label = label;
+		}
+
+		@Override
+		public String toString()
+		{
+			return label;
+		}
 	}
 }

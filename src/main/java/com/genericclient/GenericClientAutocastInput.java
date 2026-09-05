@@ -1,8 +1,7 @@
 package com.genericclient;
 
-import static com.genericclient.GenericClientWidgetTree.clickable;
-import static com.genericclient.GenericClientWidgetTree.descendants;
-import static com.genericclient.GenericClientWidgetTree.hasAction;
+import static com.genericclient.GenericClientWidgets.clickable;
+import static com.genericclient.GenericClientWidgets.hasAction;
 
 import java.awt.Point;
 import java.awt.Rectangle;
@@ -15,9 +14,10 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 import net.runelite.api.Client;
-import net.runelite.api.GameState;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
@@ -44,6 +44,8 @@ final class GenericClientAutocastInput
 	private final ScheduledExecutorService executor;
 	private final GenericClientMenuInput menuInput;
 	private final java.util.function.Consumer<String> reporter;
+	private final AtomicBoolean running = new AtomicBoolean();
+	private final AtomicLong generation = new AtomicLong();
 
 	GenericClientAutocastInput(
 		Client client,
@@ -67,19 +69,33 @@ final class GenericClientAutocastInput
 			return CompletableFuture.completedFuture(receipt(
 				"unsupported", "spell_not_autocastable", spell, new ArrayList<>()));
 		}
+		if (!running.compareAndSet(false, true))
+		{
+			return CompletableFuture.completedFuture(receipt(
+				"rejected", "autocast_interaction_already_running", spell, new ArrayList<>()));
+		}
 
+		long request = generation.incrementAndGet();
 		List<Map<String, Object>> steps = new ArrayList<>();
 		reporter.accept("AUTOCAST_SELECTING spell=" + spell.getName());
-		return ensureCombatTab(activityContext, steps).thenCompose(
-			tabReady -> selectFromCombatTab(spell, activityContext, steps, tabReady));
+		CompletableFuture<Map<String, Object>> result = ensureCombatTab(activityContext, steps, request)
+			.thenCompose(ready -> selectFromCombatTab(spell, activityContext, steps, request, ready));
+		return result.whenComplete((ignored, error) ->
+		{
+			if (generation.get() == request)
+			{
+				running.set(false);
+			}
+		});
 	}
 
 	private CompletableFuture<Map<String, Object>> selectFromCombatTab(
 		GenericClientSpellInput.Spell spell,
 		GenericClientActivityContext activityContext,
-		List<Map<String, Object>> steps,
+		List<Map<String, Object>> steps, long request,
 		boolean tabReady)
 	{
+		if (!active(request)) return completedRejected("autocast_cancelled", spell, steps);
 		if (!tabReady)
 		{
 			return completedRejected("combat_tab_did_not_open", spell, steps);
@@ -88,42 +104,46 @@ final class GenericClientAutocastInput
 			alreadySelected
 				? CompletableFuture.completedFuture(
 					receipt("unchanged", "autocast_already_selected", spell, steps))
-				: openAutocastMenu(spell, activityContext, steps));
+				: openAutocastMenu(spell, activityContext, steps, request));
 	}
 
 	private CompletableFuture<Map<String, Object>> openAutocastMenu(
 		GenericClientSpellInput.Spell spell,
 		GenericClientActivityContext activityContext,
-		List<Map<String, Object>> steps)
+		List<Map<String, Object>> steps, long request)
 	{
-		return click(this::resolveAutocastButton, activityContext, steps).thenCompose(opened ->
+		if (!active(request)) return completedRejected("autocast_cancelled", spell, steps);
+		return click(this::resolveAutocastButton, activityContext, steps, request).thenCompose(opened ->
 		{
+			if (!active(request)) return completedRejected("autocast_cancelled", spell, steps);
 			if (!opened)
 			{
 				return completedRejected("autocast_menu_not_opened", spell, steps);
 			}
-			return waitFor(() -> visibleWidget(InterfaceID.Autocast.UNIVERSE) != null)
-				.thenCompose(visible -> selectAutocastSpell(spell, activityContext, steps, visible));
+			return waitFor(() -> visibleWidget(InterfaceID.Autocast.UNIVERSE) != null, request)
+				.thenCompose(visible -> selectAutocastSpell(spell, activityContext, steps, request, visible));
 		});
 	}
 
 	private CompletableFuture<Map<String, Object>> selectAutocastSpell(
 		GenericClientSpellInput.Spell spell,
 		GenericClientActivityContext activityContext,
-		List<Map<String, Object>> steps,
+		List<Map<String, Object>> steps, long request,
 		boolean menuVisible)
 	{
+		if (!active(request)) return completedRejected("autocast_cancelled", spell, steps);
 		if (!menuVisible)
 		{
 			return completedRejected("autocast_menu_not_visible", spell, steps);
 		}
-		return click(() -> resolveAutocastSpell(spell), activityContext, steps).thenCompose(selected ->
+		return click(() -> resolveAutocastSpell(spell), activityContext, steps, request).thenCompose(selected ->
 		{
+			if (!active(request)) return completedRejected("autocast_cancelled", spell, steps);
 			if (!selected)
 			{
 				return completedRejected("autocast_spell_not_selected", spell, steps);
 			}
-			return waitFor(() -> client.getVarbitValue(VarbitID.AUTOCAST_SET) != 0)
+			return waitFor(() -> selectedSpellMatches(spell), request)
 				.thenApply(verified -> autocastReceipt(spell, steps, verified));
 		});
 	}
@@ -143,18 +163,44 @@ final class GenericClientAutocastInput
 		return result;
 	}
 
-	private CompletableFuture<Boolean> ensureCombatTab(
-		GenericClientActivityContext activityContext,
-		List<Map<String, Object>> steps)
+	boolean isRunning()
 	{
-		return ensureCombatTab(activityContext, steps, COMBAT_TAB_CLICK_ATTEMPTS);
+		return running.get();
+	}
+
+	void cancel(String reason)
+	{
+		if (running.getAndSet(false))
+		{
+			generation.incrementAndGet();
+			menuInput.cancel(reason);
+			reporter.accept("AUTOCAST_CANCELLED reason=" + reason);
+		}
+	}
+
+	private boolean active(long request)
+	{
+		return running.get() && generation.get() == request;
 	}
 
 	private CompletableFuture<Boolean> ensureCombatTab(
 		GenericClientActivityContext activityContext,
 		List<Map<String, Object>> steps,
-		int clicksRemaining)
+		long request)
 	{
+		return ensureCombatTab(activityContext, steps, COMBAT_TAB_CLICK_ATTEMPTS, request);
+	}
+
+	private CompletableFuture<Boolean> ensureCombatTab(
+		GenericClientActivityContext activityContext,
+		List<Map<String, Object>> steps,
+		int clicksRemaining,
+		long request)
+	{
+		if (!active(request))
+		{
+			return CompletableFuture.completedFuture(false);
+		}
 		return clientRead(() -> visibleWidget(InterfaceID.CombatInterface.AUTOCAST_NORMAL) != null)
 			.thenCompose(visible ->
 			{
@@ -166,14 +212,19 @@ final class GenericClientAutocastInput
 				{
 					return CompletableFuture.completedFuture(false);
 				}
-				return click(this::resolveCombatTab, activityContext, steps).thenCompose(clicked ->
+				if (!active(request))
+				{
+					return CompletableFuture.completedFuture(false);
+				}
+				return click(this::resolveCombatTab, activityContext, steps, request).thenCompose(clicked ->
 				{
 					if (!clicked)
 					{
-						return ensureCombatTab(activityContext, steps, clicksRemaining - 1);
+						return ensureCombatTab(activityContext, steps, clicksRemaining - 1, request);
 					}
 					return waitFor(
-						() -> visibleWidget(InterfaceID.CombatInterface.AUTOCAST_NORMAL) != null)
+						() -> visibleWidget(InterfaceID.CombatInterface.AUTOCAST_NORMAL) != null,
+						request)
 						.thenCompose(opened ->
 						{
 							if (opened)
@@ -183,7 +234,7 @@ final class GenericClientAutocastInput
 							reporter.accept("AUTOCAST_COMBAT_TAB_RETRY clicksRemaining=" +
 								(clicksRemaining - 1));
 							return ensureCombatTab(
-								activityContext, steps, clicksRemaining - 1);
+								activityContext, steps, clicksRemaining - 1, request);
 						});
 				});
 			});
@@ -192,29 +243,35 @@ final class GenericClientAutocastInput
 	private CompletableFuture<Boolean> click(
 		GenericClientMenuInput.TargetResolver resolver,
 		GenericClientActivityContext activityContext,
-		List<Map<String, Object>> steps)
+		List<Map<String, Object>> steps,
+		long request)
 	{
+		if (!active(request))
+		{
+			return CompletableFuture.completedFuture(false);
+		}
 		return menuInput.interactDirect(resolver, activityContext).thenCompose(step ->
 		{
 			steps.add(step);
-			if (!"dispatched".equals(step.get("status")))
+			if (!active(request) || !"dispatched".equals(step.get("status")))
 			{
 				return CompletableFuture.completedFuture(false);
 			}
 			CompletableFuture<Boolean> settled = new CompletableFuture<>();
-			executor.schedule(() -> settled.complete(true), UI_SETTLE_MILLIS, TimeUnit.MILLISECONDS);
+			executor.schedule(
+				() -> settled.complete(active(request)), UI_SETTLE_MILLIS, TimeUnit.MILLISECONDS);
 			return settled;
 		});
 	}
 
 	private GenericClientMenuInput.Resolution resolveCombatTab()
 	{
-		return resolveWidget(visibleWidget(COMBAT_TABS), "Combat Options", "combat_tab");
+		return GenericClientUiInput.resolveWidget(client, visibleWidget(COMBAT_TABS), "Combat Options", "combat_tab");
 	}
 
 	private GenericClientMenuInput.Resolution resolveAutocastButton()
 	{
-		return resolveWidget(
+		return GenericClientUiInput.resolveWidget(client,
 			visibleWidget(InterfaceID.CombatInterface.AUTOCAST_NORMAL),
 			"Choose spell",
 			"autocast_button");
@@ -225,7 +282,11 @@ final class GenericClientAutocastInput
 	{
 		int spriteId = spell.getSpriteId();
 		Widget spellWidget = findSpellWidget(
-			visibleWidget(InterfaceID.Autocast.SPELLS), spriteId, spell.getLabel());
+			visibleWidget(InterfaceID.Autocast.SPELLS),
+			spriteId,
+			spell.getLabel(),
+			client.getCanvasWidth(),
+			client.getCanvasHeight());
 		if (spellWidget == null)
 		{
 			reporter.accept("AUTOCAST_WIDGET_MISSING spell=" + spell.getName() +
@@ -233,70 +294,53 @@ final class GenericClientAutocastInput
 			return GenericClientMenuInput.Resolution.rejected(
 				"autocast_spell_not_visible:" + spell.getName());
 		}
-		return resolveWidget(spellWidget, "Autocast", "autocast_spell:" + spell.getName());
-	}
-
-	private GenericClientMenuInput.Resolution resolveWidget(
-		Widget widget,
-		String action,
-		String description)
-	{
-		if (client.getGameState() != GameState.LOGGED_IN)
-		{
-			return GenericClientMenuInput.Resolution.rejected("client_not_logged_in");
-		}
-		if (widget == null)
-		{
-			return GenericClientMenuInput.Resolution.rejected(description + "_not_visible");
-		}
-		Point point = GenericClientMenuInput.randomPointInside(
-			widget.getBounds(), client.getCanvasWidth(), client.getCanvasHeight());
-		if (point == null)
-		{
-			return GenericClientMenuInput.Resolution.rejected(description + "_not_clickable");
-		}
-		Map<String, Object> value = new LinkedHashMap<>();
-		value.put("kind", "widget");
-		value.put("widget_id", (long) widget.getId());
-		value.put("widget_index", (long) widget.getIndex());
-		value.put("sprite_id", (long) widget.getSpriteId());
-		value.put("name", Text.removeTags(Objects.toString(widget.getName(), "")));
-		value.put("text", Text.removeTags(Objects.toString(widget.getText(), "")));
-		value.put("actions", widget.getActions());
-		value.put("bounds", rectangleMap(widget.getBounds()));
-		return GenericClientMenuInput.Resolution.resolved(new GenericClientMenuInput.Target(
-			point,
-			action,
-			description,
-			value,
-			entry -> false));
+		return GenericClientUiInput.resolveWidget(client, spellWidget, "Autocast", "autocast_spell:" + spell.getName());
 	}
 
 	private boolean selectedSpellMatches(GenericClientSpellInput.Spell spell)
 	{
-		if (client.getVarbitValue(VarbitID.AUTOCAST_SET) == 0)
+		return selectedSpellMatches(
+			client.getVarbitValue(VarbitID.AUTOCAST_SET),
+			visibleWidget(InterfaceID.CombatInterface.NORMAL_CONTAINER_TEXT1),
+			visibleWidget(InterfaceID.CombatInterface.NORMAL_CONTAINER_GRAPHIC0),
+			spell);
+	}
+
+	static boolean selectedSpellMatches(
+		int autocastSet,
+		Widget text,
+		Widget graphic,
+		GenericClientSpellInput.Spell spell)
+	{
+		if (autocastSet == 0)
 		{
 			return false;
 		}
-		Widget text = visibleWidget(InterfaceID.CombatInterface.NORMAL_CONTAINER_TEXT1);
-		return text != null && normalized(text.getText()).contains(normalized(spell.getLabel()));
+		return text != null &&
+			normalized(text.getText()).contains(normalized(spell.getLabel())) ||
+			graphic != null && graphic.getSpriteId() == spell.getSpriteId();
 	}
 
-	private CompletableFuture<Boolean> waitFor(BooleanSupplier condition)
+	private CompletableFuture<Boolean> waitFor(BooleanSupplier condition, long request)
 	{
 		CompletableFuture<Boolean> result = new CompletableFuture<>();
-		poll(condition, UI_POLL_ATTEMPTS, result);
+		poll(condition, UI_POLL_ATTEMPTS, result, request);
 		return result;
 	}
 
 	private void poll(
 		BooleanSupplier condition,
 		int attemptsRemaining,
-		CompletableFuture<Boolean> result)
+		CompletableFuture<Boolean> result,
+		long request)
 	{
 		executor.schedule(() -> clientThread.invoke(() ->
 		{
-			if (condition.getAsBoolean())
+			if (!active(request))
+			{
+				result.complete(false);
+			}
+			else if (condition.getAsBoolean())
 			{
 				result.complete(true);
 			}
@@ -306,7 +350,7 @@ final class GenericClientAutocastInput
 			}
 			else
 			{
-				poll(condition, attemptsRemaining - 1, result);
+				poll(condition, attemptsRemaining - 1, result, request);
 			}
 		}), UI_POLL_MILLIS, TimeUnit.MILLISECONDS);
 	}
@@ -323,7 +367,7 @@ final class GenericClientAutocastInput
 		for (int id : ids)
 		{
 			Widget widget = client.getWidget(id);
-			if (clickable(widget))
+			if (usableOnCanvas(widget, client.getCanvasWidth(), client.getCanvasHeight()))
 			{
 				return widget;
 			}
@@ -331,12 +375,19 @@ final class GenericClientAutocastInput
 		return null;
 	}
 
-	static Widget findSpellWidget(Widget root, int spriteId, String label)
+	static Widget findSpellWidget(
+		Widget root,
+		int spriteId,
+		String label,
+		int canvasWidth,
+		int canvasHeight)
 	{
-		List<Widget> widgets = descendants(root, 256);
+		Rectangle panel = root == null ? null : root.getBounds();
+		List<Widget> widgets = GenericClientWidgets.descendants(root, 256);
 		for (Widget widget : widgets)
 		{
-			if (clickable(widget) && spriteId >= 0 && widget.getSpriteId() == spriteId &&
+			if (withinPanel(widget, panel, canvasWidth, canvasHeight) &&
+				spriteId >= 0 && widget.getSpriteId() == spriteId &&
 				hasAction(widget, "Autocast"))
 			{
 				return widget;
@@ -344,26 +395,59 @@ final class GenericClientAutocastInput
 		}
 		for (Widget widget : widgets)
 		{
-			if (clickable(widget) && matchesLabel(widget, label) && hasAction(widget, "Autocast"))
+			if (withinPanel(widget, panel, canvasWidth, canvasHeight) &&
+				matchesLabel(widget, label) && hasAction(widget, "Autocast"))
 			{
 				return widget;
 			}
 		}
 		for (Widget widget : widgets)
 		{
-			if (clickable(widget) && spriteId >= 0 && widget.getSpriteId() == spriteId)
+			if (withinPanel(widget, panel, canvasWidth, canvasHeight) &&
+				spriteId >= 0 && widget.getSpriteId() == spriteId)
 			{
 				return widget;
 			}
 		}
 		for (Widget widget : widgets)
 		{
-			if (clickable(widget) && matchesLabel(widget, label))
+			if (withinPanel(widget, panel, canvasWidth, canvasHeight) &&
+				matchesLabel(widget, label))
 			{
 				return widget;
 			}
 		}
 		return null;
+	}
+
+	private static boolean withinPanel(
+		Widget widget,
+		Rectangle panel,
+		int canvasWidth,
+		int canvasHeight)
+	{
+		if (!usableOnCanvas(widget, canvasWidth, canvasHeight) || panel == null)
+		{
+			return false;
+		}
+		Rectangle bounds = widget.getBounds();
+		Point center = new Point(
+			bounds.x + bounds.width / 2,
+			bounds.y + bounds.height / 2);
+		return panel.contains(center);
+	}
+
+	static boolean usableOnCanvas(Widget widget, int canvasWidth, int canvasHeight)
+	{
+		if (!clickable(widget))
+		{
+			return false;
+		}
+		Rectangle bounds = widget.getBounds();
+		int centerX = bounds.x + bounds.width / 2;
+		int centerY = bounds.y + bounds.height / 2;
+		return bounds.x >= 0 && bounds.y >= 0 &&
+			centerX < canvasWidth && centerY < canvasHeight;
 	}
 
 	private static boolean matchesLabel(Widget widget, String label)
@@ -377,20 +461,6 @@ final class GenericClientAutocastInput
 	{
 		return Text.removeTags(Objects.toString(value, ""))
 			.trim().toLowerCase(Locale.ROOT).replace('_', ' ');
-	}
-
-	private static Map<String, Object> rectangleMap(Rectangle bounds)
-	{
-		if (bounds == null)
-		{
-			return null;
-		}
-		Map<String, Object> value = new LinkedHashMap<>();
-		value.put("x", (long) bounds.x);
-		value.put("y", (long) bounds.y);
-		value.put("width", (long) bounds.width);
-		value.put("height", (long) bounds.height);
-		return value;
 	}
 
 	private static CompletableFuture<Map<String, Object>> completedRejected(

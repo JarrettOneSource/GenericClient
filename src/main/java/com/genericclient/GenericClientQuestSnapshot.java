@@ -24,6 +24,7 @@ import net.runelite.api.WallObject;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.coords.WorldArea;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
@@ -60,6 +61,7 @@ final class GenericClientQuestSnapshot
 		VarbitID.PRAYER_PROTECTFROMMAGIC,
 		VarbitID.PRAYER_PROTECTFROMMISSILES,
 		VarbitID.PRAYER_PROTECTFROMMELEE,
+		VarbitID.STAMINA_ACTIVE,
 		VarbitID.PIRATE_COMBILOCK_LEFT,
 		VarbitID.PIRATE_COMBILOCK_CENTRE,
 		VarbitID.PIRATE_COMBILOCK_RIGHT
@@ -168,6 +170,23 @@ final class GenericClientQuestSnapshot
 	List<ObjectSnapshot> getObjects()
 	{
 		return objects;
+	}
+
+	boolean isDialogueOpen()
+	{
+		return dialogue.open;
+	}
+
+	DialogueSnapshot getDialogue() { return dialogue; }
+
+	Integer varp(int id)
+	{
+		return available && id >= 0 && id < varps.length ? varps[id] : null;
+	}
+
+	Integer varbit(int id)
+	{
+		return available ? varbits.get(id) : null;
 	}
 
 	private Map<String, Object> readVars(Map<?, ?> query)
@@ -411,10 +430,12 @@ final class GenericClientQuestSnapshot
 			player.distanceTo(world),
 			actions,
 			object instanceof WallObject ? ((WallObject) object).getOrientationA() : 0,
-			object instanceof WallObject ? ((WallObject) object).getOrientationB() : 0));
+			object instanceof WallObject ? ((WallObject) object).getOrientationB() : 0,
+			object instanceof GameObject ? ((GameObject) object).sizeX() : 1,
+			object instanceof GameObject ? ((GameObject) object).sizeY() : 1));
 	}
 
-	private static DialogueSnapshot captureDialogue(Client client)
+	static DialogueSnapshot captureDialogue(Client client)
 	{
 		Widget options = visibleWidget(client, InterfaceID.Chatmenu.OPTIONS);
 		List<DialogueOptionSnapshot> optionValues = childOptions(options);
@@ -448,7 +469,7 @@ final class GenericClientQuestSnapshot
 	private static Widget visibleWidget(Client client, int id)
 	{
 		Widget widget = client.getWidget(id);
-		return widget != null && !widget.isHidden() && !widget.isSelfHidden() ? widget : null;
+		return GenericClientWidgets.isVisible(widget) ? widget : null;
 	}
 
 	private static String firstText(Client client, int... ids)
@@ -483,7 +504,7 @@ final class GenericClientQuestSnapshot
 		List<DialogueOptionSnapshot> result = new ArrayList<>();
 		for (Widget child : children)
 		{
-			String text = child == null || child.isHidden() ? null : cleanText(child.getText());
+			String text = GenericClientWidgets.isVisible(child) ? cleanText(child.getText()) : null;
 			if (text != null && !text.isEmpty() && child.getIndex() > 0)
 			{
 				result.add(new DialogueOptionSnapshot(child.getIndex(), text));
@@ -615,6 +636,7 @@ final class GenericClientQuestSnapshot
 		private final List<String> actions;
 		private final int orientationA;
 		private final int orientationB;
+		private final WorldArea footprint;
 
 		ObjectSnapshot(
 			int id,
@@ -626,7 +648,7 @@ final class GenericClientQuestSnapshot
 			int distance,
 			List<String> actions)
 		{
-			this(id, name, kind, x, y, plane, distance, actions, 0, 0);
+			this(id, name, kind, x, y, plane, distance, actions, 0, 0, 1, 1);
 		}
 
 		ObjectSnapshot(
@@ -639,7 +661,9 @@ final class GenericClientQuestSnapshot
 			int distance,
 			List<String> actions,
 			int orientationA,
-			int orientationB)
+			int orientationB,
+			int sizeX,
+			int sizeY)
 		{
 			this.id = id;
 			this.name = name;
@@ -651,7 +675,11 @@ final class GenericClientQuestSnapshot
 			this.actions = Collections.unmodifiableList(new ArrayList<>(actions));
 			this.orientationA = orientationA;
 			this.orientationB = orientationB;
+			// TileObject's world location is the centre tile, rounded south-west.
+			footprint = new WorldArea(x - (sizeX - 1) / 2, y - (sizeY - 1) / 2, sizeX, sizeY, plane);
 		}
+
+		boolean occupies(WorldPoint point) { return footprint.contains(point); }
 
 		int getId()
 		{
@@ -801,11 +829,11 @@ final class GenericClientQuestSnapshot
 
 	static final class DialogueSnapshot
 	{
-		private final boolean open;
-		private final String type;
-		private final String speaker;
-		private final String text;
-		private final List<DialogueOptionSnapshot> options;
+		final boolean open;
+		final String type;
+		final String speaker;
+		final String text;
+		final List<DialogueOptionSnapshot> options;
 
 		DialogueSnapshot(
 			boolean open,
@@ -846,6 +874,18 @@ final class GenericClientQuestSnapshot
 			return new DialogueSnapshot(true, "choice", null, null, options);
 		}
 
+		boolean samePage(DialogueSnapshot other)
+		{
+			if (open != other.open || !Objects.equals(type, other.type) || !Objects.equals(speaker, other.speaker) ||
+				!Objects.equals(text, other.text) || options.size() != other.options.size()) return false;
+			for (int index = 0; index < options.size(); index++)
+			{
+				DialogueOptionSnapshot left = options.get(index), right = other.options.get(index);
+				if (left.index != right.index || !left.text.equals(right.text)) return false;
+			}
+			return true;
+		}
+
 		Map<String, Object> toMap()
 		{
 			Map<String, Object> value = new LinkedHashMap<>();
@@ -868,8 +908,8 @@ final class GenericClientQuestSnapshot
 
 	static final class DialogueOptionSnapshot
 	{
-		private final int index;
-		private final String text;
+		final int index;
+		final String text;
 
 		DialogueOptionSnapshot(int index, String text)
 		{

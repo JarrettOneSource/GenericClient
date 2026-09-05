@@ -6,10 +6,8 @@ import com.google.gson.JsonParseException;
 import java.io.IOException;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.ZoneId;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -47,7 +45,7 @@ final class GenericClientAutomationStore
 
 	void saveConfig(String profileId, GenericClientAutomationConfig config) throws IOException
 	{
-		writeAtomically(configPath(profileId), gson.toJson(config) + System.lineSeparator());
+		GenericClientAtomicFile.write(configPath(profileId), gson.toJson(config) + System.lineSeparator());
 	}
 
 	State loadState(String profileId) throws IOException
@@ -77,7 +75,7 @@ final class GenericClientAutomationStore
 	{
 		state.updatedEpochMillis = nowEpochMillis;
 		state.validate();
-		writeAtomically(statePath(profileId), gson.toJson(state) + System.lineSeparator());
+		GenericClientAtomicFile.write(statePath(profileId), gson.toJson(state) + System.lineSeparator());
 	}
 
 	Path configPath(String profileId)
@@ -92,21 +90,6 @@ final class GenericClientAutomationStore
 		return directory.resolve("state-" + profileId + ".json");
 	}
 
-	private static void writeAtomically(Path target, String value) throws IOException
-	{
-		Path temporary = target.resolveSibling(target.getFileName() + ".tmp");
-		Files.writeString(temporary, value, StandardCharsets.UTF_8);
-		try
-		{
-			Files.move(temporary, target,
-				StandardCopyOption.ATOMIC_MOVE,
-				StandardCopyOption.REPLACE_EXISTING);
-		}
-		catch (AtomicMoveNotSupportedException exception)
-		{
-			Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
-		}
-	}
 
 	private static void validateProfileId(String profileId)
 	{

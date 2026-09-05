@@ -55,6 +55,7 @@ public class GenericClientQuestActionsTest
 		Map<String, Object> escape = new LinkedHashMap<>();
 		escape.put("type", "inventory_dialogue");
 		escape.put("item_id", 2564.0);
+		escape.put("alternative_item_ids", List.of(2562.0, 2560.0));
 		escape.put("action", "Rub");
 		escape.put("choice", "Castle Wars Arena");
 		escape.put("x", 2440.0);
@@ -64,16 +65,36 @@ public class GenericClientQuestActionsTest
 		Map<String, Object> action = new LinkedHashMap<>();
 		action.put("escape", escape);
 
-		GenericClientEmergencyController.Escape parsed =
+		GenericClientEmergencyEscape parsed =
 			GenericClientQuestActions.emergencyEscape(action);
 
-		assertEquals(GenericClientEmergencyController.EscapeType.INVENTORY_DIALOGUE,
+		assertEquals(GenericClientEmergencyEscape.Type.INVENTORY_DIALOGUE,
 			parsed.getType());
 		assertEquals(2564, parsed.getItemId());
+		assertEquals(List.of(2564, 2562, 2560), parsed.getItemIds());
+		assertEquals(2562, parsed.resolveItemId(id -> id == 2562));
 		assertEquals("Rub", parsed.getItemAction());
 		assertEquals("Castle Wars Arena", parsed.getDialogueChoice());
 		assertEquals(2440, parsed.getDestination().getX());
 		assertEquals(10, parsed.getWithin());
+	}
+
+	@Test
+	public void ownsOnlyProtectionPrayerThatTheScriptActuallyEnabled()
+	{
+		Map<String, Object> activated = prayerReceipt("set", "protect_from_melee");
+		Map<String, Object> preexisting = prayerReceipt(
+			"unchanged", "protect_from_magic");
+		Map<String, Object> disabled = prayerReceipt(
+			"unchanged", "protect_from_melee");
+
+		String owned = GenericClientQuestActions.updateOwnedPrayer(
+			"none", activated, true);
+		assertEquals("protect_from_melee", owned);
+		owned = GenericClientQuestActions.updateOwnedPrayer(owned, preexisting, true);
+		assertEquals("protect_from_melee", owned);
+		owned = GenericClientQuestActions.updateOwnedPrayer(owned, disabled, false);
+		assertEquals("none", owned);
 	}
 
 	private static Map<String, Object> item(int id, int quantity)
@@ -82,5 +103,13 @@ public class GenericClientQuestActionsTest
 		item.put("id", (double) id);
 		item.put("quantity", (double) quantity);
 		return item;
+	}
+
+	private static Map<String, Object> prayerReceipt(String status, String prayer)
+	{
+		Map<String, Object> receipt = new LinkedHashMap<>();
+		receipt.put("status", status);
+		receipt.put("prayer", prayer);
+		return receipt;
 	}
 }

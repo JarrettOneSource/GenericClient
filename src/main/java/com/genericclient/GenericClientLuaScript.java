@@ -7,7 +7,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import net.runelite.api.coords.WorldPoint;
 import party.iroiro.luajava.JFunction;
 import party.iroiro.luajava.Lua;
 import party.iroiro.luajava.lua54.Lua54;
@@ -17,11 +16,6 @@ final class GenericClientLuaScript implements AutoCloseable
 	private static final long RESUME_BUDGET_NANOS = 20_000_000L;
 	private static final long SOURCE_LOAD_BUDGET_NANOS = 100_000_000L;
 	private static final int HOOK_INSTRUCTION_INTERVAL = 1_000;
-	private static final int DEFAULT_RANDOM_ACTION_TIMEOUT_TICKS = 8;
-	private static final int DEFAULT_NPC_ACTION_TIMEOUT_TICKS = 20;
-	private static final int DEFAULT_BANK_ACTION_TIMEOUT_TICKS = 200;
-	private static final int DEFAULT_GE_ACTION_TIMEOUT_TICKS = 300;
-	private static final int DEFAULT_WALK_ACTION_TIMEOUT_TICKS = 600;
 
 	private final GenericClientLuaHost host;
 	private final String name;
@@ -38,15 +32,16 @@ final class GenericClientLuaScript implements AutoCloseable
 	private String faultMessage;
 	private Object returnValue;
 	private GenericClientSnapshot pinnedSnapshot;
-	private Wait wait;
-	private long nextRequestId;
+	private volatile GenericClientLuaAwait wait;
+	private final GenericClientLuaAwait.Parser awaitParser = new GenericClientLuaAwait.Parser();
+	final GenericClientLuaIntent intents;
 	private String currentPhase;
-	private GenericClientActivityContext.Activity currentActivity =
-		GenericClientActivityContext.Activity.GENERAL;
+	private volatile GenericClientActivityContext currentActivity;
 	private List<GenericClientScriptInput> inputs = Collections.emptyList();
 	private List<GenericClientScriptAction> actions = Collections.emptyList();
 	private Map<String, Object> resolvedInputs = Collections.emptyMap();
 	private volatile List<GenericClientOverlayRow> overlayRows = Collections.emptyList();
+	private volatile List<GenericClientSceneMarker> sceneMarkers = Collections.emptyList();
 	private final ArrayDeque<String> pendingActions = new ArrayDeque<>();
 
 	GenericClientLuaScript(GenericClientLuaHost host, String name, String source)
@@ -54,6 +49,8 @@ final class GenericClientLuaScript implements AutoCloseable
 		this.host = host;
 		this.name = name;
 		this.lua = new Lua54();
+		this.intents = new GenericClientLuaIntent(host::nowNanos,
+			(level, message) -> host.scriptLog(name, level, "intent", message));
 
 		try
 		{
@@ -114,16 +111,40 @@ final class GenericClientLuaScript implements AutoCloseable
 		return overlayRows;
 	}
 
+	List<GenericClientSceneMarker> getSceneMarkers()
+	{
+		return sceneMarkers;
+	}
+
+	String getName()
+	{
+		return name;
+	}
+
 	String getActivity()
 	{
-		Wait current = wait;
-		if (current != null &&
-			(current.kind == WaitKind.ACTION || current.kind == WaitKind.PHASE) &&
-			current.activityContext != null)
+		return getActivityContext().getActivity().getValue();
+	}
+
+	long quietMillis(GenericClientActionBoundary.Ticket walkOwner, long walkQuietMillis)
+	{
+		GenericClientLuaAwait current = wait;
+		if (current != null && "walk.to".equals(current.actionType) && current.ticket == walkOwner)
+			return walkQuietMillis;
+		return current != null && current.kind == GenericClientLuaAwait.Kind.TICKS
+			? Math.max(0, current.remainingTicks - 1L) * 600 : 0;
+	}
+
+	GenericClientActivityContext getActivityContext()
+	{
+		GenericClientLuaAwait current = wait;
+		if (current != null)
 		{
-			return current.activityContext.getActivity().getValue();
+			return intents.context(current.activityContext).withTicket(current.ticket);
 		}
-		return currentActivity.getValue();
+		GenericClientActivityContext declared = currentActivity;
+		if (declared == null) declared = GenericClientActivityContext.preset(GenericClientActivityContext.Activity.GENERAL);
+		return intents.context(host.isOperator(this) ? declared.plain() : declared);
 	}
 
 	String getScriptState()
@@ -165,6 +186,7 @@ final class GenericClientLuaScript implements AutoCloseable
 	void onGameTick(GenericClientSnapshot snapshot)
 	{
 		pinnedSnapshot = snapshot;
+		intents.onGameTick();
 		if (finished || wait == null)
 		{
 			return;
@@ -191,8 +213,10 @@ final class GenericClientLuaScript implements AutoCloseable
 					break;
 				}
 				wait.remainingTicks--;
-				if (wait.remainingTicks == 0)
-				{
+					if (wait.remainingTicks == 0)
+					{
+						wait.ticket.cancel();
+						host.cancelTimedOutAction(this, wait.requestId, wait.actionType);
 					Map<String, Object> receipt = new LinkedHashMap<>();
 					receipt.put("status", "timed_out");
 					receipt.put("result", "action did not complete before timeout");
@@ -207,7 +231,7 @@ final class GenericClientLuaScript implements AutoCloseable
 
 	void completeAction(long requestId, Map<String, Object> receipt, GenericClientSnapshot snapshot)
 	{
-		if (finished || wait == null || wait.kind != WaitKind.ACTION || wait.requestId != requestId)
+		if (finished || wait == null || wait.kind != GenericClientLuaAwait.Kind.ACTION || wait.requestId != requestId)
 		{
 			return;
 		}
@@ -215,9 +239,55 @@ final class GenericClientLuaScript implements AutoCloseable
 		resume(valueResponse(receipt));
 	}
 
+	Long pendingActionRequestId()
+	{
+		return finished || wait == null || wait.kind != GenericClientLuaAwait.Kind.ACTION || !wait.dispatched
+			? null
+			: wait.requestId;
+	}
+
+	GenericClientActionBoundary.Ticket actionTicket(long requestId)
+	{
+		GenericClientLuaAwait current = wait;
+		if (finished || current == null || current.requestId != requestId)
+		{
+			throw new IllegalStateException("Action no longer belongs to this coroutine");
+		}
+		return current.ticket;
+	}
+
+	boolean isCurrentAction(long requestId, GenericClientActionBoundary.Ticket ticket)
+	{
+		GenericClientLuaAwait current = wait;
+		return !finished && current != null && current.kind == GenericClientLuaAwait.Kind.ACTION &&
+			current.requestId == requestId && current.ticket == ticket;
+	}
+
+	void suspendActionInput(boolean suspended)
+	{
+		intents.suspendInput(suspended);
+		GenericClientLuaAwait current = wait;
+		if (current != null) current.ticket.suspendInput(suspended);
+	}
+
+	boolean retryAction(long requestId, GenericClientSnapshot snapshot)
+	{
+		if (finished || wait == null || wait.kind != GenericClientLuaAwait.Kind.ACTION ||
+			wait.requestId != requestId || !wait.dispatched)
+		{
+			return false;
+		}
+		pinnedSnapshot = snapshot;
+		wait.ticket.cancel();
+		wait.ticket = intents.newActionTicket();
+		wait.dispatched = false;
+		dispatchWaitIfReady();
+		return true;
+	}
+
 	void completePhase(long requestId, Map<String, Object> receipt, GenericClientSnapshot snapshot)
 	{
-		if (finished || wait == null || wait.kind != WaitKind.PHASE || wait.requestId != requestId)
+		if (finished || wait == null || wait.kind != GenericClientLuaAwait.Kind.PHASE || wait.requestId != requestId)
 		{
 			return;
 		}
@@ -262,9 +332,8 @@ final class GenericClientLuaScript implements AutoCloseable
 		faultMessage = null;
 		returnValue = null;
 		wait = null;
-		nextRequestId = 0;
 		currentPhase = null;
-		currentActivity = GenericClientActivityContext.Activity.GENERAL;
+		currentActivity = null;
 		activated = false;
 		startedNanos = 0L;
 		inputs = Collections.emptyList();
@@ -370,10 +439,52 @@ final class GenericClientLuaScript implements AutoCloseable
 			"  if response and response.host_error then error(response.host_error, 2) end\n" +
 			"  return response and response.value or nil\n" +
 			"end\n" +
+			"gc.intent = function(name, fn)\n" +
+			"  if type(name) ~= 'string' or not name:match('%S') then error('gc.intent requires a non-empty name', 2) end\n" +
+			"  if type(fn) ~= 'function' then error('gc.intent requires a function', 2) end\n" +
+			"  local entered = gc.await { action = { type = 'intent.begin', name = name } }\n" +
+			"  if entered.status ~= 'started' then error(entered.reason or 'intent did not start', 2) end\n" +
+			"  local results = table.pack(pcall(fn))\n" +
+			"  local ended = gc.await { action = { type = 'intent.end', name = name, failed = not results[1] } }\n" +
+			"  if not results[1] then error(results[2], 0) end\n" +
+			"  if ended.status ~= 'complete' then error(ended.reason or 'intent did not finish', 2) end\n" +
+			"  return table.unpack(results, 2, results.n)\n" +
+			"end\n" +
+			"gc.walk = {}\n" +
+			"gc.walk.to = function(options)\n" +
+			"  if type(options) ~= 'table' then error('gc.walk.to requires an options table', 2) end\n" +
+			"  local action = {}\n" +
+			"  for key, value in pairs(options) do\n" +
+			"    if key ~= 'activity' and key ~= 'policy' and key ~= 'humanize' and key ~= 'timeout' and key ~= 'ticks' then action[key] = value end\n" +
+			"  end\n" +
+			"  action.type = 'walk.to'\n" +
+			"  return gc.await { action = action, activity = options.activity, policy = options.policy, humanize = options.humanize,\n" +
+			"    timeout = options.timeout or (options.ticks and { game_ticks = options.ticks }) }\n" +
+			"end\n" +
+			"gc.checkpoint = function(key, value)\n" +
+			"  local type = value == nil and 'checkpoint.get' or 'checkpoint.set'\n" +
+			"  local action = { type = type, key = key, value = value }\n" +
+			"  local receipt = gc.await { action = action }\n" +
+			"  if not receipt or receipt.status ~= 'complete' then\n" +
+			"    error(receipt and receipt.result or 'checkpoint failed', 2)\n" +
+			"  end\n" +
+			"  if type == 'checkpoint.get' and not receipt.present then return nil end\n" +
+			"  return receipt.value\n" +
+			"end\n" +
+			"gc.clear_checkpoint = function(key)\n" +
+			"  local receipt = gc.await {\n" +
+			"    action = { type = 'checkpoint.clear', key = key } }\n" +
+			"  if not receipt or receipt.status ~= 'complete' then\n" +
+			"    error(receipt and receipt.result or 'checkpoint clear failed', 2)\n" +
+			"  end\n" +
+			"  return receipt.cleared\n" +
+			"end\n" +
 			"gc.phase = function(name, options)\n" +
 			"  local request = { phase = name }\n" +
+			"  if options and options.breaks ~= nil then error('Unknown phase option: breaks', 2) end\n" +
 			"  if options and options.activity ~= nil then gc.activity(options.activity) end\n" +
-			"  if options and options.breaks ~= nil then request.breaks = options.breaks end\n" +
+			"  if options and options.policy ~= nil then request.policy = options.policy end\n" +
+			"  if options and options.humanize ~= nil then request.humanize = options.humanize end\n" +
 			"  return gc.await(request)\n" +
 			"end\n" +
 			"java = nil\n" +
@@ -402,10 +513,11 @@ final class GenericClientLuaScript implements AutoCloseable
 		{
 			if (state.getTop() >= 1 && !state.isNil(1))
 			{
-				String name = state.toString(1);
-				currentActivity = GenericClientActivityContext.Activity.fromName(name);
+				currentActivity = GenericClientActivityContext.preset(
+					GenericClientActivityContext.Activity.fromName(state.toString(1)))
+					.withPolicy(state.getTop() >= 2 && !state.isNil(2) ? state.toObject(2) : null);
 			}
-			state.push(currentActivity.getValue());
+			state.push(currentActivity == null ? "general" : currentActivity.getActivity().getValue());
 			return 1;
 		}
 		catch (RuntimeException exception)
@@ -488,6 +600,10 @@ final class GenericClientLuaScript implements AutoCloseable
 				value = normalizeLuaValue(state.toObject(1));
 			}
 			overlayRows = GenericClientOverlayRow.parse(value);
+			Object rawMarkers = state.getTop() >= 2 && !state.isNil(2)
+				? normalizeLuaValue(state.toObject(2))
+				: null;
+			sceneMarkers = GenericClientSceneMarker.parse(rawMarkers);
 			return 0;
 		}
 		catch (RuntimeException exception)
@@ -528,6 +644,7 @@ final class GenericClientLuaScript implements AutoCloseable
 		{
 			return;
 		}
+		if (wait != null) wait.ticket.cancel();
 
 		try
 		{
@@ -555,7 +672,9 @@ final class GenericClientLuaScript implements AutoCloseable
 
 			Object yieldedValue = coroutine.toObject(-1);
 			coroutine.pop(1);
-			wait = parseWait(yieldedValue);
+			GenericClientLuaAwait next = awaitParser.parse(yieldedValue, currentActivity, host.isOperator(this));
+			if (!GenericClientLuaIntent.isControl(next.actionType)) next.ticket = intents.newActionTicket();
+			wait = next;
 			dispatchWaitIfReady();
 		}
 		catch (RuntimeException exception)
@@ -568,323 +687,18 @@ final class GenericClientLuaScript implements AutoCloseable
 		}
 	}
 
-	private Wait parseWait(Object yieldedValue)
-	{
-		Map<?, ?> request = awaitRequest(yieldedValue);
-		boolean breaksEnabled = breaksEnabled(request);
-		GenericClientActivityContext.Activity requestedActivity = requestedActivity(request);
-
-		Object ticks = request.get("ticks");
-		if (ticks instanceof Number)
-		{
-			return parseTickWait((Number) ticks);
-		}
-
-		Object event = request.get("event");
-		if (event instanceof String)
-		{
-			return parseEventWait((String) event);
-		}
-
-		Object action = request.get("action");
-		if (action instanceof Map)
-		{
-			return parseActionWait(
-				request, (Map<?, ?>) action, breaksEnabled, requestedActivity);
-		}
-
-		Object phase = request.get("phase");
-		if (phase instanceof String)
-		{
-			return parsePhaseWait((String) phase, breaksEnabled, requestedActivity);
-		}
-
-		throw new IllegalArgumentException("Await request must contain ticks, event, action, or phase");
-	}
-
-	private static Map<?, ?> awaitRequest(Object yieldedValue)
-	{
-		if (!(yieldedValue instanceof Map))
-		{
-			throw new IllegalArgumentException("Script yielded an invalid await request");
-		}
-		Map<?, ?> envelope = (Map<?, ?>) yieldedValue;
-		if (!"gc.await.v1".equals(envelope.get("protocol")) || !(envelope.get("request") instanceof Map))
-		{
-			throw new IllegalArgumentException("Script yielded an invalid await envelope");
-		}
-		return (Map<?, ?>) envelope.get("request");
-	}
-
-	private static boolean breaksEnabled(Map<?, ?> request)
-	{
-		if (request.containsKey("breaks") && !(request.get("breaks") instanceof Boolean))
-		{
-			throw new IllegalArgumentException("breaks must be true or false");
-		}
-		return !(request.get("breaks") instanceof Boolean) ||
-			(Boolean) request.get("breaks");
-	}
-
-	private GenericClientActivityContext.Activity requestedActivity(Map<?, ?> request)
-	{
-		GenericClientActivityContext.Activity requestedActivity = currentActivity;
-		if (request.containsKey("activity"))
-		{
-			if (!(request.get("activity") instanceof String))
-			{
-				throw new IllegalArgumentException("activity must be a string");
-			}
-			requestedActivity = GenericClientActivityContext.Activity.fromName(
-				(String) request.get("activity"));
-		}
-		return requestedActivity;
-	}
-
-	private static Wait parseTickWait(Number value)
-	{
-		int ticks = value.intValue();
-		if (ticks < 1)
-		{
-			throw new IllegalArgumentException("Tick wait must be positive");
-		}
-		return Wait.ticks(ticks);
-	}
-
-	private static Wait parseEventWait(String event)
-	{
-		if (!"game.tick".equals(event))
-		{
-			throw new IllegalArgumentException("Unsupported event: " + event);
-		}
-		return Wait.gameTick();
-	}
-
-	private Wait parseActionWait(
-		Map<?, ?> request,
-		Map<?, ?> action,
-		boolean breaksEnabled,
-		GenericClientActivityContext.Activity requestedActivity)
-	{
-		Object typeValue = action.get("type");
-		if (!(typeValue instanceof String))
-		{
-			throw new IllegalArgumentException("Action requires a type string");
-		}
-		String type = (String) typeValue;
-		int timeout = actionTimeout(request, type);
-
-		switch (type)
-		{
-			case "walk.random":
-				return Wait.randomAction(
-					++nextRequestId,
-					timeout,
-					activityContext(type, action, breaksEnabled, requestedActivity));
-			case "mouse.offscreen":
-				return Wait.mouseOffscreen(++nextRequestId, timeout);
-			case "walk.to":
-				return parseWalkAction(action, timeout, breaksEnabled, requestedActivity);
-			case "npc.interact":
-				return parseNpcAction(action, timeout, breaksEnabled, requestedActivity);
-			case "combat.set_style":
-				return parseCombatStyle(action, timeout, breaksEnabled, requestedActivity);
-			case "combat.set_auto_retaliate":
-				return parseAutoRetaliate(action, timeout, breaksEnabled, requestedActivity);
-			default:
-				if (isQuestAction(type))
-				{
-					return Wait.questAction(
-						++nextRequestId,
-						timeout,
-						type,
-						copyAction(action),
-						activityContext(type, action, breaksEnabled, requestedActivity));
-				}
-				throw new IllegalArgumentException("Unsupported action: " + type);
-		}
-	}
-
-	private static int actionTimeout(Map<?, ?> request, String type)
-	{
-		int timeout = defaultActionTimeout(type);
-		Object timeoutValue = request.get("timeout");
-		if (timeoutValue instanceof Map)
-		{
-			Object gameTicks = ((Map<?, ?>) timeoutValue).get("game_ticks");
-			if (gameTicks instanceof Number)
-			{
-				timeout = ((Number) gameTicks).intValue();
-			}
-		}
-		if (timeout < 1)
-		{
-			throw new IllegalArgumentException("Action timeout must be positive");
-		}
-		return timeout;
-	}
-
-	private static int defaultActionTimeout(String type)
-	{
-		switch (type)
-		{
-			case "walk.to":
-				return DEFAULT_WALK_ACTION_TIMEOUT_TICKS;
-			case "bank.loadout":
-				return DEFAULT_BANK_ACTION_TIMEOUT_TICKS;
-			case "ge.buy":
-				return DEFAULT_GE_ACTION_TIMEOUT_TICKS;
-			case "npc.interact":
-			case "combat.set_style":
-			case "combat.set_auto_retaliate":
-				return DEFAULT_NPC_ACTION_TIMEOUT_TICKS;
-			default:
-				return isQuestAction(type)
-					? DEFAULT_NPC_ACTION_TIMEOUT_TICKS
-					: DEFAULT_RANDOM_ACTION_TIMEOUT_TICKS;
-		}
-	}
-
-	private Wait parseWalkAction(
-		Map<?, ?> action,
-		int timeout,
-		boolean breaksEnabled,
-		GenericClientActivityContext.Activity requestedActivity)
-	{
-		Object destinationValue = action.get("destination");
-		if (!(destinationValue instanceof Map))
-		{
-			throw new IllegalArgumentException("walk.to requires a destination table");
-		}
-		Map<?, ?> destination = (Map<?, ?>) destinationValue;
-		int x = requiredInt(destination, "x");
-		int y = requiredInt(destination, "y");
-		int plane = requiredInt(destination, "plane");
-		if (x < 0 || x > 0x7FFF || y < 0 || y > 0x7FFF || plane < 0 || plane > 3)
-		{
-			throw new IllegalArgumentException("walk.to destination is outside world coordinate bounds");
-		}
-		int within = action.get("within") instanceof Number
-			? ((Number) action.get("within")).intValue()
-			: 1;
-		if (within < 0 || within > 10)
-		{
-			throw new IllegalArgumentException("walk.to within must be between 0 and 10");
-		}
-		if (action.get("run") != null && !(action.get("run") instanceof Boolean))
-		{
-			throw new IllegalArgumentException("walk.to run must be true or false");
-		}
-		return Wait.walkAction(
-			++nextRequestId,
-			timeout,
-			new WorldPoint(x, y, plane),
-			within,
-			activityContext("walk.to", action, breaksEnabled, requestedActivity),
-			!Boolean.FALSE.equals(action.get("run")));
-	}
-
-	private Wait parseNpcAction(
-		Map<?, ?> action,
-		int timeout,
-		boolean breaksEnabled,
-		GenericClientActivityContext.Activity requestedActivity)
-	{
-		Integer id = optionalNonNegativeInt(action, "id", "npc.interact");
-		String name = optionalText(action.get("name"));
-		if (id == null && name == null)
-		{
-			throw new IllegalArgumentException("npc.interact requires id or name");
-		}
-		String option = requiredText(action, "action", "npc.interact");
-		int within = action.get("within") instanceof Number
-			? ((Number) action.get("within")).intValue()
-			: 15;
-		if (within < 1 || within > 32)
-		{
-			throw new IllegalArgumentException("npc.interact within must be between 1 and 32");
-		}
-		return Wait.npcAction(
-			++nextRequestId,
-			timeout,
-			id,
-			name,
-			option,
-			within,
-			activityContext("npc.interact", action, breaksEnabled, requestedActivity));
-	}
-
-	private Wait parseCombatStyle(
-		Map<?, ?> action,
-		int timeout,
-		boolean breaksEnabled,
-		GenericClientActivityContext.Activity requestedActivity)
-	{
-		Object styleValue = action.get("style");
-		if (!(styleValue instanceof Number))
-		{
-			throw new IllegalArgumentException("combat.set_style requires a numeric style");
-		}
-		int style = ((Number) styleValue).intValue();
-		if (style < 0 || style > 3)
-		{
-			throw new IllegalArgumentException("combat.set_style style must be between 0 and 3");
-		}
-		return Wait.combatStyle(
-			++nextRequestId,
-			timeout,
-			style,
-			activityContext("combat.set_style", action, breaksEnabled, requestedActivity));
-	}
-
-	private Wait parseAutoRetaliate(
-		Map<?, ?> action,
-		int timeout,
-		boolean breaksEnabled,
-		GenericClientActivityContext.Activity requestedActivity)
-	{
-		Object enabledValue = action.get("enabled");
-		if (!(enabledValue instanceof Boolean))
-		{
-			throw new IllegalArgumentException(
-				"combat.set_auto_retaliate requires enabled=true or enabled=false");
-		}
-		return Wait.combatAutoRetaliate(
-			++nextRequestId,
-			timeout,
-			(Boolean) enabledValue,
-			activityContext("combat.set_auto_retaliate", action, breaksEnabled, requestedActivity));
-	}
-
-	private Wait parsePhaseWait(
-		String value,
-		boolean breaksEnabled,
-		GenericClientActivityContext.Activity requestedActivity)
-	{
-		String phase = value.trim();
-		if (!phase.matches("[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}"))
-		{
-			throw new IllegalArgumentException(
-				"Phase name must be 1-64 letters, numbers, dots, underscores, or hyphens");
-		}
-		return Wait.phase(
-			++nextRequestId,
-			phase,
-			GenericClientActivityContext.of(requestedActivity, breaksEnabled));
-	}
-
 	private void dispatchWaitIfReady()
 	{
 		if (!activated || finished || wait == null || wait.dispatched)
 		{
 			return;
 		}
-		if (wait.kind != WaitKind.ACTION && wait.kind != WaitKind.PHASE)
+		if (wait.kind != GenericClientLuaAwait.Kind.ACTION && wait.kind != GenericClientLuaAwait.Kind.PHASE)
 		{
 			return;
 		}
 		wait.dispatched = true;
-		if (wait.kind == WaitKind.PHASE)
+		if (wait.kind == GenericClientLuaAwait.Kind.PHASE)
 		{
 			if (wait.phaseName.equals(currentPhase))
 			{
@@ -895,19 +709,24 @@ final class GenericClientLuaScript implements AutoCloseable
 				return;
 			}
 			currentPhase = wait.phaseName;
-			host.submitPhase(this, wait.requestId, wait.phaseName, wait.activityContext);
+			host.actions.submitPhase(this, wait.requestId, wait.phaseName, wait.activityContext);
 		}
-		else if ("walk.random".equals(wait.actionType))
+			else if ("walk.random".equals(wait.actionType))
 		{
-			host.submitWalkRandom(this, wait.requestId, wait.activityContext);
-		}
+				host.actions.submitWalkRandom(this, wait.requestId, wait.activityContext);
+			}
+			else if ("walk.click".equals(wait.actionType))
+			{
+				host.actions.submitWalkClick(
+					this, wait.requestId, wait.destination, wait.activityContext);
+			}
 		else if ("mouse.offscreen".equals(wait.actionType))
 		{
-			host.submitMouseOffscreen(this, wait.requestId);
+			host.actions.submitMouseOffscreen(this, wait.requestId);
 		}
 		else if ("npc.interact".equals(wait.actionType))
 		{
-			host.submitNpcInteract(
+			host.actions.submitNpcInteract(
 				this,
 				wait.requestId,
 				wait.targetId,
@@ -918,7 +737,7 @@ final class GenericClientLuaScript implements AutoCloseable
 		}
 		else if (wait.questAction != null)
 		{
-			host.submitQuestAction(
+			host.actions.submitQuestAction(
 				this,
 				wait.requestId,
 				wait.actionType,
@@ -927,160 +746,17 @@ final class GenericClientLuaScript implements AutoCloseable
 		}
 		else if ("combat.set_style".equals(wait.actionType))
 		{
-			host.submitCombatSetStyle(this, wait.requestId, wait.within, wait.activityContext);
+			host.actions.submitCombatSetStyle(this, wait.requestId, wait.within, wait.activityContext);
 		}
 		else if ("combat.set_auto_retaliate".equals(wait.actionType))
 		{
-			host.submitCombatSetAutoRetaliate(
+			host.actions.submitCombatSetAutoRetaliate(
 				this, wait.requestId, wait.within == 1, wait.activityContext);
 		}
 		else
 		{
-				host.submitWalkTo(
-				this,
-				wait.requestId,
-					wait.destination,
-					wait.within,
-					wait.remainingTicks,
-					wait.activityContext,
-					wait.useRun);
+			host.actions.submitWalkTo(this, wait.requestId, wait.walkRequest);
 		}
-	}
-
-	private GenericClientActivityContext activityContext(
-		String actionType,
-		Map<?, ?> action,
-		boolean discretionaryBehaviorEnabled,
-		GenericClientActivityContext.Activity requestedActivity)
-	{
-		GenericClientActivityContext.Activity activity = requestedActivity;
-		if ("bank.loadout".equals(actionType))
-		{
-			activity = GenericClientActivityContext.Activity.BANKING;
-		}
-		else if ("ge.buy".equals(actionType))
-		{
-			activity = GenericClientActivityContext.Activity.TRADING;
-		}
-		else if ("npc.interact".equals(actionType) &&
-			"Bank".equalsIgnoreCase(String.valueOf(action.get("action"))))
-		{
-			activity = GenericClientActivityContext.Activity.BANKING;
-		}
-		else if ("npc.interact".equals(actionType) &&
-			"Exchange".equalsIgnoreCase(String.valueOf(action.get("action"))))
-		{
-			activity = GenericClientActivityContext.Activity.TRADING;
-		}
-		else if (actionType.startsWith("combat.") ||
-			("npc.interact".equals(actionType) &&
-				"Attack".equalsIgnoreCase(String.valueOf(action.get("action")))))
-		{
-			activity = GenericClientActivityContext.Activity.COMBAT;
-		}
-		else if (actionType.startsWith("dialogue.") ||
-			("npc.interact".equals(actionType) &&
-				"Talk-to".equalsIgnoreCase(String.valueOf(action.get("action")))))
-		{
-			activity = GenericClientActivityContext.Activity.DIALOGUE;
-		}
-		else if (actionType.startsWith("walk.") &&
-			activity != GenericClientActivityContext.Activity.COMBAT &&
-			activity != GenericClientActivityContext.Activity.BANKING &&
-			activity != GenericClientActivityContext.Activity.TRADING &&
-			activity != GenericClientActivityContext.Activity.DIALOGUE)
-		{
-			activity = GenericClientActivityContext.Activity.TRAVEL;
-		}
-		return GenericClientActivityContext.of(activity, discretionaryBehaviorEnabled);
-	}
-
-	private static int requiredInt(Map<?, ?> value, String key)
-	{
-		Object number = value.get(key);
-		if (!(number instanceof Number))
-		{
-			throw new IllegalArgumentException("walk.to destination requires numeric " + key);
-		}
-		return ((Number) number).intValue();
-	}
-
-	private static boolean isQuestAction(String type)
-	{
-		return "object.interact".equals(type) ||
-			"item.interact".equals(type) ||
-			"equipment.interact".equals(type) ||
-			"item.use_on_object".equals(type) ||
-			"item.use_on_npc".equals(type) ||
-			"ground_item.take".equals(type) ||
-			"dialogue.continue".equals(type) ||
-			"dialogue.choose".equals(type) ||
-			"bank.loadout".equals(type) ||
-			"ge.buy".equals(type) ||
-			"combat.cast".equals(type) ||
-			"combat.set_autocast".equals(type) ||
-			"prayer.set".equals(type) ||
-			"ui.close".equals(type) ||
-			"ui.click".equals(type) ||
-			"ui.key".equals(type) ||
-			"safety.configure".equals(type) ||
-			"safety.clear".equals(type);
-	}
-
-	private static Map<String, Object> copyAction(Map<?, ?> value)
-	{
-		Map<String, Object> result = new LinkedHashMap<>();
-		for (Map.Entry<?, ?> entry : value.entrySet())
-		{
-			if (!(entry.getKey() instanceof String))
-			{
-				throw new IllegalArgumentException("Action keys must be strings");
-			}
-			result.put((String) entry.getKey(), normalizeLuaValue(entry.getValue()));
-		}
-		return Collections.unmodifiableMap(result);
-	}
-
-	private static String requiredText(Map<?, ?> value, String key, String actionType)
-	{
-		Object raw = value.get(key);
-		if (!(raw instanceof String) || ((String) raw).trim().isEmpty())
-		{
-			throw new IllegalArgumentException(actionType + " requires a non-empty " + key);
-		}
-		return ((String) raw).trim();
-	}
-
-	private static Integer optionalNonNegativeInt(Map<?, ?> value, String key, String actionType)
-	{
-		Object raw = value.get(key);
-		if (raw == null)
-		{
-			return null;
-		}
-		if (!(raw instanceof Number))
-		{
-			throw new IllegalArgumentException(actionType + " " + key + " must be numeric");
-		}
-		int result = ((Number) raw).intValue();
-		if (result < 0)
-		{
-			throw new IllegalArgumentException(actionType + " " + key + " cannot be negative");
-		}
-		return result;
-	}
-
-	private static String optionalText(Object raw)
-	{
-		if (raw == null)
-		{
-			return null;
-		}
-		if (!(raw instanceof String) || ((String) raw).trim().isEmpty())
-		{
-			throw new IllegalArgumentException("Optional text values must be non-empty strings");
-		}
-		return ((String) raw).trim();
 	}
 
 	private void beginBudget()
@@ -1112,10 +788,10 @@ final class GenericClientLuaScript implements AutoCloseable
 		return value;
 	}
 
-	private static Map<String, Object> valueResponse(Object value)
+	private Map<String, Object> valueResponse(Map<String, Object> value)
 	{
 		Map<String, Object> response = new LinkedHashMap<>();
-		response.put("value", value);
+		response.put("value", intents.decorate(value));
 		return response;
 	}
 
@@ -1202,6 +878,7 @@ final class GenericClientLuaScript implements AutoCloseable
 	@Override
 	public void close()
 	{
+		if (wait != null) wait.ticket.cancel();
 		finished = true;
 		releaseCoroutine();
 		if (hookInstallerReference != 0)
@@ -1214,6 +891,7 @@ final class GenericClientLuaScript implements AutoCloseable
 
 	private void releaseCoroutine()
 	{
+		intents.cancel("coroutine_closed");
 		if (coroutineReference != 0)
 		{
 			lua.unref(coroutineReference);
@@ -1222,158 +900,4 @@ final class GenericClientLuaScript implements AutoCloseable
 		coroutine = null;
 	}
 
-	private enum WaitKind
-	{
-		GAME_TICK,
-		TICKS,
-		ACTION,
-		PHASE
-	}
-
-	private static final class Wait
-	{
-		private final WaitKind kind;
-		private final long requestId;
-		private final String actionType;
-		private final WorldPoint destination;
-		private final int within;
-		private final Integer targetId;
-		private final String targetName;
-		private final String targetAction;
-		private final GenericClientActivityContext activityContext;
-		private final boolean useRun;
-		private final String phaseName;
-		private final Map<String, Object> questAction;
-		private int remainingTicks;
-		private boolean dispatched;
-
-		private Wait(
-			WaitKind kind,
-			long requestId,
-			int remainingTicks,
-			String actionType,
-			WorldPoint destination,
-			int within,
-			Integer targetId,
-			String targetName,
-			String targetAction,
-			GenericClientActivityContext activityContext,
-			boolean useRun,
-			String phaseName,
-			Map<String, Object> questAction)
-		{
-			this.kind = kind;
-			this.requestId = requestId;
-			this.remainingTicks = remainingTicks;
-			this.actionType = actionType;
-			this.destination = destination;
-			this.within = within;
-			this.targetId = targetId;
-			this.targetName = targetName;
-			this.targetAction = targetAction;
-			this.activityContext = activityContext;
-			this.useRun = useRun;
-			this.phaseName = phaseName;
-			this.questAction = questAction;
-		}
-
-		private static Wait gameTick()
-		{
-			return new Wait(WaitKind.GAME_TICK, 0, 0, null, null, 0, null, null, null,
-				GenericClientActivityContext.general(false), true, null, null);
-		}
-
-		private static Wait ticks(int ticks)
-		{
-			return new Wait(WaitKind.TICKS, 0, ticks, null, null, 0, null, null, null,
-				GenericClientActivityContext.general(false), true, null, null);
-		}
-
-		private static Wait randomAction(
-			long requestId,
-			int timeoutTicks,
-			GenericClientActivityContext activityContext)
-		{
-			return new Wait(
-				WaitKind.ACTION, requestId, timeoutTicks, "walk.random", null, 0,
-				null, null, null, activityContext, true, null, null);
-		}
-
-		private static Wait walkAction(
-			long requestId,
-			int timeoutTicks,
-			WorldPoint destination,
-			int within,
-			GenericClientActivityContext activityContext,
-			boolean useRun)
-		{
-			return new Wait(
-				WaitKind.ACTION, requestId, timeoutTicks, "walk.to", destination, within,
-				null, null, null, activityContext, useRun, null, null);
-		}
-
-		private static Wait npcAction(
-			long requestId,
-			int timeoutTicks,
-			Integer id,
-			String name,
-			String action,
-			int within,
-			GenericClientActivityContext activityContext)
-		{
-			return new Wait(
-				WaitKind.ACTION, requestId, timeoutTicks, "npc.interact", null, within,
-				id, name, action, activityContext, true, null, null);
-		}
-
-		private static Wait questAction(
-			long requestId,
-			int timeoutTicks,
-			String type,
-			Map<String, Object> action,
-			GenericClientActivityContext activityContext)
-		{
-			return new Wait(
-				WaitKind.ACTION, requestId, timeoutTicks, type, null, 0,
-				null, null, null, activityContext, true, null, action);
-		}
-
-		private static Wait combatStyle(
-			long requestId,
-			int timeoutTicks,
-			int style,
-			GenericClientActivityContext activityContext)
-		{
-			return new Wait(
-				WaitKind.ACTION, requestId, timeoutTicks, "combat.set_style", null, style,
-				null, null, null, activityContext, true, null, null);
-		}
-
-		private static Wait combatAutoRetaliate(
-			long requestId,
-			int timeoutTicks,
-			boolean enabled,
-			GenericClientActivityContext activityContext)
-		{
-			return new Wait(
-				WaitKind.ACTION, requestId, timeoutTicks, "combat.set_auto_retaliate", null,
-					enabled ? 1 : 0, null, null, null, activityContext, true, null, null);
-		}
-
-		private static Wait mouseOffscreen(long requestId, int timeoutTicks)
-		{
-			return new Wait(
-				WaitKind.ACTION, requestId, timeoutTicks, "mouse.offscreen", null, 0,
-					null, null, null, GenericClientActivityContext.general(false), true, null, null);
-		}
-
-		private static Wait phase(
-			long requestId,
-			String name,
-			GenericClientActivityContext activityContext)
-		{
-			return new Wait(WaitKind.PHASE, requestId, 0, null, null, 0,
-				null, null, null, activityContext, true, name, null);
-		}
-	}
 }

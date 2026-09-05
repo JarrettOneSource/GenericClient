@@ -25,21 +25,54 @@ public class GenericClientBehaviorStoreTest
 		Path directory = temporaryFolder.newFolder("behavior").toPath();
 		GenericClientBehaviorStore store = new GenericClientBehaviorStore(directory);
 		String profileId = GenericClientBehaviorProfile.fromAccountHash(1234L).getId();
-		GenericClientBehaviorState state = new GenericClientBehaviorState(profileId, 0.75);
+		GenericClientBehaviorState state = new GenericClientBehaviorState(profileId, 0.75, 1.25);
 		state.addActiveMillis(90_000L);
+		state.addMicroPressure(0.6);
 		state.recordPhase("banking.complete");
-		state.startBreak("long", "logout", 1_234_567_890L);
+		state.startBreak("long", "logout", 1_234_500_000L, 1_234_567_890L);
 
 		store.save(state, 1_200_000_000L);
-		GenericClientBehaviorState loaded = store.load(profileId);
+		GenericClientBehaviorState loaded = store.load(profileId, () -> 1.0);
 
 		assertNotNull(loaded);
 		assertEquals(state.toMap(), loaded.toMap());
 		assertEquals(90_000L, loaded.getTotalActiveMillis());
+		assertEquals(0.6, loaded.getMicroPressure(), 0.0);
+		assertEquals(1.25, loaded.getMicroBudget(), 0.0);
 		assertEquals(90_000L, loaded.getLastGlobalPhaseActiveMillis());
 		assertEquals(90_000L, loaded.getLastPhaseActiveMillis("banking.complete").longValue());
 		assertEquals(1_200_000_000L, loaded.getSavedAtEpochMillis());
 		assertFalse(Files.exists(directory.resolve("state-" + profileId + ".json.tmp")));
+	}
+
+	@Test
+	public void persistsDeferredLongBreakWithoutSpendingItsBudget() throws Exception
+	{
+		GenericClientBehaviorStore store = new GenericClientBehaviorStore(temporaryFolder.newFolder("deferred").toPath());
+		String id = GenericClientBehaviorProfile.fromAccountHash(11L).getId();
+		GenericClientBehaviorState state = new GenericClientBehaviorState(id, 0.5, 1.0);
+		state.addActiveMillis(90_000L);
+		state.deferLongBreak(600_000L);
+		store.save(state, 1_000_000L);
+		GenericClientBehaviorState restored = store.load(id, () -> 1.0);
+		assertTrue(restored.isLongBreakDeferred());
+		assertEquals(690_000L, restored.getLongDeferredUntilActiveMillis());
+		assertEquals(90_000L, restored.getActiveMillisSinceLongBreak());
+		assertEquals(0.5, restored.getLongHazardBudget(), 0.0);
+	}
+
+	@Test
+	public void migratesV1ProgressWithoutInventingADeferredBreak() throws Exception
+	{
+		Path directory = temporaryFolder.newFolder("v1-state").toPath();
+		String id = GenericClientBehaviorProfile.fromAccountHash(12L).getId();
+		Files.writeString(directory.resolve("state-" + id + ".json"),
+			"{\"schema\":\"genericclient_behavior_state.v1\",\"profileId\":\"" + id +
+			"\",\"totalActiveMillis\":90000,\"activeMillisSinceLongBreak\":90000,\"longHazardBudget\":0.5}");
+		GenericClientBehaviorState restored = new GenericClientBehaviorStore(directory).load(id, () -> 1.0);
+		assertEquals(GenericClientBehaviorState.SCHEMA, restored.toMap().get("schema"));
+		assertEquals(90_000L, restored.getActiveMillisSinceLongBreak());
+		assertFalse(restored.isLongBreakDeferred());
 	}
 
 	@Test
@@ -49,7 +82,42 @@ public class GenericClientBehaviorStoreTest
 			temporaryFolder.newFolder("missing").toPath());
 		String profileId = GenericClientBehaviorProfile.fromAccountHash(99L).getId();
 
-		assertNull(store.load(profileId));
+		assertNull(store.load(profileId, () -> 1.0));
+	}
+
+	@Test
+	public void v2MigrationStartsAtZeroAndPersistsTheSampledBudget() throws Exception
+	{
+		Path directory = temporaryFolder.newFolder("v2-state").toPath();
+		String id = GenericClientBehaviorProfile.fromAccountHash(12L).getId();
+		Files.writeString(directory.resolve("state-" + id + ".json"),
+			"{\"schema\":\"genericclient_behavior_state.v2\",\"profileId\":\"" + id +
+			"\",\"totalActiveMillis\":90000,\"activeMillisSinceLongBreak\":90000,\"longHazardBudget\":0.5," +
+			"\"longBreakDeferred\":true,\"longDeferredUntilActiveMillis\":690000}");
+		GenericClientBehaviorStore store = new GenericClientBehaviorStore(directory);
+		GenericClientBehaviorState migrated = store.load(id, () -> 0.125);
+		assertEquals(0.0, migrated.getMicroPressure(), 0.0);
+		assertEquals(0.125, migrated.getMicroBudget(), 0.0);
+		assertEquals(690_000, migrated.getLongDeferredUntilActiveMillis());
+		assertTrue(migrated.isLongBreakDeferred());
+		store.save(migrated, 1_000_000);
+		GenericClientBehaviorState restored = store.load(id, () -> { throw new AssertionError("Stored budget must not be resampled"); });
+		assertEquals(migrated.toMap(), restored.toMap());
+	}
+
+	@Test
+	public void currentSchemaRejectsMissingBudgetAndInvalidPressure() throws Exception
+	{
+		Path directory = temporaryFolder.newFolder("invalid-micro").toPath();
+		String id = GenericClientBehaviorProfile.fromAccountHash(13L).getId();
+		GenericClientBehaviorStore store = new GenericClientBehaviorStore(directory);
+		for (String fields : new String[] {"", ",\"microBudget\":0", ",\"microBudget\":1,\"microPressure\":-0.1"})
+		{
+			Files.writeString(directory.resolve("state-" + id + ".json"),
+				"{\"schema\":\"genericclient_behavior_state.v3\",\"profileId\":\"" + id +
+				"\",\"longHazardBudget\":0.5" + fields + "}");
+			assertInvalid(store, id);
+		}
 	}
 
 	@Test
@@ -70,7 +138,7 @@ public class GenericClientBehaviorStoreTest
 		GenericClientBehaviorStore store = new GenericClientBehaviorStore(directory);
 		String first = GenericClientBehaviorProfile.fromAccountHash(1L).getId();
 		String second = GenericClientBehaviorProfile.fromAccountHash(2L).getId();
-		store.save(new GenericClientBehaviorState(first, 1.0), 5L);
+		store.save(new GenericClientBehaviorState(first, 1.0, 1.0), 5L);
 		Files.copy(
 			directory.resolve("state-" + first + ".json"),
 			directory.resolve("state-" + second + ".json"));
@@ -82,7 +150,7 @@ public class GenericClientBehaviorStoreTest
 	public void longResetKeepsLifetimePhaseClockMonotonic()
 	{
 		GenericClientBehaviorState state = new GenericClientBehaviorState(
-			GenericClientBehaviorProfile.fromAccountHash(3L).getId(), 0.5);
+			GenericClientBehaviorProfile.fromAccountHash(3L).getId(), 0.5, 1.0);
 		state.addActiveMillis(10_000L);
 		state.recordPhase("first");
 		state.resetLongClock(1.5);
@@ -113,7 +181,8 @@ public class GenericClientBehaviorStoreTest
 			GenericClientBehaviorProfile.Edge.LEFT,
 			525,
 			65,
-			65);
+			65,
+			GenericClientBehaviorProfile.DialogueInputMode.MOUSE);
 
 		store.saveOverrides(profile.getId(), overrides);
 		assertEquals(overrides.toMap(), store.loadOverrides(profile.getId()).toMap());
@@ -161,7 +230,7 @@ public class GenericClientBehaviorStoreTest
 	{
 		try
 		{
-			store.load(profileId);
+			store.load(profileId, () -> 1.0);
 			throw new AssertionError("Expected invalid behavior state");
 		}
 		catch (IOException expected)

@@ -1,93 +1,137 @@
 package com.genericclient;
 
-import java.util.LinkedHashMap;
 import java.util.Locale;
-import java.util.Map;
 
-/** Immutable behavior policy captured for one composite client interaction. */
+/** Declared behavior and input authority captured for one semantic action. */
 final class GenericClientActivityContext
 {
-	private static final GenericClientActivityContext NONE =
-		new GenericClientActivityContext(Activity.GENERAL, false);
+	static final int PERFORMANCE_MOUSE_MOVE_DURATION_MILLIS = 180;
+	private static final GenericClientActivityContext NONE = preset(Activity.GENERAL).plain();
 
 	private final Activity activity;
-	private final boolean discretionaryBehaviorEnabled;
+	final GenericClientBehaviorPolicy declaredPolicy;
+	final boolean humanize;
+	final boolean intent;
+	private final GenericClientActionBoundary.Ticket ticket;
+	private final GenericClientPolicyResolver resolver;
 
-	private GenericClientActivityContext(Activity activity, boolean discretionaryBehaviorEnabled)
+	private GenericClientActivityContext(Activity activity, GenericClientBehaviorPolicy policy,
+		boolean humanize, boolean intent, GenericClientActionBoundary.Ticket ticket, GenericClientPolicyResolver resolver)
 	{
-		if (activity == null)
-		{
-			throw new IllegalArgumentException("Activity is required");
-		}
 		this.activity = activity;
-		this.discretionaryBehaviorEnabled = discretionaryBehaviorEnabled;
+		this.declaredPolicy = policy;
+		this.humanize = humanize;
+		this.intent = intent;
+		this.ticket = ticket;
+		this.resolver = resolver;
 	}
 
-	static GenericClientActivityContext of(Activity activity, boolean discretionaryBehaviorEnabled)
+	static GenericClientActivityContext preset(Activity activity)
 	{
-		return new GenericClientActivityContext(activity, discretionaryBehaviorEnabled);
+		return new GenericClientActivityContext(activity, activity.policy, true, false, null, null);
 	}
 
-	static GenericClientActivityContext general(boolean discretionaryBehaviorEnabled)
+	GenericClientActivityContext withPolicy(Object overrides)
 	{
-		return discretionaryBehaviorEnabled ? of(Activity.GENERAL, true) : NONE;
+		return new GenericClientActivityContext(activity, declaredPolicy.withOverrides(overrides), humanize, intent, ticket, resolver);
 	}
 
-	static GenericClientActivityContext none()
+	GenericClientActivityContext plain()
 	{
-		return NONE;
+		return new GenericClientActivityContext(activity, declaredPolicy, false, intent, ticket, resolver);
 	}
 
-	Activity getActivity()
+	GenericClientActivityContext withTicket(GenericClientActionBoundary.Ticket ticket)
 	{
-		return activity;
+		return new GenericClientActivityContext(activity, declaredPolicy, humanize, intent, ticket, resolver);
 	}
 
-	boolean allowsBreaks()
+	GenericClientActivityContext inIntent()
 	{
-		return discretionaryBehaviorEnabled && activity.allowsBreaks;
+		return new GenericClientActivityContext(activity, declaredPolicy, humanize, true, ticket, resolver);
 	}
 
-	boolean allowsCursorRelease()
+	GenericClientActivityContext withResolver(GenericClientPolicyResolver resolver)
 	{
-		return discretionaryBehaviorEnabled && activity.allowsCursorRelease;
+		return new GenericClientActivityContext(activity, declaredPolicy, humanize, intent, ticket, resolver);
 	}
 
-	boolean isDiscretionaryBehaviorEnabled()
+	GenericClientPolicyResolver.Resolution resolve()
 	{
-		return discretionaryBehaviorEnabled;
+		return resolver == null ? GenericClientPolicyResolver.declared(this) : resolver.resolve(this);
 	}
 
-	Map<String, Object> toMap()
+	GenericClientBehaviorPolicy policy()
 	{
-		Map<String, Object> value = new LinkedHashMap<>();
-		value.put("activity", activity.value);
-		value.put("breaks", allowsBreaks());
-		value.put("cursor_release", allowsCursorRelease());
-		value.put("discretionary_behavior", discretionaryBehaviorEnabled);
-		return value;
+		return resolve().policy;
+	}
+
+	GenericClientActivityContext openInputScope()
+	{
+		return withTicket(ticket == null ? new GenericClientActionBoundary.Ticket() : ticket.child());
+	}
+
+	GenericClientActivityContext forkInputScope()
+	{
+		return withTicket(ticket == null ? new GenericClientActionBoundary.Ticket() : ticket.branch());
+	}
+
+	GenericClientActionBoundary.Ticket inputTicket() { return ticket; }
+
+	void cancelInput()
+	{
+		if (ticket != null) ticket.cancel();
+	}
+
+	boolean isInputAllowed()
+	{
+		return ticket == null || ticket.isActive();
+	}
+
+	boolean applyIfCurrent(Runnable update)
+	{
+		if (ticket != null) return ticket.applyIfCurrent(update);
+		update.run();
+		return true;
+	}
+
+	boolean ownsSameInput(GenericClientActivityContext other)
+	{
+		return this == other || other != null && ticket != null && ticket == other.ticket;
+	}
+
+	static GenericClientActivityContext none() { return NONE; }
+	Activity getActivity() { return activity; }
+	boolean allowsBreaks() { return policy().breaks; }
+	boolean allowsCursorRelease() { return policy().cursorRelease != GenericClientBehaviorPolicy.CursorRelease.NONE; }
+	boolean refreshesWalkClicks() { return policy().walkRefresh; }
+
+	int mouseMoveDurationMillis(int profileDurationMillis)
+	{
+		return policy().mouse == GenericClientBehaviorPolicy.Mouse.FAST
+			? PERFORMANCE_MOUSE_MOVE_DURATION_MILLIS : profileDurationMillis;
 	}
 
 	enum Activity
 	{
-		GENERAL("general", true, true),
-		QUESTING("questing", true, true),
-		DIALOGUE("dialogue", false, false),
-		TRAVEL("travel", true, true),
-		SKILLING("skilling", true, true),
-		COMBAT("combat", false, false),
-		BANKING("banking", false, false),
-		TRADING("trading", false, false);
+		GENERAL("general", GenericClientBehaviorPolicy.ROUTINE),
+		QUESTING("questing", GenericClientBehaviorPolicy.ROUTINE),
+		DIALOGUE("dialogue", GenericClientBehaviorPolicy.GUARDED),
+		TRAVEL("travel", GenericClientBehaviorPolicy.TRAVEL),
+		HAZARDOUS_TRAVEL("hazardous_travel", GenericClientBehaviorPolicy.HAZARDOUS_TRAVEL),
+		SKILLING("skilling", GenericClientBehaviorPolicy.SKILLING),
+		COMBAT("combat", GenericClientBehaviorPolicy.COMBAT),
+		MANUAL("manual", GenericClientBehaviorPolicy.MANUAL),
+		BANKING("banking", GenericClientBehaviorPolicy.GUARDED),
+		TRADING("trading", GenericClientBehaviorPolicy.GUARDED);
 
 		private final String value;
-		private final boolean allowsBreaks;
-		private final boolean allowsCursorRelease;
+		private final GenericClientBehaviorPolicy policy;
 
-		Activity(String value, boolean allowsBreaks, boolean allowsCursorRelease)
+		Activity(String value, GenericClientBehaviorPolicy policy)
 		{
 			this.value = value;
-			this.allowsBreaks = allowsBreaks;
-			this.allowsCursorRelease = allowsCursorRelease;
+			this.policy = policy;
 		}
 
 		String getValue()
@@ -109,7 +153,7 @@ final class GenericClientActivityContext
 				}
 			}
 			throw new IllegalArgumentException(
-				"Activity must be general, questing, dialogue, travel, skilling, combat, banking, or trading");
+				"Activity must be general, questing, dialogue, travel, hazardous_travel, skilling, combat, manual, banking, or trading");
 		}
 	}
 }

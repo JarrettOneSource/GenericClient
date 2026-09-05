@@ -1,6 +1,8 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import com.google.gson.Gson;
@@ -56,7 +58,7 @@ public class GenericClientScriptRegistryTest
 	}
 
 	@Test
-	public void preservesAnExistingExternalManifest() throws Exception
+	public void preservesExternalDefinitionsWhenLoadedAndEdited() throws Exception
 	{
 		Path directory = temporaryFolder.newFolder("external-scripts").toPath();
 		String manifest =
@@ -64,12 +66,12 @@ public class GenericClientScriptRegistryTest
 			"  \"schema\": \"genericclient_scripts\",\n" +
 			"  \"scripts\": [\n" +
 			"    { \"id\": \"custom\", \"name\": \"Custom\", " +
-				"\"description\": \"Keep me\", \"file\": \"custom.lua\" }\n" +
+				"\"description\": \"Keep me\", \"file\": \"external.lua\" }\n" +
 			"  ]\n" +
 			"}\n";
 		String source = "return { run = function(input) return 'custom' end }\n";
 		Files.writeString(directory.resolve("manifest.json"), manifest);
-		Files.writeString(directory.resolve("custom.lua"), source);
+		Files.writeString(directory.resolve("external.lua"), source);
 
 		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
 
@@ -77,6 +79,30 @@ public class GenericClientScriptRegistryTest
 		assertEquals("Custom", registry.get("custom").getName());
 		assertEquals(source, registry.readSource("custom"));
 		assertEquals(manifest, Files.readString(directory.resolve("manifest.json")));
+		String updated = "return { run = function() return 'updated' end }\n";
+		registry.save("custom", "Updated", "Keep the declared filename", updated);
+		assertEquals(updated, Files.readString(directory.resolve("external.lua")));
+		assertFalse(Files.exists(directory.resolve("custom.lua")));
+		assertEquals(updated, new GenericClientScriptRegistry(directory).readSource("custom"));
+	}
+
+	@Test
+	public void aNewScriptCannotOverwriteAnotherRegisteredSourceFile() throws Exception
+	{
+		Path directory = temporaryFolder.newFolder("owned-source").toPath();
+		String manifest = "{\"schema\":\"genericclient_scripts\",\"scripts\":[{" +
+			"\"id\":\"custom\",\"name\":\"Custom\",\"description\":\"Existing\",\"file\":\"report.lua\"}]}";
+		String source = "return {run=function() return 'existing' end}";
+		Files.writeString(directory.resolve("manifest.json"), manifest);
+		Files.writeString(directory.resolve("report.lua"), source);
+		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
+
+		assertThrows(IllegalArgumentException.class, () -> registry.save(
+			"report", "Report", "New script", "return {run=function() end}"));
+
+		assertEquals(source, Files.readString(directory.resolve("report.lua")));
+		assertEquals(manifest, Files.readString(directory.resolve("manifest.json")));
+		assertEquals(1, registry.list().size());
 	}
 
 	@Test

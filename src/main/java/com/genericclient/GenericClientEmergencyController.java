@@ -1,5 +1,7 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientErrors.rootMessage;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -15,6 +17,7 @@ import net.runelite.api.coords.WorldPoint;
 final class GenericClientEmergencyController
 {
 	private static final int FORCED_HEAL_PERCENT = 30;
+	private static final int CONSUMABLE_OBSERVATION_TICKS = 3;
 
 	private final FoodAction foodAction;
 	private final EscapeAction escapeAction;
@@ -25,8 +28,15 @@ final class GenericClientEmergencyController
 	private final AtomicBoolean recovering = new AtomicBoolean();
 
 	private volatile Guard guard;
+	private volatile PendingConsumable pendingConsumable;
 	private volatile String lastEvent = "unarmed";
 	private volatile int lastHitpoints = -1;
+	private volatile int lastMaximumHitpoints = -1;
+	private volatile WorldPoint lastWorld;
+	private volatile GenericClientSnapshot lastSnapshot;
+	private volatile boolean inputOwned;
+	private volatile boolean automaticConsumablesEnabled = true;
+	private volatile boolean automaticEscapeEnabled = true;
 
 	GenericClientEmergencyController(
 		FoodAction foodAction,
@@ -63,7 +73,7 @@ final class GenericClientEmergencyController
 	CompletableFuture<Map<String, Object>> configure(
 		int minimumHitpoints,
 		List<Consumable> consumables,
-		Escape escape,
+		GenericClientEmergencyEscape escape,
 		boolean continueAfterConsumable,
 		boolean allowOverheal)
 	{
@@ -77,6 +87,7 @@ final class GenericClientEmergencyController
 		}
 		guard = new Guard(
 			minimumHitpoints, consumables, escape, continueAfterConsumable, allowOverheal);
+		clearPendingConsumable();
 		lastEvent = "armed";
 		reporter.accept("EMERGENCY_GUARD_ARMED hitpoints=" + minimumHitpoints +
 			" consumables=" + consumables.size() +
@@ -88,6 +99,7 @@ final class GenericClientEmergencyController
 	CompletableFuture<Map<String, Object>> clear()
 	{
 		guard = null;
+		clearPendingConsumable();
 		lastEvent = "unarmed";
 		reporter.accept("EMERGENCY_GUARD_CLEARED");
 		if (!recovering.getAndSet(false))
@@ -99,8 +111,68 @@ final class GenericClientEmergencyController
 			.handle((ignored, error) -> receipt("complete", "emergency_guard_cleared"));
 	}
 
+	void disarmForScriptStart(String scriptId)
+	{
+		if (recovering.get())
+		{
+			return;
+		}
+		if (guard != null)
+		{
+			reporter.accept("EMERGENCY_GUARD_DISARMED reason=script_started script=" + scriptId);
+		}
+		guard = null;
+		clearPendingConsumable();
+		lastEvent = "unarmed";
+	}
+
+	void disarmForManualEscape()
+	{
+		guard = null;
+		clearPendingConsumable();
+		recovering.set(false);
+		lastEvent = "manual_control";
+		reporter.accept("EMERGENCY_GUARD_DISARMED reason=manual_escape");
+	}
+
+	void configureScriptBehavior(boolean consumablesEnabled, boolean escapeEnabled)
+	{
+		automaticConsumablesEnabled = consumablesEnabled;
+		automaticEscapeEnabled = escapeEnabled;
+		reporter.accept("EMERGENCY_SCRIPT_BEHAVIOR consumables=" + consumablesEnabled +
+			" escape=" + escapeEnabled);
+	}
+
+	void resetScriptBehavior()
+	{
+		automaticConsumablesEnabled = true;
+		automaticEscapeEnabled = true;
+	}
+
 	void publishGameTick(GenericClientSnapshot snapshot)
 	{
+		publishGameTick(snapshot, true);
+	}
+
+	void publishGameTick(GenericClientSnapshot snapshot, boolean automationInputOwned)
+	{
+		inputOwned = automationInputOwned || recovering.get();
+		if (snapshot != null)
+		{
+			lastSnapshot = snapshot;
+			lastWorld = snapshot.getPlayerWorldPoint();
+		}
+		if (!inputOwned)
+		{
+			if (guard != null)
+			{
+				reporter.accept("EMERGENCY_GUARD_DISARMED reason=client_idle");
+			}
+			guard = null;
+			clearPendingConsumable();
+			lastEvent = "idle";
+			return;
+		}
 		Guard current = guard;
 		if (current == null || snapshot == null)
 		{
@@ -110,21 +182,53 @@ final class GenericClientEmergencyController
 		int maximumHitpoints = snapshot.getMaximumHitpoints();
 		int missingHitpoints = Math.max(0, maximumHitpoints - hitpoints);
 		lastHitpoints = hitpoints;
+		lastMaximumHitpoints = maximumHitpoints;
 		if (hitpoints <= 0)
 		{
 			handleDeath();
 			return;
 		}
+		PendingConsumable pending = pendingConsumable;
+		if (pending != null)
+		{
+			long quantity = snapshot.getInventoryQuantity(pending.itemId);
+			boolean inventoryChanged = pending.quantityBefore >= 0 && quantity >= 0 &&
+				quantity < pending.quantityBefore;
+			boolean healed = hitpoints > pending.hitpointsBefore;
+			if (inventoryChanged || healed)
+			{
+				pendingConsumable = null;
+				lastEvent = "consumable_observed";
+				reporter.accept("EMERGENCY_CONSUMABLE_OBSERVED item=" + pending.itemId +
+					" hitpoints=" + hitpoints + " quantity=" + quantity);
+				pending.observation.complete(true);
+				return;
+			}
+			else if (pending.ticksRemaining > 0)
+			{
+				pendingConsumable = pending.nextTick();
+				return;
+			}
+			else
+			{
+				pendingConsumable = null;
+				reporter.accept("EMERGENCY_CONSUMABLE_OBSERVATION_TIMEOUT item=" +
+					pending.itemId + " hitpoints=" + hitpoints + " quantity=" + quantity);
+				pending.observation.complete(false);
+				return;
+			}
+		}
 		if (recovering.get())
 		{
 			return;
 		}
-		startRecovery(current, hitpoints, maximumHitpoints, missingHitpoints);
+		startRecovery(current, hitpoints, maximumHitpoints, missingHitpoints, snapshot);
 	}
 
 	private void handleDeath()
 	{
 		guard = null;
+		clearPendingConsumable();
 		recovering.set(false);
 		lastEvent = "death_observed";
 		reporter.accept("EMERGENCY_DEATH_OBSERVED");
@@ -135,7 +239,7 @@ final class GenericClientEmergencyController
 		Guard current,
 		int hitpoints,
 		int maximumHitpoints,
-		int missingHitpoints)
+		int missingHitpoints, GenericClientSnapshot snapshot)
 	{
 		boolean forcedHealReady = maximumHitpoints > 0 &&
 			hitpoints * 100L < maximumHitpoints * FORCED_HEAL_PERCENT;
@@ -143,9 +247,22 @@ final class GenericClientEmergencyController
 		boolean exactHealReady = continueAfterConsumable &&
 			current.hasConsumableThatFits(missingHitpoints);
 		boolean hardFloorReached = hitpoints <= current.minimumHitpoints;
-		if ((!hardFloorReached && !exactHealReady && !forcedHealReady) ||
+		boolean consumableRecovery = automaticConsumablesEnabled &&
+			(hardFloorReached || exactHealReady || forcedHealReady);
+		boolean escapeOnlyRecovery = !automaticConsumablesEnabled &&
+			automaticEscapeEnabled && current.escape != null &&
+			(hardFloorReached || forcedHealReady);
+		if ((!consumableRecovery && !escapeOnlyRecovery) ||
 			!recovering.compareAndSet(false, true))
 		{
+			if ((hardFloorReached || exactHealReady || forcedHealReady) &&
+				!consumableRecovery && !escapeOnlyRecovery)
+			{
+				lastEvent = "emergency_behavior_disabled_by_script";
+				reporter.accept("EMERGENCY_SUPPRESSED_BY_SCRIPT hitpoints=" + hitpoints +
+					" consumables=" + automaticConsumablesEnabled +
+					" escape=" + automaticEscapeEnabled);
+			}
 			return;
 		}
 
@@ -155,14 +272,16 @@ final class GenericClientEmergencyController
 			" missing=" + missingHitpoints + " exactHealReady=" + exactHealReady +
 			" forcedHealReady=" + forcedHealReady +
 			" allowOverheal=" + current.allowOverheal);
-		CompletableFuture<Map<String, Object>> recovery = continueAfterConsumable
+		CompletableFuture<Map<String, Object>> recovery = !automaticConsumablesEnabled
+			? stopAndEscape(current)
+			: continueAfterConsumable
 			? consumeAndContinue(
 				current,
 				missingHitpoints,
 				forcedHealReady ||
 					(hardFloorReached && current.allowOverheal && !exactHealReady),
-				forcedHealReady || hardFloorReached)
-				: stopConsumeAndEscape(current);
+				forcedHealReady || hardFloorReached, snapshot)
+				: stopConsumeAndEscape(current, snapshot);
 		recovery.whenComplete((receipt, error) -> completeRecovery(current, receipt, error));
 	}
 
@@ -190,29 +309,201 @@ final class GenericClientEmergencyController
 				: String.valueOf(receipt.get("result"));
 			reporter.accept("EMERGENCY_RECOVERY_UNAVAILABLE result=" + lastEvent);
 		}
+		if (error == null && completedEscape(receipt))
+		{
+			guard = null;
+			clearPendingConsumable();
+			reporter.accept("EMERGENCY_GUARD_DISARMED reason=escape_complete");
+		}
 		recovering.set(false);
+	}
+
+	CompletableFuture<Map<String, Object>> recoverNow()
+	{
+		Guard current = guard;
+		if (current == null)
+		{
+			return CompletableFuture.completedFuture(
+				receipt("rejected", "safety_net_not_configured"));
+		}
+		if (current.escape != null && isWithin(
+			lastWorld, current.escape.getDestination(), current.escape.getWithin()))
+		{
+			guard = null;
+			clearPendingConsumable();
+			lastEvent = "safety_recovery_not_needed_at_destination";
+			reporter.accept("EMERGENCY_SAFETY_NET_DECLINED reason=destination_reached");
+			return CompletableFuture.completedFuture(
+				receipt("complete", "safety_recovery_not_needed_at_destination"));
+		}
+		boolean forcedHealReady = lastMaximumHitpoints > 0 && lastHitpoints > 0 &&
+			lastHitpoints * 100L <
+				(long) lastMaximumHitpoints * FORCED_HEAL_PERCENT;
+		boolean hardFloorReached = lastHitpoints > 0 &&
+			lastHitpoints <= current.minimumHitpoints;
+		if (!forcedHealReady && !hardFloorReached)
+		{
+			lastEvent = "safety_recovery_not_needed_no_emergency";
+			reporter.accept("EMERGENCY_SAFETY_NET_DECLINED reason=no_emergency" +
+				" hitpoints=" + lastHitpoints +
+				" maximum=" + lastMaximumHitpoints +
+				" threshold=" + current.minimumHitpoints);
+			return CompletableFuture.completedFuture(
+				receipt("complete", "safety_recovery_not_needed_no_emergency"));
+		}
+		if (!automaticConsumablesEnabled &&
+			(!automaticEscapeEnabled || current.escape == null))
+		{
+			lastEvent = "safety_recovery_disabled_by_script";
+			return CompletableFuture.completedFuture(
+				receipt("complete", "safety_recovery_disabled_by_script"));
+		}
+		if (!recovering.compareAndSet(false, true))
+		{
+			return CompletableFuture.completedFuture(
+				receipt("rejected", "safety_recovery_already_running"));
+		}
+
+		int missingHitpoints = Math.max(0, lastMaximumHitpoints - lastHitpoints);
+		boolean allowOverhealNow = lastMaximumHitpoints > 0 &&
+			(lastHitpoints * 100L <
+				(long) lastMaximumHitpoints * FORCED_HEAL_PERCENT ||
+				(lastHitpoints <= current.minimumHitpoints && current.allowOverheal));
+		lastEvent = "safety_net_recovering";
+		reporter.accept("EMERGENCY_SAFETY_NET_STARTED hitpoints=" + lastHitpoints +
+			" missing=" + missingHitpoints + " escape=" +
+			(current.escape == null ? "none" : current.escape.describe()));
+
+		CompletableFuture<Map<String, Object>> recovery = !automaticConsumablesEnabled
+			? stopAndEscape(current)
+			: endBreakAction.get()
+			.handle((result, error) -> null)
+			.thenCompose(ignored -> tryConsumable(
+				current, 0, allowOverhealNow ? null : missingHitpoints))
+			.thenCompose(food -> observeConsumable(food, lastSnapshot))
+			.thenCompose(food -> startEscape(current, food, false));
+		recovery.whenComplete(this::finishSafetyRecovery);
+		return recovery;
+	}
+
+	private void finishSafetyRecovery(Map<String, Object> result, Throwable error)
+	{		if (error != null)
+		{
+			lastEvent = "safety_net_failed";
+			reporter.accept("EMERGENCY_SAFETY_NET_FAILED message=" + rootMessage(error));
+		}
+		else if (completedEscape(result))
+		{
+			guard = null;
+			clearPendingConsumable();
+			lastEvent = String.valueOf(result.get("result"));
+			reporter.accept("EMERGENCY_GUARD_DISARMED reason=safety_net_complete");
+		}
+		else
+		{
+			lastEvent = result == null
+				? "safety_net_unavailable"
+				: String.valueOf(result.get("result"));
+		}
+		recovering.set(false);
+	}
+
+	CompletableFuture<Map<String, Object>> forceEscapeNow()
+	{
+		Guard current = guard;
+		if (current == null)
+		{
+			return CompletableFuture.completedFuture(
+				receipt("rejected", "safety_net_not_configured"));
+		}
+		if (current.escape != null && isWithin(
+			lastWorld, current.escape.getDestination(), current.escape.getWithin()))
+		{
+			guard = null;
+			clearPendingConsumable();
+			lastEvent = "safety_recovery_not_needed_at_destination";
+			return CompletableFuture.completedFuture(
+				receipt("complete", "safety_recovery_not_needed_at_destination"));
+		}
+		if (current.escape == null)
+		{
+			return CompletableFuture.completedFuture(
+				receipt("rejected", "no_approved_emergency_escape"));
+		}
+		if (!automaticEscapeEnabled)
+		{
+			return CompletableFuture.completedFuture(
+				receipt("rejected", "emergency_escape_disabled_by_script"));
+		}
+		if (!recovering.compareAndSet(false, true))
+		{
+			return CompletableFuture.completedFuture(
+				receipt("rejected", "safety_recovery_already_running"));
+		}
+
+		lastEvent = "safety_net_forced_escape";
+		reporter.accept("EMERGENCY_SAFETY_NET_FORCED_ESCAPE destination=" +
+			current.escape.describe());
+		CompletableFuture<Map<String, Object>> recovery =
+			stopAction.apply("safety_net_forced_escape")
+				.handle((ignored, error) -> null)
+				.thenCompose(ignored -> endBreakAction.get().handle((result, error) -> null))
+				.thenCompose(ignored -> startEscape(
+					current,
+					receipt("rejected", "forced_escape_without_consumable"),
+					true));
+		recovery.whenComplete((result, error) ->
+		{
+			if (error != null)
+			{
+				lastEvent = "safety_net_failed";
+				reporter.accept("EMERGENCY_SAFETY_NET_FAILED message=" + rootMessage(error));
+			}
+			else if (completedEscape(result))
+			{
+				guard = null;
+				clearPendingConsumable();
+				lastEvent = String.valueOf(result.get("result"));
+				reporter.accept("EMERGENCY_GUARD_DISARMED reason=safety_net_complete");
+			}
+			else
+			{
+				lastEvent = result == null
+					? "safety_net_unavailable"
+					: String.valueOf(result.get("result"));
+			}
+			recovering.set(false);
+		});
+		return recovery;
 	}
 
 	private CompletableFuture<Map<String, Object>> consumeAndContinue(
 		Guard current,
 		int missingHitpoints,
 		boolean allowOverhealNow,
-		boolean fallbackRequired)
+		boolean fallbackRequired,
+		GenericClientSnapshot snapshot)
 	{
 		return inputControl.pause("emergency_consumable")
 			.handle((ignored, error) -> null)
 			.thenCompose(ignored ->
 				tryConsumable(current, 0, allowOverhealNow ? null : missingHitpoints))
+			.thenCompose(food -> observeConsumable(food, snapshot))
 			.thenCompose(food ->
 			{
-				if (wasAccepted(food))
+				if (guard != current)
+				{
+					return CompletableFuture.completedFuture(food);
+				}
+				boolean observed = !Boolean.FALSE.equals(food.get("consumable_observed"));
+				if (wasAccepted(food) && (observed || !fallbackRequired))
 				{
 					return endBreakAction.get()
 						.handle((result, error) -> null)
 						.thenCompose(ignored -> inputControl.resume("emergency_consumable"))
 						.handle((ignored, error) -> food);
 				}
-				if (current.escape == null && !fallbackRequired)
+				if (!fallbackRequired || current.escape == null)
 				{
 					return inputControl.resume("emergency_consumable")
 						.handle((ignored, error) -> food);
@@ -220,16 +511,29 @@ final class GenericClientEmergencyController
 				return stopAction.apply("emergency_consumable_unavailable")
 					.handle((ignored, error) -> null)
 					.thenCompose(ignored -> endBreakAction.get().handle((result, error) -> null))
-					.thenCompose(ignored -> startEscape(current, food));
+					.thenCompose(ignored -> startEscape(current, food, false));
 			});
 	}
 
-	private CompletableFuture<Map<String, Object>> stopConsumeAndEscape(Guard current)
+	private CompletableFuture<Map<String, Object>> stopConsumeAndEscape(
+		Guard current,
+		GenericClientSnapshot snapshot)
 	{
 		return stopAction.apply("emergency_low_hitpoints").handle((ignored, error) -> null)
 			.thenCompose(ignored -> endBreakAction.get().handle((result, error) -> null))
 			.thenCompose(ignored -> tryConsumable(current, 0, null))
-			.thenCompose(food -> startEscape(current, food));
+			.thenCompose(food -> observeConsumable(food, snapshot))
+			.thenCompose(food -> startEscape(current, food, false));
+	}
+
+	private CompletableFuture<Map<String, Object>> stopAndEscape(Guard current)
+	{
+		return stopAction.apply("emergency_low_hitpoints").handle((ignored, error) -> null)
+			.thenCompose(ignored -> endBreakAction.get().handle((result, error) -> null))
+			.thenCompose(ignored -> startEscape(
+				current,
+				receipt("rejected", "emergency_consumables_disabled_by_script"),
+				false));
 	}
 
 	Map<String, Object> status()
@@ -237,8 +541,12 @@ final class GenericClientEmergencyController
 		Map<String, Object> value = new LinkedHashMap<>();
 		Guard current = guard;
 		value.put("armed", current != null);
+		value.put("input_owned", inputOwned);
 		value.put("recovering", recovering.get());
+		value.put("consumable_pending", pendingConsumable != null);
 		value.put("last_event", lastEvent);
+		value.put("automatic_consumables_enabled", automaticConsumablesEnabled);
+		value.put("automatic_escape_enabled", automaticEscapeEnabled);
 		value.put("last_hitpoints", lastHitpoints < 0 ? null : (long) lastHitpoints);
 		if (current != null)
 		{
@@ -257,13 +565,81 @@ final class GenericClientEmergencyController
 		return value;
 	}
 
-	private CompletableFuture<Map<String, Object>> startEscape(
-		Guard current,
-		Map<String, Object> food)
+	private CompletableFuture<Map<String, Object>> observeConsumable(
+		Map<String, Object> food,
+		GenericClientSnapshot snapshot)
 	{
-		if (current.escape == null)
+		Integer itemId = dispatchedConsumable(food);
+		if (itemId == null || snapshot == null)
 		{
 			return CompletableFuture.completedFuture(food);
+		}
+		long quantity = snapshot.getInventoryQuantity(itemId);
+		if (quantity <= 0)
+		{
+			return CompletableFuture.completedFuture(food);
+		}
+
+		clearPendingConsumable();
+		CompletableFuture<Boolean> observation = new CompletableFuture<>();
+		pendingConsumable = new PendingConsumable(
+			itemId,
+			snapshot.getCurrentHitpoints(),
+			quantity,
+			CONSUMABLE_OBSERVATION_TICKS,
+			observation);
+		lastEvent = "consumable_pending";
+		return observation.thenApply(observed ->
+		{
+			Map<String, Object> result = new LinkedHashMap<>(food);
+			result.put("consumable_observed", observed);
+			return result;
+		});
+	}
+
+	private boolean emergencyStillActive(Guard current)
+	{
+		if (lastHitpoints < 1 || lastMaximumHitpoints < 1)
+		{
+			return true;
+		}
+		return lastHitpoints <= current.minimumHitpoints ||
+			lastHitpoints * 100L <
+				(long) lastMaximumHitpoints * FORCED_HEAL_PERCENT;
+	}
+
+	private void clearPendingConsumable()
+	{
+		PendingConsumable pending = pendingConsumable;
+		pendingConsumable = null;
+		if (pending != null)
+		{
+			pending.observation.complete(false);
+		}
+	}
+
+	private CompletableFuture<Map<String, Object>> startEscape(
+		Guard current,
+		Map<String, Object> food,
+		boolean forced)
+	{
+		if (guard != current)
+		{
+			return CompletableFuture.completedFuture(
+				receipt("rejected", "emergency_recovery_cancelled"));
+		}
+		if (current.escape == null || !automaticEscapeEnabled)
+		{
+			return CompletableFuture.completedFuture(food);
+		}
+		if (!forced && !emergencyStillActive(current))
+		{
+			Map<String, Object> result = new LinkedHashMap<>(food);
+			result.put("result", "emergency_escape_no_longer_needed");
+			result.put("hitpoints", (long) lastHitpoints);
+			reporter.accept("EMERGENCY_ESCAPE_DECLINED reason=hitpoints_recovered" +
+				" hitpoints=" + lastHitpoints);
+			return CompletableFuture.completedFuture(result);
 		}
 		lastEvent = "escaping";
 		reporter.accept("EMERGENCY_ESCAPE_STARTED destination=" +
@@ -297,6 +673,16 @@ final class GenericClientEmergencyController
 		int index,
 		Integer maximumHeal)
 	{
+		if (guard != current)
+		{
+			return CompletableFuture.completedFuture(
+				receipt("rejected", "emergency_recovery_cancelled"));
+		}
+		if (!automaticConsumablesEnabled)
+		{
+			return CompletableFuture.completedFuture(
+				receipt("rejected", "emergency_consumables_disabled_by_script"));
+		}
 		if (index >= current.consumables.size())
 		{
 			return CompletableFuture.completedFuture(
@@ -340,15 +726,45 @@ final class GenericClientEmergencyController
 			"complete".equals(status);
 	}
 
-	private static String rootMessage(Throwable error)
+	private static boolean completedEscape(Map<String, Object> receipt)
 	{
-		Throwable current = error;
-		while (current.getCause() != null)
+		if (receipt == null || !"dispatched".equals(receipt.get("status")))
 		{
-			current = current.getCause();
+			return false;
 		}
-		return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
+		String result = String.valueOf(receipt.get("result"));
+		return "emergency_escape_complete".equals(result) ||
+			"emergency_food_and_escape_complete".equals(result);
 	}
+
+	private static boolean isWithin(WorldPoint world, WorldPoint destination, int within)
+	{
+		return world != null && destination != null &&
+			world.getPlane() == destination.getPlane() &&
+			Math.max(
+				Math.abs(world.getX() - destination.getX()),
+				Math.abs(world.getY() - destination.getY())) <= within;
+	}
+
+	private static Integer dispatchedConsumable(Map<String, Object> receipt)
+	{
+		if (receipt == null)
+		{
+			return null;
+		}
+		Object consumable = receipt.get("consumable");
+		if (!(consumable instanceof Map) && receipt.get("food") instanceof Map)
+		{
+			consumable = ((Map<?, ?>) receipt.get("food")).get("consumable");
+		}
+		if (!(consumable instanceof Map))
+		{
+			return null;
+		}
+		Object id = ((Map<?, ?>) consumable).get("id");
+		return id instanceof Number ? ((Number) id).intValue() : null;
+	}
+
 
 	@FunctionalInterface
 	interface FoodAction
@@ -359,7 +775,7 @@ final class GenericClientEmergencyController
 	@FunctionalInterface
 	interface EscapeAction
 	{
-		CompletableFuture<Map<String, Object>> escape(Escape escape);
+		CompletableFuture<Map<String, Object>> escape(GenericClientEmergencyEscape escape);
 	}
 
 	interface InputControl
@@ -385,134 +801,6 @@ final class GenericClientEmergencyController
 				}
 			};
 		}
-	}
-
-	static final class Escape
-	{
-		private final EscapeType type;
-		private final WorldPoint destination;
-		private final int within;
-		private final Integer itemId;
-		private final String itemAction;
-		private final String dialogueChoice;
-
-		Escape(WorldPoint destination, int within)
-		{
-			this(EscapeType.WALK, destination, within, null, null, null);
-		}
-
-		private Escape(
-			EscapeType type,
-			WorldPoint destination,
-			int within,
-			Integer itemId,
-			String itemAction,
-			String dialogueChoice)
-		{
-			if (destination == null)
-			{
-				throw new IllegalArgumentException("Emergency escape destination is required");
-			}
-			if (within < 0 || within > 10)
-			{
-				throw new IllegalArgumentException(
-					"Emergency escape radius must be between 0 and 10");
-			}
-			this.type = type;
-			this.destination = destination;
-			this.within = within;
-			this.itemId = itemId;
-			this.itemAction = itemAction;
-			this.dialogueChoice = dialogueChoice;
-		}
-
-		static Escape inventoryDialogue(
-			int itemId,
-			String itemAction,
-			String dialogueChoice,
-			WorldPoint destination,
-			int within)
-		{
-			if (itemId < 0)
-			{
-				throw new IllegalArgumentException("Emergency escape item id cannot be negative");
-			}
-			if (itemAction == null || itemAction.trim().isEmpty())
-			{
-				throw new IllegalArgumentException("Emergency escape item action is required");
-			}
-			if (dialogueChoice == null || dialogueChoice.trim().isEmpty())
-			{
-				throw new IllegalArgumentException("Emergency escape dialogue choice is required");
-			}
-			return new Escape(
-				EscapeType.INVENTORY_DIALOGUE,
-				destination,
-				within,
-				itemId,
-				itemAction.trim(),
-				dialogueChoice.trim());
-		}
-
-		EscapeType getType()
-		{
-			return type;
-		}
-
-		WorldPoint getDestination()
-		{
-			return destination;
-		}
-
-		int getWithin()
-		{
-			return within;
-		}
-
-		int getItemId()
-		{
-			return itemId == null ? -1 : itemId;
-		}
-
-		String getItemAction()
-		{
-			return itemAction;
-		}
-
-		String getDialogueChoice()
-		{
-			return dialogueChoice;
-		}
-
-		String describe()
-		{
-			return type == EscapeType.WALK
-				? destination.toString()
-				: "item:" + itemId + " choice:" + dialogueChoice;
-		}
-
-		Map<String, Object> toMap()
-		{
-			Map<String, Object> value = new LinkedHashMap<>();
-			value.put("type", type.name().toLowerCase(java.util.Locale.ROOT));
-			value.put("x", (long) destination.getX());
-			value.put("y", (long) destination.getY());
-			value.put("plane", (long) destination.getPlane());
-			value.put("within", (long) within);
-			if (type == EscapeType.INVENTORY_DIALOGUE)
-			{
-				value.put("item_id", (long) itemId);
-				value.put("action", itemAction);
-				value.put("choice", dialogueChoice);
-			}
-			return value;
-		}
-	}
-
-	enum EscapeType
-	{
-		WALK,
-		INVENTORY_DIALOGUE
 	}
 
 	static final class Consumable
@@ -555,14 +843,14 @@ final class GenericClientEmergencyController
 	{
 		private final int minimumHitpoints;
 		private final List<Consumable> consumables;
-		private final Escape escape;
+		private final GenericClientEmergencyEscape escape;
 		private final boolean continueAfterConsumable;
 		private final boolean allowOverheal;
 
 		private Guard(
 			int minimumHitpoints,
 			List<Consumable> consumables,
-			Escape escape,
+			GenericClientEmergencyEscape escape,
 			boolean continueAfterConsumable,
 			boolean allowOverheal)
 		{
@@ -583,6 +871,36 @@ final class GenericClientEmergencyController
 				}
 			}
 			return false;
+		}
+
+	}
+
+	private static final class PendingConsumable
+	{
+		private final int itemId;
+		private final int hitpointsBefore;
+		private final long quantityBefore;
+		private final int ticksRemaining;
+		private final CompletableFuture<Boolean> observation;
+
+		private PendingConsumable(
+			int itemId,
+			int hitpointsBefore,
+			long quantityBefore,
+			int ticksRemaining,
+			CompletableFuture<Boolean> observation)
+		{
+			this.itemId = itemId;
+			this.hitpointsBefore = hitpointsBefore;
+			this.quantityBefore = quantityBefore;
+			this.ticksRemaining = ticksRemaining;
+			this.observation = observation;
+		}
+
+		private PendingConsumable nextTick()
+		{
+			return new PendingConsumable(
+				itemId, hitpointsBefore, quantityBefore, ticksRemaining - 1, observation);
 		}
 	}
 }

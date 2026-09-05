@@ -72,6 +72,14 @@ final class GenericClientInteractionResult
 		return receipt;
 	}
 
+	@SuppressWarnings("unchecked")
+	GenericClientInteractionResult withBehavior(Map<String, Object> receipt)
+	{
+		return new GenericClientInteractionResult(target, detail, clickDispatched,
+			(Map<String, Object>) receipt.get("behavior_before"),
+			(Map<String, Object>) receipt.get("behavior_after"));
+	}
+
 	private static Map<String, Object> immutableCopy(Map<String, Object> value)
 	{
 		return value == null

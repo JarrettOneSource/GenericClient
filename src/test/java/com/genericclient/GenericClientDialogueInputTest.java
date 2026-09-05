@@ -35,4 +35,17 @@ public class GenericClientDialogueInputTest
 		assertEquals(6, GenericClientDialogueInput.countWords(
 			"<col=ffffff>Read this line</col> and this one"));
 	}
+
+	@Test
+	public void dialogueChoiceKeepsTheCurrentHorizontalLane()
+	{
+		Rectangle option = new Rectangle(100, 220, 320, 24);
+		for (int attempt = 0; attempt < 50; attempt++)
+		{
+			Point point = GenericClientDialogueInput.dialoguePoint(
+				option, new Point(260, 180), 800, 600);
+			assertTrue(Math.abs(point.x - 260) <= 5);
+			assertTrue(point.y >= option.y && point.y < option.y + option.height);
+		}
+	}
 }

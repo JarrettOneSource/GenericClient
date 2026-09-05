@@ -24,6 +24,7 @@ import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.Player;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.events.AccountHashChanged;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameStateChanged;
@@ -37,6 +38,7 @@ import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.input.KeyManager;
 import net.runelite.client.input.MouseManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -87,6 +89,9 @@ public final class GenericClientPlugin extends Plugin
 	private MouseManager mouseManager;
 
 	@Inject
+	private KeyManager keyManager;
+
+	@Inject
 	private Provider<Notifier> notifierProvider;
 
 	private volatile String lifecycle = "CREATED";
@@ -99,36 +104,12 @@ public final class GenericClientPlugin extends Plugin
 	private GenericClientDashboard panel;
 	private GenericClientBreakOverlay breakOverlay;
 	private GenericClientScriptOverlay scriptOverlay;
+	private GenericClientSceneOverlay sceneOverlay;
+	private GenericClientSceneHighlights sceneHighlights;
 	private GenericClientControlServer controlServer;
-	private GenericClientGameInput gameInput;
-	private GenericClientCameraOwner cameraOwner;
-	private GenericClientMenuInput menuInput;
-	private GenericClientNpcInput npcInput;
-	private GenericClientRunInput runInput;
-	private GenericClientObjectInput objectInput;
-	private GenericClientInventoryInput inventoryInput;
-	private GenericClientEquipmentInput equipmentInput;
-	private GenericClientGroundItemInput groundItemInput;
-	private GenericClientDialogueInput dialogueInput;
-	private GenericClientQuestActions questActions;
-	private GenericClientCombatInput combatInput;
-	private GenericClientSyntheticMouse syntheticMouse;
-	private GenericClientSyntheticKeyboard syntheticKeyboard;
-	private GenericClientBankInput bankInput;
-	private GenericClientGrandExchangeInput grandExchangeInput;
-	private GenericClientSpellInput spellInput;
-	private GenericClientAutocastInput autocastInput;
-	private GenericClientPrayerInput prayerInput;
-	private GenericClientUiInput uiInput;
-	private GenericClientEmergencyController emergencyController;
-	private GenericClientSessionController sessionController;
-	private GenericClientBehaviorController behaviorController;
 	private GenericClientMouseRecorder mouseRecorder;
-	private GenericClientWalker walker;
-	private GenericClientLuaHost luaHost;
-	private GenericClientAutomationScheduler automationScheduler;
-	private GenericClientRandomEventController randomEventController;
 	private GenericClientScreenshot screenshot;
+	private GenericClientDeathForensics deathForensics;
 	private GenericClientRuntimeOptions runtimeOptions;
 	private GenericClientInstanceRegistration instanceRegistration;
 	private OverlayManager presentationOverlayManager;
@@ -136,7 +117,7 @@ public final class GenericClientPlugin extends Plugin
 	private NavigationButton navigationButton;
 	private Path mouseProfilesDirectory;
 	private volatile GenericClientMouseProfile mouseProfile;
-	private volatile GenericClientSnapshot latestSnapshot;
+	private volatile GenericClientAutomationRuntime runtime;
 	private final GenericClientBankCache bankCache = new GenericClientBankCache();
 	private final GenericClientQuestCache questCache = new GenericClientQuestCache();
 	private final GenericClientGameMessageBuffer gameMessages = new GenericClientGameMessageBuffer();
@@ -167,260 +148,40 @@ public final class GenericClientPlugin extends Plugin
 			client.setUnlockedFps(true);
 			client.setUnlockedFpsTarget(1);
 		}
-		net.runelite.api.Point mousePosition = client.getMouseCanvasPosition();
-		syntheticMouse = new GenericClientSyntheticMouse(
-			client.getCanvas(),
-			executor,
-			() -> mouseProfile,
-			this::mouseMoveDurationMillis,
-			new java.awt.Point(mousePosition.getX(), mousePosition.getY()),
-			mouseEffectOverlay,
-			this::publishResult);
-		syntheticKeyboard = new GenericClientSyntheticKeyboard(
-			client.getCanvas(), executor, this::publishResult, this::typingWordsPerMinute);
-		sessionController = new GenericClientSessionController(
-			GenericClientSessionController.runeliteView(client, clientThread),
-			GenericClientSessionController.syntheticInput(syntheticMouse, client.getCanvas()),
-			executor,
-			this::publishResult);
-		behaviorController = new GenericClientBehaviorController(
-			new GenericClientBehaviorStore(net.runelite.client.RuneLite.RUNELITE_DIR.toPath()
-				.resolve("genericclient")
-				.resolve("behavior")),
-			new GenericClientBehaviorController.BreakEffects()
-			{
-				@Override
-				public java.util.concurrent.CompletableFuture<String> moveOffscreen(
-					GenericClientBehaviorProfile.Edge edge)
-				{
-					return syntheticMouse.moveOffscreen(edge);
-				}
-
-				@Override
-				public java.util.concurrent.CompletableFuture<String> logout()
-				{
-					return sessionController.logout();
-				}
-
-				@Override
-				public java.util.concurrent.CompletableFuture<String> ensureLoggedIn()
-				{
-					return sessionController.ensureLoggedIn();
-				}
-			},
-			GenericClientBehaviorController.scheduledTimer(executor),
-			GenericClientBehaviorController.systemClock(),
-			GenericClientBehaviorController.secureRandom(),
-			this::publishResult);
-		cameraOwner = new GenericClientCameraOwner(client);
-		gameInput = new GenericClientGameInput(
-			client,
-			clientThread,
-			executor,
-			syntheticMouse,
-			behaviorController,
-			this::publishResult);
-		menuInput = new GenericClientMenuInput(
-			client,
-			clientThread,
-			executor,
-			syntheticMouse,
-			behaviorController,
-			this::publishResult);
-		runInput = new GenericClientRunInput(client, clientThread, executor, menuInput);
-		npcInput = new GenericClientNpcInput(
-			client, clientThread, executor, menuInput, cameraOwner, this::publishResult);
-		spellInput = new GenericClientSpellInput(client, clientThread, executor, menuInput, npcInput);
-		autocastInput = new GenericClientAutocastInput(
-			client, clientThread, executor, menuInput, this::publishResult);
-		prayerInput = new GenericClientPrayerInput(
-			client, clientThread, executor, menuInput, this::publishResult);
-		uiInput = new GenericClientUiInput(
-			client, menuInput, syntheticKeyboard, behaviorController);
-		objectInput = new GenericClientObjectInput(
-			client, clientThread, executor, menuInput, cameraOwner);
-		inventoryInput = new GenericClientInventoryInput(client, clientThread, executor, menuInput);
-		equipmentInput = new GenericClientEquipmentInput(client, clientThread, executor, menuInput);
-		groundItemInput = new GenericClientGroundItemInput(
-			client, clientThread, executor, menuInput, cameraOwner);
-		dialogueInput = new GenericClientDialogueInput(
-			client, menuInput, behaviorController, this::publishResult);
-		walker = new GenericClientWalker(
-			gameInput, objectInput, runInput, collisionMap, this::publishResult);
-		GenericClientEmergencyEscapeInput emergencyEscapeInput =
-			new GenericClientEmergencyEscapeInput(
-				client,
-				clientThread,
-				executor,
-				inventoryInput,
-				dialogueInput,
-				walker,
-				this::publishResult);
-		emergencyController = new GenericClientEmergencyController(
-			(itemId, action) -> inventoryInput.interact(
-				itemId, null, action, GenericClientActivityContext.none()),
-			emergencyEscapeInput::escape,
-			behaviorController::endActiveBreak,
-			new GenericClientEmergencyController.InputControl()
-			{
-				@Override
-				public java.util.concurrent.CompletableFuture<?> pause(String reason)
-				{
-					return pauseForEmergency(reason);
-				}
-
-				@Override
-				public java.util.concurrent.CompletableFuture<?> resume(String reason)
-				{
-					return resumeAfterEmergency(reason);
-				}
-			},
-			this::stopForEmergency,
-			this::publishResult);
-		bankInput = new GenericClientBankInput(
-			client,
-			clientThread,
-			executor,
-			menuInput,
-			syntheticKeyboard,
-			behaviorController,
-			this::publishResult);
-		grandExchangeInput = new GenericClientGrandExchangeInput(
-			client,
-			clientThread,
-			executor,
-			menuInput,
-			syntheticKeyboard,
-			behaviorController,
-			() -> latestSnapshot,
-			this::publishResult);
-		questActions = new GenericClientQuestActions(
-			objectInput,
-			inventoryInput,
-			equipmentInput,
-			npcInput,
-			groundItemInput,
-			dialogueInput,
-			bankInput,
-			grandExchangeInput,
-			spellInput,
-			autocastInput,
-			prayerInput,
-			uiInput,
-			emergencyController);
-		combatInput = new GenericClientCombatInput(
-			client,
-			clientThread,
-			executor,
-			syntheticMouse,
-			behaviorController,
-			this::publishResult);
-		mouseRecorder = new GenericClientMouseRecorder(
-			client.getCanvas(),
-			() -> gameInput.isRunning() || menuInput.isRunning() || combatInput.isRunning() ||
-				syntheticKeyboard.isTyping() ||
-				syntheticMouse.isMoving());
-		luaHost = new GenericClientLuaHost(
-			net.runelite.client.RuneLite.RUNELITE_DIR.toPath().resolve("genericclient").resolve("scripts"),
-			gameInput::walkToRandomTile,
-			walker::walkTo,
-			npcInput::interact,
-			combatInput::setMode,
-			questActions::execute,
-			this::cancelActiveActions,
-			behaviorController,
-			this::publishResult,
-			System::nanoTime);
-		automationScheduler = new GenericClientAutomationScheduler(
-			net.runelite.client.RuneLite.RUNELITE_DIR.toPath()
-				.resolve("genericclient").resolve("automation"),
-			luaHost,
-			this::publishResult);
-		randomEventController = new GenericClientRandomEventController(
-			luaHost::findRandomEventSolver,
-			new GenericClientRandomEventController.Runtime()
-			{
-				@Override
-				public java.util.concurrent.CompletableFuture<String> interrupt(
-					String eventKey,
-					String solverScript)
-				{
-					automationScheduler.setAttentionRequired(true, "random_event:" + eventKey);
-					java.util.concurrent.CompletableFuture<String> interrupted =
-						luaHost.interruptForRandomEvent(eventKey);
-					syntheticMouse.cancel("random_event_detected");
-					syntheticKeyboard.cancel("random_event_detected");
-					java.util.concurrent.CompletableFuture<String> breakEnded;
-					try
-					{
-						breakEnded = behaviorController.endActiveBreak().handle((result, error) ->
-						{
-							if (error != null)
-							{
-								publishResult(
-									"RANDOM_EVENT_BREAK_END_FAILED message=" + error.getMessage());
-							}
-							return "break_ready";
-						});
-					}
-					catch (RuntimeException exception)
-					{
-						publishResult("RANDOM_EVENT_BREAK_END_FAILED message=" + exception.getMessage());
-						breakEnded = java.util.concurrent.CompletableFuture.completedFuture("break_ready");
-					}
-					return interrupted.thenCombine(breakEnded, (result, ignored) -> result)
-						.thenCompose(result -> solverScript == null
-							? java.util.concurrent.CompletableFuture.completedFuture(result)
-							: luaHost.startRandomEventSolver(eventKey, solverScript));
-				}
-
-				@Override
-				public java.util.concurrent.CompletableFuture<String> release(
-					String eventKey,
-					boolean resumeInterrupted)
-				{
-					return luaHost.releaseRandomEvent(eventKey, resumeInterrupted).whenComplete(
-						(result, error) ->
-						{
-							if (error == null)
-							{
-								automationScheduler.setAttentionRequired(
-									false, "random_event_completed");
-							}
-						});
-				}
-			},
-			npcId -> npcInput.interact(
-				npcId,
-				null,
-				"Talk-to",
-				12,
-				GenericClientActivityContext.none()),
+		runtime = new GenericClientAutomationRuntime(
+			client, clientThread, executor, keyManager,
+			net.runelite.client.RuneLite.RUNELITE_DIR.toPath().resolve("genericclient"),
+			collisionMap, () -> mouseProfile, mouseEffectOverlay,
 			message ->
 			{
-				if (runtimeOptions.isPresentationEnabled())
-				{
-					notifierProvider.get().notify(message);
-				}
+				if (runtimeOptions.isPresentationEnabled()) notifierProvider.get().notify(message);
 				postChat(message);
-			},
-			this::publishResult);
-		luaHost.setRandomEventHooks(
-			randomEventController::status,
-			randomEventController::solverFinished);
+			}, this::publishResult);
+		mouseRecorder = new GenericClientMouseRecorder(client.getCanvas(), runtime::activeClientInput);
+		sceneHighlights = new GenericClientSceneHighlights(
+			runtime.luaHost::getSceneMarkers,
+			runtime.syntheticMouse::isMoving);
+		sceneHighlights.setShowMouseTile(config.showMouseTile());
 		screenshot = new GenericClientScreenshot(drawManager, executor);
+		deathForensics = new GenericClientDeathForensics(
+			net.runelite.client.RuneLite.RUNELITE_DIR.toPath()
+				.resolve("genericclient")
+				.resolve("forensics"),
+			screenshot::capture,
+			this::publishResult);
 		controlServer = new GenericClientControlServer(
 			runtimeOptions.getControlPort(),
-			luaHost,
-			automationScheduler,
-			randomEventController,
-			sessionController::logout,
-			sessionController::ensureLoggedIn,
+			runtime.luaHost,
+			runtime.automationScheduler,
+			runtime.randomEventController,
+			runtime.sessionController::logout,
+			runtime.sessionController::ensureLoggedIn,
 			this::controlStatus,
 			this::accountNote,
 			this::setAccountNote,
 			screenshot::capture,
-			behaviorController::endActiveBreak,
+			runtime.behaviorController::endActiveBreak,
+			sceneHighlights,
 			this::publishResult);
 		controlServer.setHealthSupplier(this::instanceHealth);
 		controlServer.start();
@@ -428,21 +189,17 @@ public final class GenericClientPlugin extends Plugin
 		if (runtimeOptions.isPresentationEnabled())
 		{
 			breakOverlay = new GenericClientBreakOverlay(
-				() ->
-				{
-					GenericClientBehaviorController behaviors = behaviorController;
-					return behaviors == null ? null : behaviors.status();
-				},
-				behaviorController::endActiveBreak);
+				runtime.behaviorController::status,
+				runtime.behaviorController::endActiveBreak);
 			scriptOverlay = new GenericClientScriptOverlay(
-				luaHost::getActiveScriptView,
-				luaHost::getActivity,
-				luaHost::getScriptState);
+				runtime.luaHost::getActiveScriptView,
+				runtime.luaHost::getActivity,
+				runtime.luaHost::getScriptState);
 			panel = new GenericClientDashboard(
 				javax.swing.SwingUtilities.getWindowAncestor(client.getCanvas()),
 				dashboardActions(),
-				luaHost,
-				automationScheduler);
+				runtime.luaHost,
+				runtime.automationScheduler);
 			navigationButton = NavigationButton.builder()
 				.tooltip("GenericClient")
 				.icon(createIcon())
@@ -456,6 +213,8 @@ public final class GenericClientPlugin extends Plugin
 			presentationOverlayManager.add(breakOverlay);
 			mouseManager.registerMouseListener(breakOverlay.getMouseListener());
 			presentationOverlayManager.add(scriptOverlay);
+			sceneOverlay = new GenericClientSceneOverlay(client, sceneHighlights::visibleMarkers);
+			presentationOverlayManager.add(sceneOverlay);
 			presentationToolbar.addNavigation(navigationButton);
 			refreshPanel();
 			panelRefreshFuture = executor.scheduleAtFixedRate(
@@ -467,22 +226,30 @@ public final class GenericClientPlugin extends Plugin
 			RuneLiteProperties.getVersion(),
 			getClass().getClassLoader().getClass().getName(),
 			Thread.currentThread().getName());
-		log.info("{} COLLISION_MAP_LOADED regions={} revision={} sha256={}",
+		log.info("{} COLLISION_MAP_LOADED regions={} revision={} sha256={} cache={} gameRevision={} " +
+			"doorRegions={} doorDumperRevision={} doorRuneLiteRevision={} " +
+			"doorCache={} doorGameRevision={} doorSha256={}",
 			LOG_PREFIX,
 			collisionMap.getRegionCount(),
 			GenericClientCollisionMap.SOURCE_REVISION,
-			GenericClientCollisionMap.SOURCE_SHA256);
+			GenericClientCollisionMap.SOURCE_SHA256,
+			GenericClientCollisionMap.SOURCE_CACHE_ID,
+			GenericClientCollisionMap.SOURCE_GAME_REVISION,
+			collisionMap.getDoorRegionCount(),
+			GenericClientCollisionMap.DOOR_DUMPER_REVISION,
+			GenericClientCollisionMap.DOOR_RUNELITE_REVISION,
+			GenericClientCollisionMap.DOOR_SOURCE_CACHE_ID,
+			GenericClientCollisionMap.DOOR_SOURCE_GAME_REVISION,
+			GenericClientCollisionMap.DOOR_SOURCE_SHA256);
+		GenericClientCollisionMap.reportRevisionDrift(client.getRevision(), message -> log.warn("{} {}", LOG_PREFIX, message));
 		log.info("{} MOUSE_PROFILE_LOADED file={} profile={} templates={}",
 			LOG_PREFIX,
 			config.mouseProfileFile(),
 			mouseProfile.getProfileId(),
 			mouseProfile.getTemplateCount());
 		printDiagnostics();
-		behaviorController.setLoggedIn(client.getGameState() == GameState.LOGGED_IN);
-		if (client.getGameState() == GameState.LOGGED_IN)
-		{
-			activateBehaviorProfile();
-		}
+		runtime.behaviorController.setLoggedIn(client.getGameState() == GameState.LOGGED_IN);
+		if (client.getGameState() == GameState.LOGGED_IN) runtime.activateBehaviorProfile();
 	}
 
 	@Override
@@ -490,7 +257,6 @@ public final class GenericClientPlugin extends Plugin
 	{
 		lifecycle = "STOPPING";
 		closeRuntimeServices();
-		closeInputServices();
 		removePluginUi();
 		lifecycle = "STOPPED";
 		log.info("{} PLUGIN_STOPPED ticks={} uptime={}", LOG_PREFIX, tickCount, getUptimeText());
@@ -530,94 +296,16 @@ public final class GenericClientPlugin extends Plugin
 			screenshot.close();
 			screenshot = null;
 		}
-		if (automationScheduler != null)
+		deathForensics = null;
+		if (runtime != null)
 		{
-			automationScheduler.close();
-			automationScheduler = null;
-		}
-		if (luaHost != null)
-		{
-			luaHost.setRandomEventHooks(null, null);
-			luaHost.close();
-			luaHost = null;
-		}
-		randomEventController = null;
-		if (walker != null)
-		{
-			walker.close();
-			walker = null;
-		}
-		if (sessionController != null)
-		{
-			sessionController.close();
-			sessionController = null;
+			runtime.close();
+			runtime = null;
 		}
 		if (mouseRecorder != null)
 		{
 			mouseRecorder.close();
 			mouseRecorder = null;
-		}
-	}
-
-	private void closeInputServices()
-	{
-		if (cameraOwner != null)
-		{
-			cameraOwner.cancel();
-		}
-		if (gameInput != null)
-		{
-			gameInput.close();
-			gameInput = null;
-		}
-		npcInput = null;
-		if (bankInput != null)
-		{
-			bankInput.close();
-			bankInput = null;
-		}
-		if (grandExchangeInput != null)
-		{
-			grandExchangeInput.close();
-			grandExchangeInput = null;
-		}
-		questActions = null;
-		spellInput = null;
-		autocastInput = null;
-		prayerInput = null;
-		uiInput = null;
-		emergencyController = null;
-		dialogueInput = null;
-		groundItemInput = null;
-		inventoryInput = null;
-		equipmentInput = null;
-		objectInput = null;
-		cameraOwner = null;
-		runInput = null;
-		if (menuInput != null)
-		{
-			menuInput.close();
-			menuInput = null;
-		}
-		if (combatInput != null)
-		{
-			combatInput.close();
-			combatInput = null;
-		}
-		if (behaviorController != null)
-		{
-			behaviorController.close();
-			behaviorController = null;
-		}
-		if (syntheticMouse != null)
-		{
-			syntheticMouse.close();
-			syntheticMouse = null;
-		}
-		if (syntheticKeyboard != null)
-		{
-			syntheticKeyboard.close();
-			syntheticKeyboard = null;
 		}
 	}
 
@@ -644,6 +332,12 @@ public final class GenericClientPlugin extends Plugin
 			}
 			scriptOverlay = null;
 		}
+		if (sceneOverlay != null)
+		{
+			if (presentationOverlayManager != null) presentationOverlayManager.remove(sceneOverlay);
+			sceneOverlay = null;
+		}
+		sceneHighlights = null;
 		if (navigationButton != null)
 		{
 			if (presentationToolbar != null)
@@ -660,34 +354,15 @@ public final class GenericClientPlugin extends Plugin
 	public void onGameStateChanged(GameStateChanged event)
 	{
 		gameStateName = event.getGameState().name();
-		if (event.getGameState() == GameState.LOGIN_SCREEN)
-		{
-			loginMessageShown = false;
-		}
-		if (event.getGameState() != GameState.LOGGED_IN)
-		{
-			latestSnapshot = null;
-			GenericClientAutomationScheduler automations = automationScheduler;
-			if (automations != null)
-			{
-				automations.clearSnapshot();
-			}
-		}
-		GenericClientBehaviorController behaviors = behaviorController;
-		if (behaviors != null)
-		{
-			behaviors.setLoggedIn(event.getGameState() == GameState.LOGGED_IN);
-		}
+		GenericClientAutomationRuntime active = runtime;
+		if (active != null) active.onGameStateChanged(event.getGameState());
+		if (event.getGameState() == GameState.LOGIN_SCREEN) loginMessageShown = false;
 		publishResult("GAME_STATE_CHANGED state=" + gameStateName);
 		publishInstanceDescriptor();
-		if (event.getGameState() == GameState.LOGGED_IN)
+		if (event.getGameState() == GameState.LOGGED_IN && !loginMessageShown)
 		{
-			activateBehaviorProfile();
-			if (!loginMessageShown)
-			{
-				loginMessageShown = true;
-				postChat("GenericClient loaded");
-			}
+			loginMessageShown = true;
+			postChat("GenericClient loaded");
 		}
 	}
 
@@ -697,10 +372,9 @@ public final class GenericClientPlugin extends Plugin
 		bankCache.clear();
 		questCache.clear();
 		gameMessages.clear();
-		if (client.getGameState() == GameState.LOGGED_IN)
-		{
-			activateBehaviorProfile();
-		}
+		GenericClientAutomationRuntime active = runtime;
+		if (active != null) active.onAccountHashChanged();
+		if (deathForensics != null) deathForensics.reset();
 	}
 
 	@Subscribe
@@ -712,34 +386,19 @@ public final class GenericClientPlugin extends Plugin
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
+		GenericClientAutomationRuntime active = runtime;
+		if (active == null) return;
 		tickCount++;
 		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(
 			client, tickCount, bankCache, questCache, gameMessages.snapshot());
-		latestSnapshot = snapshot;
-		GenericClientEmergencyController emergency = emergencyController;
-		if (emergency != null)
+		active.publishGameTick(snapshot);
+		GenericClientDeathForensics forensics = deathForensics;
+		if (forensics != null)
 		{
-			emergency.publishGameTick(snapshot);
-		}
-		GenericClientBehaviorController behaviors = behaviorController;
-		if (behaviors != null)
-		{
-			behaviors.publishActiveTick();
-		}
-		GenericClientWalker activeWalker = walker;
-		if (activeWalker != null)
-		{
-			activeWalker.publishGameTick(snapshot);
-		}
-		GenericClientLuaHost scripts = luaHost;
-		if (scripts != null)
-		{
-			scripts.publishGameTick(snapshot);
-		}
-		GenericClientAutomationScheduler automations = automationScheduler;
-		if (automations != null)
-		{
-			automations.publishGameTick(snapshot);
+			forensics.record(
+				snapshot,
+				deathForensicContext(),
+				client.getVarpValue(VarPlayerID.POISON));
 		}
 		if (tickCount == 1)
 		{
@@ -752,37 +411,36 @@ public final class GenericClientPlugin extends Plugin
 	}
 
 	@Subscribe
+	public void onHitsplatApplied(net.runelite.api.events.HitsplatApplied event)
+	{
+		GenericClientAutomationRuntime active = runtime;
+		if (active != null) active.recordHitsplat(event);
+	}
+
+	@Subscribe
 	public void onMenuOptionClicked(MenuOptionClicked event)
 	{
-		GenericClientGameInput input = gameInput;
-		if (input != null)
-		{
-			input.onMenuOptionClicked(event);
-		}
-		GenericClientMenuInput menu = menuInput;
-		if (menu != null)
-		{
-			menu.onMenuOptionClicked(event);
-		}
+		GenericClientAutomationRuntime active = runtime;
+		if (active != null) active.inputs.onMenuOptionClicked(event);
 	}
 
 	@Subscribe
 	public void onInteractingChanged(InteractingChanged event)
 	{
-		GenericClientRandomEventController randomEvents = randomEventController;
-		if (randomEvents != null)
+		GenericClientAutomationRuntime active = runtime;
+		if (active != null)
 		{
-			randomEvents.onInteractingChanged(client.getLocalPlayer(), event, tickCount);
+			active.randomEventController.onInteractingChanged(client.getLocalPlayer(), event, tickCount);
 		}
 	}
 
 	@Subscribe
 	public void onNpcDespawned(NpcDespawned event)
 	{
-		GenericClientRandomEventController randomEvents = randomEventController;
-		if (randomEvents != null)
+		GenericClientAutomationRuntime active = runtime;
+		if (active != null)
 		{
-			randomEvents.onNpcDespawned(event, tickCount);
+			active.randomEventController.onNpcDespawned(event, tickCount);
 		}
 	}
 
@@ -800,10 +458,17 @@ public final class GenericClientPlugin extends Plugin
 			mouseEffectOverlay.clear();
 			refreshPanel();
 		}
+		if (GenericClientConfig.GROUP.equals(event.getGroup()) &&
+			"showMouseTile".equals(event.getKey()) && sceneHighlights != null)
+		{
+			sceneHighlights.setShowMouseTile(config.showMouseTile());
+			refreshPanel();
+		}
 	}
 
 	void printDiagnostics()
 	{
+		GenericClientAutomationRuntime active = runtime;
 		clientThread.invoke(() ->
 		{
 			Player player = client.getLocalPlayer();
@@ -825,7 +490,7 @@ public final class GenericClientPlugin extends Plugin
 				client.getRevision(),
 				profile == null ? "unavailable" : profile.getProfileId(),
 				profile == null ? 0 : profile.getTemplateCount(),
-				mouseMoveDurationMillis(),
+				active == null ? 0 : active.mouseMoveDurationMillis(),
 				getClass().getClassLoader().getClass().getName(),
 				codeSource,
 				Thread.currentThread().getName(),
@@ -932,37 +597,9 @@ public final class GenericClientPlugin extends Plugin
 		}
 	}
 
-	private void activateBehaviorProfile()
-	{
-		GenericClientBehaviorController behaviors = behaviorController;
-		if (behaviors == null)
-		{
-			return;
-		}
-		long accountHash = client.getAccountHash();
-		if (accountHash == -1L)
-		{
-			publishResult("BEHAVIOR_PROFILE_WAITING account_hash_unavailable");
-			return;
-		}
-		try
-		{
-			behaviors.activateAccount(accountHash);
-			GenericClientAutomationScheduler automations = automationScheduler;
-			if (automations != null)
-			{
-				automations.activateProfile(
-					GenericClientBehaviorProfile.fromAccountHash(accountHash).getId());
-			}
-		}
-		catch (IOException | RuntimeException exception)
-		{
-			publishResult("BEHAVIOR_PROFILE_FAILED message=" + exception.getMessage());
-		}
-	}
-
 	private GenericClientDashboardActions dashboardActions()
 	{
+		GenericClientAutomationRuntime active = runtime;
 		return new GenericClientDashboardActions()
 		{
 			@Override
@@ -974,7 +611,7 @@ public final class GenericClientPlugin extends Plugin
 			@Override
 			public void walkToRandomTile()
 			{
-				gameInput.walkToRandomTile(GenericClientActivityContext.none());
+				active.inputs.gameInput.walkToRandomTile(GenericClientActivityContext.none());
 			}
 
 			@Override
@@ -988,6 +625,17 @@ public final class GenericClientPlugin extends Plugin
 			{
 				configManager.setConfiguration(GenericClientConfig.GROUP, "mouseEffect", effect);
 				mouseEffectOverlay.clear();
+			}
+
+			@Override
+			public void setShowMouseTile(boolean enabled)
+			{
+				configManager.setConfiguration(GenericClientConfig.GROUP, "showMouseTile", enabled);
+				if (sceneHighlights != null)
+				{
+					sceneHighlights.setShowMouseTile(enabled);
+				}
+				refreshPanel();
 			}
 
 			@Override
@@ -1013,7 +661,7 @@ public final class GenericClientPlugin extends Plugin
 			{
 				try
 				{
-					behaviorController.saveOverrides(overrides);
+					active.behaviorController.saveOverrides(overrides);
 					refreshPanel();
 					return "Saved";
 				}
@@ -1028,7 +676,7 @@ public final class GenericClientPlugin extends Plugin
 			{
 				try
 				{
-					behaviorController.resetOverrides();
+					active.behaviorController.resetOverrides();
 					refreshPanel();
 					return "Using seeded profile";
 				}
@@ -1041,7 +689,7 @@ public final class GenericClientPlugin extends Plugin
 			@Override
 			public java.util.concurrent.CompletableFuture<String> endLongBreak()
 			{
-				return behaviorController.endLongBreak().thenApply(receipt ->
+				return active.behaviorController.endLongBreak().thenApply(receipt ->
 				{
 					refreshPanel();
 					return "ended".equals(receipt.get("status"))
@@ -1074,15 +722,61 @@ public final class GenericClientPlugin extends Plugin
 		return files;
 	}
 
+	private Map<String, Object> deathForensicContext()
+	{
+		GenericClientAutomationRuntime active = runtime;
+		Map<String, Object> value = new LinkedHashMap<>();
+		value.put("last_status", lastStatus);
+		GenericClientLuaHost host = active == null ? null : active.luaHost;
+		if (host != null)
+		{
+			GenericClientActiveScript script = host.getActiveScriptView();
+			value.put("active_script", script.isPresent() ? script.getId() : null);
+			value.put("script_status", script.isPresent() ? script.getStatus() : "IDLE");
+			value.put("script_state", host.getScriptState());
+			value.put("activity", host.getActivity());
+			value.put("declared_activity", host.getActivity());
+		}
+		GenericClientCombatGuard guard = active == null ? null : active.combatGuard;
+		value.put("combat_guard", guard == null ? null : guard.status());
+		GenericClientEmergencyController emergency = active == null ? null : active.emergencyController;
+		value.put("safety", emergency == null ? null : emergency.status());
+		GenericClientBehaviorController behaviors = active == null ? null : active.behaviorController;
+		if (behaviors != null)
+		{
+			Map<String, Object> status = behaviors.status();
+			Map<String, Object> behavior = new LinkedHashMap<>();
+			behavior.put("state", status.get("state"));
+			behavior.put("long_break_mode", status.get("long_break_mode"));
+			behavior.put("break_remaining_millis", status.get("break_remaining_millis"));
+			behavior.put("effective_policy", status.get("effective_policy"));
+			behavior.put("policy_reasons", status.get("policy_reasons"));
+			value.put("behavior", behavior);
+		}
+		GenericClientRandomEventController randomEvents = active == null ? null : active.randomEventController;
+		if (randomEvents != null)
+		{
+			Map<String, Object> status = randomEvents.status();
+			Map<String, Object> event = new LinkedHashMap<>();
+			event.put("state", status.get("state"));
+			event.put("active", status.get("active"));
+			event.put("npc_id", status.get("npc_id"));
+			event.put("npc_name", status.get("npc_name"));
+			value.put("random_event", event);
+		}
+		return value;
+	}
+
 	private Map<String, Object> controlStatus()
 	{
+		GenericClientAutomationRuntime active = runtime;
 		Map<String, Object> value = new LinkedHashMap<>();
 		value.put("protocol", 1L);
 		value.put("lifecycle", lifecycle);
 		value.put("game_state", gameStateName);
 		value.put("last_status", lastStatus);
 		value.put("instance", instanceHealth());
-		GenericClientSnapshot snapshot = latestSnapshot;
+		GenericClientSnapshot snapshot = active == null ? null : active.latestSnapshot;
 		value.put("runtime", snapshot == null ? null : snapshot.read("runtime", null));
 		value.put("player", snapshot == null ? null : snapshot.read("player", null));
 		value.put("recent_messages",
@@ -1095,19 +789,18 @@ public final class GenericClientPlugin extends Plugin
 			Map<String, Object> mouse = new LinkedHashMap<>();
 			mouse.put("profile", profile.getProfileId());
 			mouse.put("templates", (long) profile.getTemplateCount());
-			mouse.put("duration_ms", (long) mouseMoveDurationMillis());
+			mouse.put("duration_ms", active == null ? 0L : (long) active.mouseMoveDurationMillis());
+			GenericClientManualTakeover takeover = active == null ? null : active.manualTakeover;
+			mouse.put("manual_takeover", takeover != null && takeover.isActive());
 			value.put("mouse", mouse);
 		}
-		GenericClientLuaHost host = luaHost;
-		value.put("lua", host == null ? null : host.controlState());
-		GenericClientBehaviorController behaviors = behaviorController;
-		value.put("behavior", behaviors == null ? null : behaviors.status());
-		GenericClientAutomationScheduler automations = automationScheduler;
-		value.put("automation", automations == null ? null : automations.status());
-		GenericClientEmergencyController emergency = emergencyController;
-		value.put("safety", emergency == null ? null : emergency.status());
-		GenericClientRandomEventController randomEvents = randomEventController;
-		value.put("random_event", randomEvents == null ? null : randomEvents.status());
+		for (String subject : List.of("lua", "behavior", "automation", "safety", "combat_guard", "random_event"))
+		{
+			value.put(subject, null);
+		}
+		if (active != null) value.putAll(active.status());
+		GenericClientDeathForensics forensics = deathForensics;
+		value.put("death_forensics", forensics == null ? null : forensics.status());
 		GenericClientControlServer bridge = controlServer;
 		value.put("control_url", bridge == null ? null : bridge.getUrl());
 		return value;
@@ -1172,7 +865,8 @@ public final class GenericClientPlugin extends Plugin
 	@SuppressWarnings("unchecked")
 	private String activeAccountProfileId()
 	{
-		GenericClientBehaviorController behaviors = behaviorController;
+		GenericClientAutomationRuntime active = runtime;
+		GenericClientBehaviorController behaviors = active == null ? null : active.behaviorController;
 		if (behaviors == null)
 		{
 			return null;
@@ -1184,89 +878,6 @@ public final class GenericClientPlugin extends Plugin
 		}
 		Object id = ((Map<String, Object>) profile).get("id");
 		return id == null ? null : String.valueOf(id);
-	}
-
-	private void cancelActiveActions(String reason)
-	{
-		GenericClientCameraOwner activeCameraOwner = cameraOwner;
-		if (activeCameraOwner != null)
-		{
-			activeCameraOwner.cancel();
-		}
-		GenericClientGameInput activeGameInput = gameInput;
-		if (activeGameInput != null)
-		{
-			activeGameInput.cancel(reason);
-		}
-		GenericClientWalker activeWalker = walker;
-		if (activeWalker != null)
-		{
-			activeWalker.cancelActive(reason);
-		}
-		GenericClientMenuInput activeMenuInput = menuInput;
-		if (activeMenuInput != null)
-		{
-			activeMenuInput.cancel(reason);
-		}
-		GenericClientCombatInput activeCombatInput = combatInput;
-		if (activeCombatInput != null)
-		{
-			activeCombatInput.cancel(reason);
-		}
-		GenericClientBankInput activeBankInput = bankInput;
-		if (activeBankInput != null)
-		{
-			activeBankInput.cancel(reason);
-		}
-		GenericClientGrandExchangeInput activeGrandExchangeInput = grandExchangeInput;
-		if (activeGrandExchangeInput != null)
-		{
-			activeGrandExchangeInput.cancel(reason);
-		}
-	}
-
-	private java.util.concurrent.CompletableFuture<?> stopForEmergency(String reason)
-	{
-		cancelActiveActions(reason);
-		GenericClientLuaHost host = luaHost;
-		return host == null
-			? java.util.concurrent.CompletableFuture.completedFuture(null)
-			: host.stop();
-	}
-
-	private java.util.concurrent.CompletableFuture<?> pauseForEmergency(String reason)
-	{
-		GenericClientWalker activeWalker = walker;
-		if (activeWalker != null)
-		{
-			activeWalker.pauseActiveInput(reason);
-		}
-		GenericClientGameInput activeGameInput = gameInput;
-		if (activeGameInput != null)
-		{
-			activeGameInput.cancel(reason);
-		}
-		GenericClientMenuInput activeMenuInput = menuInput;
-		if (activeMenuInput != null)
-		{
-			activeMenuInput.cancel(reason);
-		}
-		GenericClientCombatInput activeCombatInput = combatInput;
-		if (activeCombatInput != null)
-		{
-			activeCombatInput.cancel(reason);
-		}
-		return java.util.concurrent.CompletableFuture.completedFuture(null);
-	}
-
-	private java.util.concurrent.CompletableFuture<?> resumeAfterEmergency(String reason)
-	{
-		GenericClientWalker activeWalker = walker;
-		if (activeWalker != null)
-		{
-			activeWalker.resumeActiveInput(reason);
-		}
-		return java.util.concurrent.CompletableFuture.completedFuture(null);
 	}
 
 	private String accountNote()
@@ -1288,16 +899,17 @@ public final class GenericClientPlugin extends Plugin
 
 	private void refreshPanel()
 	{
+		GenericClientAutomationRuntime active = runtime;
 		GenericClientDashboard currentPanel = panel;
 		if (currentPanel == null)
 		{
 			return;
 		}
-		GenericClientBehaviorController behaviors = behaviorController;
+		GenericClientBehaviorController behaviors = active == null ? null : active.behaviorController;
 		currentPanel.updateBehaviorState(behaviors == null ? null : behaviors.status());
-		GenericClientAutomationScheduler automations = automationScheduler;
+		GenericClientAutomationScheduler automations = active == null ? null : active.automationScheduler;
 		currentPanel.updateAutomationState(automations == null ? null : automations.status());
-		GenericClientLuaHost scripts = luaHost;
+		GenericClientLuaHost scripts = active == null ? null : active.luaHost;
 		if (scripts != null)
 		{
 			currentPanel.updateLiveState(
@@ -1313,23 +925,8 @@ public final class GenericClientPlugin extends Plugin
 			listMouseProfiles(),
 			config.mouseEffect(),
 			recorder != null && recorder.isRecording(),
-			recorder == null ? 0 : recorder.getTemplateCount());
-	}
-
-	private int mouseMoveDurationMillis()
-	{
-		GenericClientBehaviorController behaviors = behaviorController;
-		return behaviors == null
-			? GenericClientBehaviorProfile.DEFAULT_MOUSE_MOVE_DURATION_MILLIS
-			: behaviors.mouseMoveDurationMillis();
-	}
-
-	private int typingWordsPerMinute()
-	{
-		GenericClientBehaviorController behaviors = behaviorController;
-		return behaviors == null
-			? GenericClientBehaviorProfile.DEFAULT_TYPING_WORDS_PER_MINUTE
-			: behaviors.typingWordsPerMinute();
+			recorder == null ? 0 : recorder.getTemplateCount(),
+			config.showMouseTile());
 	}
 
 	private static BufferedImage createIcon()

@@ -73,7 +73,7 @@ final class GenericClientOverlayRow
 		{
 			throw new IllegalArgumentException("Overlay label must be text");
 		}
-		return bounded(String.valueOf(raw), "Overlay label", 16);
+		return singleLine(String.valueOf(raw), "Overlay label");
 	}
 
 	private static String value(Object raw)
@@ -92,16 +92,15 @@ final class GenericClientOverlayRow
 		{
 			text = String.valueOf(raw);
 		}
-		return bounded(text, "Overlay value", 24);
+		return singleLine(text, "Overlay value");
 	}
 
-	private static String bounded(String raw, String label, int maximumLength)
+	private static String singleLine(String raw, String label)
 	{
 		String value = raw.trim();
-		if (value.isEmpty() || value.length() > maximumLength ||
-			value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0)
+		if (value.isEmpty() || value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0)
 		{
-			throw new IllegalArgumentException(label + " must be 1-" + maximumLength + " characters");
+			throw new IllegalArgumentException(label + " must be non-empty single-line text");
 		}
 		return value;
 	}

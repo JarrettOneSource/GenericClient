@@ -59,13 +59,13 @@ public class GenericClientRandomEventLuaHostTest
 			fixture.host.setRandomEventHooks(
 				Collections::emptyMap,
 				(key, status, error) -> terminal.set(key + ":" + status));
-			fixture.host.saveScript(
+			fixture.host.catalog.saveScript(
 				"worker",
 				"Worker",
 				"Wait until stopped.",
 				"return { run = function() while true do gc.await { event = 'game.tick' } end end }\n")
 				.get(2, TimeUnit.SECONDS);
-			fixture.host.saveScript(
+			fixture.host.catalog.saveScript(
 				"miles-solver",
 				"Miles Solver",
 				"Return only after the observed event is solved.",
@@ -149,7 +149,7 @@ public class GenericClientRandomEventLuaHostTest
 			.build();
 		try
 		{
-			host.saveScript(
+			host.catalog.saveScript(
 				"worker",
 				"Worker",
 				"Wait on one client action.",
@@ -212,7 +212,7 @@ public class GenericClientRandomEventLuaHostTest
 		HostFixture fixture = fixture("resume-failure");
 		try
 		{
-			fixture.host.saveScript(
+			fixture.host.catalog.saveScript(
 				"worker",
 				"Worker",
 				"Wait until interrupted.",
@@ -220,7 +220,7 @@ public class GenericClientRandomEventLuaHostTest
 				.get(2, TimeUnit.SECONDS);
 			fixture.host.start("worker").get(2, TimeUnit.SECONDS);
 			fixture.host.interruptForRandomEvent("50:326:9").get(2, TimeUnit.SECONDS);
-			fixture.host.saveScript(
+			fixture.host.catalog.saveScript(
 				"worker",
 				"Worker",
 				"Broken after interruption.",
@@ -246,7 +246,7 @@ public class GenericClientRandomEventLuaHostTest
 			temporaryFolder.newFolder(name + "-behavior").toPath());
 		GenericClientLuaHost host =
 			GenericClientTestSupport.luaHost(scripts, behavior).build();
-		host.saveScript(
+		host.catalog.saveScript(
 			"walker",
 			"Walker",
 			"Test script used to exercise standalone-run blocking.",
@@ -261,7 +261,7 @@ public class GenericClientRandomEventLuaHostTest
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
+			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
 			Collections.emptyList());
 	}
 

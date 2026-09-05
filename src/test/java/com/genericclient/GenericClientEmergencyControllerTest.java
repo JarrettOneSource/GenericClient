@@ -1,11 +1,15 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientEmergencyTestFixtures.dispatched;
+import static com.genericclient.GenericClientEmergencyTestFixtures.escapeStarted;
+import static com.genericclient.GenericClientEmergencyTestFixtures.rejected;
+import static com.genericclient.GenericClientEmergencyTestFixtures.snapshotWithHitpoints;
+import static com.genericclient.GenericClientEmergencyTestFixtures.snapshotWithInventory;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -13,6 +17,30 @@ import org.junit.Test;
 
 public class GenericClientEmergencyControllerTest
 {
+	@Test
+	public void idleClientDisarmsInheritedSafetyConfiguration()
+	{
+		GenericClientEmergencyController controller = new GenericClientEmergencyController(
+			(itemId, action) -> CompletableFuture.completedFuture(dispatched()),
+			escape -> CompletableFuture.completedFuture(escapeStarted()),
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> CompletableFuture.completedFuture(null),
+			message -> { });
+		controller.configure(
+			4,
+			Collections.singletonList(
+				new GenericClientEmergencyController.Consumable(379, "Eat", 12)),
+			null,
+			true,
+			true);
+
+		controller.publishGameTick(snapshotWithHitpoints(20, 28), false);
+
+		assertFalse((Boolean) controller.status().get("armed"));
+		assertFalse((Boolean) controller.status().get("input_owned"));
+		assertEquals("idle", controller.status().get("last_event"));
+	}
+
 	@Test
 	public void lowHitpointsPreemptWorkEndBreakAndDispatchApprovedConsumable()
 	{
@@ -85,6 +113,88 @@ public class GenericClientEmergencyControllerTest
 	}
 
 	@Test
+	public void scriptCanDisableEmergencyInputAndResetItForTheNextRun()
+	{
+		AtomicInteger consumptions = new AtomicInteger();
+		AtomicInteger escapes = new AtomicInteger();
+		AtomicInteger stops = new AtomicInteger();
+		GenericClientEmergencyController controller = new GenericClientEmergencyController(
+			(itemId, action) ->
+			{
+				consumptions.incrementAndGet();
+				return CompletableFuture.completedFuture(dispatched());
+			},
+			escape ->
+			{
+				escapes.incrementAndGet();
+				return CompletableFuture.completedFuture(escapeStarted());
+			},
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason ->
+			{
+				stops.incrementAndGet();
+				return CompletableFuture.completedFuture(null);
+			},
+			message -> { });
+		controller.configure(
+			4,
+			Collections.singletonList(
+				new GenericClientEmergencyController.Consumable(379, "Eat", 12)),
+			new GenericClientEmergencyEscape(
+				new net.runelite.api.coords.WorldPoint(2440, 3089, 0), 3),
+			true,
+			true);
+		controller.configureScriptBehavior(false, false);
+
+		controller.publishGameTick(snapshotWithHitpoints(4, 28), true);
+
+		assertEquals(0, consumptions.get());
+		assertEquals(0, escapes.get());
+		assertEquals(0, stops.get());
+		assertEquals("emergency_behavior_disabled_by_script",
+			controller.status().get("last_event"));
+		assertEquals(false, controller.status().get("automatic_consumables_enabled"));
+		assertEquals(false, controller.status().get("automatic_escape_enabled"));
+
+		controller.resetScriptBehavior();
+		controller.publishGameTick(snapshotWithHitpoints(4, 28), true);
+
+		assertEquals(1, consumptions.get());
+		assertEquals(true, controller.status().get("automatic_consumables_enabled"));
+		assertEquals(true, controller.status().get("automatic_escape_enabled"));
+	}
+
+	@Test
+	public void disabledEmergencyEscapeNeverTeleportsWhenFoodIsUnavailable()
+	{
+		AtomicInteger escapes = new AtomicInteger();
+		GenericClientEmergencyController controller = new GenericClientEmergencyController(
+			(itemId, action) -> CompletableFuture.completedFuture(rejected()),
+			escape ->
+			{
+				escapes.incrementAndGet();
+				return CompletableFuture.completedFuture(escapeStarted());
+			},
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> CompletableFuture.completedFuture(null),
+			message -> { });
+		controller.configure(
+			4,
+			Collections.singletonList(
+				new GenericClientEmergencyController.Consumable(379, "Eat", 12)),
+			new GenericClientEmergencyEscape(
+				new net.runelite.api.coords.WorldPoint(2440, 3089, 0), 3),
+			true,
+			true);
+		controller.configureScriptBehavior(true, false);
+
+		controller.publishGameTick(snapshotWithHitpoints(4, 28), true);
+
+		assertEquals(0, escapes.get());
+		assertEquals(false, controller.status().get("automatic_escape_enabled"));
+	}
+
+	@Test
 	public void waitsForScriptShutdownBeforeStartingRecoveryInput()
 	{
 		CompletableFuture<Void> stopped = new CompletableFuture<>();
@@ -118,6 +228,48 @@ public class GenericClientEmergencyControllerTest
 		assertEquals(1, endedBreaks.get());
 		assertEquals(1, consumptions.get());
 		assertFalse((Boolean) controller.status().get("recovering"));
+	}
+
+	@Test
+	public void manualEscapeCancelsPendingRecoveryBeforeAnyInput()
+	{
+		CompletableFuture<Void> stopped = new CompletableFuture<>();
+		AtomicInteger consumptions = new AtomicInteger();
+		AtomicInteger escapes = new AtomicInteger();
+		GenericClientEmergencyController controller = new GenericClientEmergencyController(
+			(itemId, action) ->
+			{
+				consumptions.incrementAndGet();
+				return CompletableFuture.completedFuture(dispatched());
+			},
+			escape ->
+			{
+				escapes.incrementAndGet();
+				return CompletableFuture.completedFuture(escapeStarted());
+			},
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> stopped,
+			message -> { });
+		controller.configure(
+			12,
+			Collections.singletonList(
+				new GenericClientEmergencyController.Consumable(379, "Eat", 12)),
+			new GenericClientEmergencyEscape(
+				new net.runelite.api.coords.WorldPoint(2440, 3089, 0), 3),
+			false,
+			true);
+
+		controller.publishGameTick(snapshotWithHitpoints(12, 28), true);
+		assertTrue((Boolean) controller.status().get("recovering"));
+
+		controller.disarmForManualEscape();
+		stopped.complete(null);
+
+		assertEquals(0, consumptions.get());
+		assertEquals(0, escapes.get());
+		assertFalse((Boolean) controller.status().get("armed"));
+		assertFalse((Boolean) controller.status().get("recovering"));
+		assertEquals("manual_control", controller.status().get("last_event"));
 	}
 
 	@Test
@@ -169,7 +321,7 @@ public class GenericClientEmergencyControllerTest
 			6,
 			Collections.singletonList(
 				new GenericClientEmergencyController.Consumable(1993, "Drink", 11)),
-			new GenericClientEmergencyController.Escape(
+			new GenericClientEmergencyEscape(
 				new net.runelite.api.coords.WorldPoint(3225, 3218, 0), 3),
 			false,
 			false);
@@ -178,10 +330,11 @@ public class GenericClientEmergencyControllerTest
 
 		assertEquals(1, escapes.get());
 		assertEquals("emergency_escape_complete", controller.status().get("last_event"));
+		assertFalse((Boolean) controller.status().get("armed"));
 	}
 
 	@Test
-	public void missingFoodEscapesBeforeTheHardFloor()
+	public void missingFoodAboveTheHardFloorDoesNotStopOrEscape()
 	{
 		AtomicInteger stops = new AtomicInteger();
 		AtomicInteger escapes = new AtomicInteger();
@@ -204,7 +357,7 @@ public class GenericClientEmergencyControllerTest
 			4,
 			Collections.singletonList(
 				new GenericClientEmergencyController.Consumable(379, "Eat", 12)),
-			GenericClientEmergencyController.Escape.inventoryDialogue(
+			GenericClientEmergencyEscape.inventoryDialogue(
 				2564,
 				"Rub",
 				"Castle Wars Arena",
@@ -215,14 +368,11 @@ public class GenericClientEmergencyControllerTest
 
 		controller.publishGameTick(snapshotWithHitpoints(14, 28));
 
-		assertEquals(1, stops.get());
-		assertEquals(1, escapes.get());
-		assertEquals("emergency_escape_complete", controller.status().get("last_event"));
-		@SuppressWarnings("unchecked")
-		Map<String, Object> escape = (Map<String, Object>) controller.status().get("escape");
-		assertEquals("inventory_dialogue", escape.get("type"));
-		assertEquals(2564L, escape.get("item_id"));
-		assertEquals("Castle Wars Arena", escape.get("choice"));
+		assertEquals(0, stops.get());
+		assertEquals(0, escapes.get());
+		assertEquals("no_approved_emergency_consumable_available",
+			controller.status().get("last_event"));
+		assertTrue((Boolean) controller.status().get("armed"));
 	}
 
 	@Test
@@ -239,7 +389,7 @@ public class GenericClientEmergencyControllerTest
 			6,
 			Collections.singletonList(
 				new GenericClientEmergencyController.Consumable(1993, "Drink", 11)),
-			new GenericClientEmergencyController.Escape(
+			new GenericClientEmergencyEscape(
 				new net.runelite.api.coords.WorldPoint(3225, 3218, 0), 3),
 			false,
 			false);
@@ -282,7 +432,7 @@ public class GenericClientEmergencyControllerTest
 			2,
 			Collections.singletonList(
 				new GenericClientEmergencyController.Consumable(1234, "Eat", 6)),
-			new GenericClientEmergencyController.Escape(
+			new GenericClientEmergencyEscape(
 				new net.runelite.api.coords.WorldPoint(3225, 3218, 0), 3),
 			true,
 			false);
@@ -294,6 +444,42 @@ public class GenericClientEmergencyControllerTest
 		assertEquals(0, escapes.get());
 		assertEquals("emergency_consumable_dispatched", controller.status().get("last_event"));
 		assertEquals(true, controller.status().get("continue_after_consumable"));
+	}
+
+	@Test
+	public void rejectedOpportunisticHealDoesNotEscalateToEscape()
+	{
+		AtomicInteger stops = new AtomicInteger();
+		AtomicInteger escapes = new AtomicInteger();
+		GenericClientEmergencyController controller = new GenericClientEmergencyController(
+			(itemId, action) -> CompletableFuture.completedFuture(rejected()),
+			escape ->
+			{
+				escapes.incrementAndGet();
+				return CompletableFuture.completedFuture(escapeStarted());
+			},
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason ->
+			{
+				stops.incrementAndGet();
+				return CompletableFuture.completedFuture(null);
+			},
+			message -> { });
+		controller.configure(
+			2,
+			Collections.singletonList(
+				new GenericClientEmergencyController.Consumable(1234, "Eat", 6)),
+			new GenericClientEmergencyEscape(
+				new net.runelite.api.coords.WorldPoint(3225, 3218, 0), 3),
+			true,
+			false);
+
+		controller.publishGameTick(snapshotWithInventory(1, 4, 10, 1234, 1));
+
+		assertEquals(0, stops.get());
+		assertEquals(0, escapes.get());
+		assertEquals("no_approved_emergency_consumable_available",
+			controller.status().get("last_event"));
 	}
 
 	@Test
@@ -340,12 +526,19 @@ public class GenericClientEmergencyControllerTest
 			true,
 			false);
 
-		controller.publishGameTick(snapshotWithHitpoints(4));
+		controller.publishGameTick(snapshotWithInventory(1, 4, 10, 1234, 1));
 
 		assertEquals(1, pauses.get());
 		assertEquals(1, consumptions.get());
+		assertEquals(0, resumes.get());
+		assertTrue((Boolean) controller.status().get("recovering"));
+		assertTrue((Boolean) controller.status().get("consumable_pending"));
+
+		controller.publishGameTick(snapshotWithInventory(2, 10, 10, 1234, 0));
+
 		assertEquals(1, resumes.get());
 		assertFalse((Boolean) controller.status().get("recovering"));
+		assertFalse((Boolean) controller.status().get("consumable_pending"));
 	}
 
 	@Test
@@ -367,7 +560,7 @@ public class GenericClientEmergencyControllerTest
 			6,
 			Collections.singletonList(
 				new GenericClientEmergencyController.Consumable(1993, "Drink", 11)),
-			new GenericClientEmergencyController.Escape(
+			new GenericClientEmergencyEscape(
 				new net.runelite.api.coords.WorldPoint(3225, 3218, 0), 3),
 			false,
 			false);
@@ -446,7 +639,7 @@ public class GenericClientEmergencyControllerTest
 			4,
 			Collections.singletonList(
 				new GenericClientEmergencyController.Consumable(1993, "Drink", 7)),
-			new GenericClientEmergencyController.Escape(
+			new GenericClientEmergencyEscape(
 				new net.runelite.api.coords.WorldPoint(3225, 3218, 0), 3),
 			true,
 			false);
@@ -487,7 +680,7 @@ public class GenericClientEmergencyControllerTest
 			3,
 			Collections.singletonList(
 				new GenericClientEmergencyController.Consumable(1993, "Drink", 11)),
-			new GenericClientEmergencyController.Escape(
+			new GenericClientEmergencyEscape(
 				new net.runelite.api.coords.WorldPoint(3225, 3218, 0), 3),
 			true,
 			true);
@@ -529,7 +722,7 @@ public class GenericClientEmergencyControllerTest
 			1,
 			Collections.singletonList(
 				new GenericClientEmergencyController.Consumable(1993, "Drink", 11)),
-			new GenericClientEmergencyController.Escape(
+			new GenericClientEmergencyEscape(
 				new net.runelite.api.coords.WorldPoint(3225, 3218, 0), 3),
 			false,
 			false);
@@ -543,47 +736,99 @@ public class GenericClientEmergencyControllerTest
 		assertEquals(30L, controller.status().get("forced_heal_percent"));
 	}
 
-	private static GenericClientSnapshot snapshotWithHitpoints(int hitpoints)
+	@Test
+	public void waitsForTheConsumableToBeObservedBeforeEatingAgain()
 	{
-		return snapshotWithHitpoints(hitpoints, 10);
+		AtomicInteger consumptions = new AtomicInteger();
+		GenericClientEmergencyController controller = new GenericClientEmergencyController(
+			(itemId, action) ->
+			{
+				consumptions.incrementAndGet();
+				return CompletableFuture.completedFuture(dispatched());
+			},
+			escape -> CompletableFuture.completedFuture(escapeStarted()),
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			reason -> CompletableFuture.completedFuture(null),
+			message -> { });
+		controller.configure(
+			4,
+			Collections.singletonList(
+				new GenericClientEmergencyController.Consumable(379, "Eat", 12)),
+			null,
+			true,
+			true);
+
+		controller.publishGameTick(snapshotWithInventory(1, 16, 28, 379, 2));
+		controller.publishGameTick(snapshotWithInventory(2, 16, 28, 379, 2));
+		controller.publishGameTick(snapshotWithInventory(3, 16, 28, 379, 2));
+
+		assertEquals(1, consumptions.get());
+
+		controller.publishGameTick(snapshotWithInventory(4, 28, 28, 379, 1));
+		controller.publishGameTick(snapshotWithInventory(5, 16, 28, 379, 1));
+
+		assertEquals(2, consumptions.get());
 	}
 
-	private static GenericClientSnapshot snapshotWithHitpoints(int hitpoints, int maximumHitpoints)
+	@Test
+	public void unobservedHardFloorFoodEscapesOnlyAfterTheObservationBarrier()
 	{
-		return new GenericClientSnapshot(
-			1,
-			"LOGGED_IN",
-			231,
-			new GenericClientSnapshot.PlayerSnapshot(
-				"Player", 3200, 3200, 0, 0, -1, null,
-				hitpoints, maximumHitpoints, 10_000, false, null),
-			Collections.emptyList());
-	}
+		AtomicInteger stops = new AtomicInteger();
+		AtomicInteger escapes = new AtomicInteger();
+		AtomicInteger resumes = new AtomicInteger();
+		GenericClientEmergencyController controller = new GenericClientEmergencyController(
+			(itemId, action) -> CompletableFuture.completedFuture(dispatched()),
+			escape ->
+			{
+				escapes.incrementAndGet();
+				return CompletableFuture.completedFuture(escapeStarted());
+			},
+			() -> CompletableFuture.completedFuture(Collections.emptyMap()),
+			new GenericClientEmergencyController.InputControl()
+			{
+				@Override
+				public CompletableFuture<?> pause(String reason)
+				{
+					return CompletableFuture.completedFuture(null);
+				}
 
-	private static Map<String, Object> dispatched()
-	{
-		Map<String, Object> receipt = new LinkedHashMap<>();
-		receipt.put("status", "dispatched");
-		receipt.put("result", "item_interaction_dispatched");
-		receipt.put("click_count", 1L);
-		return receipt;
-	}
+				@Override
+				public CompletableFuture<?> resume(String reason)
+				{
+					resumes.incrementAndGet();
+					return CompletableFuture.completedFuture(null);
+				}
+			},
+			reason ->
+			{
+				stops.incrementAndGet();
+				return CompletableFuture.completedFuture(null);
+			},
+			message -> { });
+		controller.configure(
+			4,
+			Collections.singletonList(
+				new GenericClientEmergencyController.Consumable(379, "Eat", 12)),
+			new GenericClientEmergencyEscape(
+				new net.runelite.api.coords.WorldPoint(2440, 3089, 0), 3),
+			true,
+			true);
 
-	private static Map<String, Object> rejected()
-	{
-		Map<String, Object> receipt = new LinkedHashMap<>();
-		receipt.put("status", "rejected");
-		receipt.put("result", "missing_item");
-		receipt.put("click_count", 0L);
-		return receipt;
-	}
+		for (long tick = 1; tick <= 4; tick++)
+		{
+			controller.publishGameTick(snapshotWithInventory(tick, 4, 28, 379, 1));
+		}
 
-	private static Map<String, Object> escapeStarted()
-	{
-		Map<String, Object> receipt = new LinkedHashMap<>();
-		receipt.put("status", "dispatched");
-		receipt.put("result", "emergency_walk_started");
-		receipt.put("click_count", 0L);
-		return receipt;
+		assertEquals(0, stops.get());
+		assertEquals(0, escapes.get());
+		assertEquals(0, resumes.get());
+		assertTrue((Boolean) controller.status().get("recovering"));
+
+		controller.publishGameTick(snapshotWithInventory(5, 4, 28, 379, 1));
+
+		assertEquals(1, stops.get());
+		assertEquals(1, escapes.get());
+		assertEquals(0, resumes.get());
+		assertFalse((Boolean) controller.status().get("recovering"));
 	}
 }

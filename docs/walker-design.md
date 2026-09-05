@@ -1,331 +1,168 @@
-# Walker design: global routes with live local authority
+# Journey planning and execution
 
-Status: implemented and live-tested from Falador to Varrock on 2026-08-25;
-live collision and accessible-door traversal were added at Port Sarim jail on
-2026-08-27.
-This work does not start the deferred headless mode.
+GenericClient plans a complete destination journey over bundled terrain, captured live collision and eligible directed transports. Lua supplies the destination, required corridor points, forbidden tiles and interruption conditions. Lua owns quest choices, supply handling and recovery decisions.
 
-Source snapshots:
+This describes scripting API 3. [Navigation map revisions](navigation-map-revisions.md) records artifact provenance, [navigation transitions](navigation-transitions.md) records the transport evidence, and [planner performance](planner-performance.md) records controlled measurements. Current source/test acceptance and pending live work are tracked in [behavior-framework-implementation.md](behavior-framework-implementation.md).
 
-- [RuneLite `2624bcc4136cea1011bf1bb154581a4b16c7a3ca`](https://github.com/runelite/runelite/tree/2624bcc4136cea1011bf1bb154581a4b16c7a3ca), 2026-08-24.
-- [Microbot `56c423becc6ff6d69f289d8dcbeb728021cc2c51`](https://github.com/chsami/microbot/tree/56c423becc6ff6d69f289d8dcbeb728021cc2c51), 2026-08-23.
-- The GenericClient implementation in this checkout.
-
-## Decision
-
-GenericClient now exposes one destination-bearing semantic Lua action:
+## Lua contract
 
 ```lua
-local receipt = gc.await {
-  action = {
-    type = "walk.to",
-    destination = { x = 3210, y = 3424, plane = 0 },
-    within = 1,
-    run = true,
-  },
-  timeout = { game_ticks = 600 },
+return gc.walk.to {
+  destination = { x = 3210, y = 3424, plane = 0 },
+  within = 3,
+  ticks = 600,
+  run = true,
+  via = { { x = 3205, y = 3420, plane = 0 } },
+  avoid_tiles = { { x = 3208, y = 3423, plane = 0 } },
+  interrupt_on = { dialogue = true },
 }
 ```
 
-`GenericClientCollisionMap` loads the pinned, packaged world map for unloaded
-regions. Within the current non-instanced scene, an immutable copy of RuneLite's
-live collision flags replaces those static edges. A closed edge remains
-routeable only when an object on that exact oriented wall exposes an approved
-same-plane traversal action. A newly observed solid edge without a traversal
-owner is retained for the life of that walk, including after the 104×104 scene
-base shifts, so recovery cannot oscillate back through a known wall.
-`GenericClientPathfinder` computes a global guide and `GenericClientWalker`
-follows it through `GenericClientGameInput`. Each cursor leg uses the active
-recorded mouse profile. A visible ground tile uses the canvas; an occluding object is bypassed
-by right-clicking and selecting `Walk here`; a tile outside the 3D viewport uses
-RuneLite's minimap projection. Arrival is based on later player snapshots, not
-click dispatch.
+The equivalent semantic action is `gc.await { action = { type = "walk.to", ... }, timeout = { game_ticks = ... } }`. `gc.walk.to` moves `activity`, `policy`, `humanize`, `ticks` and `timeout` onto the await envelope. Ordinary REPL calls are plain; an explicit `humanize = true` enables discretionary behavior.
 
-A reliable whole-world walker still needs explicit semantic edges for stairs,
-ships, teleports, and other discontinuities. Accessible same-plane doors are now
-handled from the live scene; locked doors fail with a bounded receipt. Microbot's feature named “Web
-Walker” is local rather than a remote service: it loads a packaged collision
-archive and transport/restriction TSVs, runs its own pathfinder, and executes
-the result in the client ([startup](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/ShortestPathPlugin.java#L221-L254), [collision resource loader](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/pathfinder/SplitFlagMap.java#L102-L129), [transport resource loader](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/Transport.java#L590-L627)).
+| Field | Contract |
+| --- | --- |
+| `destination` | Required integer WorldPoint; coordinates 0–32767 and plane 0–3 |
+| `within` | Chebyshev arrival radius, 0–10; native default 1 |
+| `run` | Defaults to true; false conserves energy and disables an enabled run orb |
+| `via` | Up to 512 ordered WorldPoints, potentially on different planes |
+| `avoid_tiles` | Up to 512 forbidden WorldPoints on any valid plane |
+| `arrival_tiles` | Optional nonempty allowed arrival set, up to 512 points on the destination plane inside its radius |
+| `interrupt_on` | Typed predicates evaluated against each fresh frame |
+| `resume` | Single-use continuation from an interrupted or unavailable journey |
+| `ticks`, `timeout` | Await time budget; native walk default 600 game ticks |
 
-Therefore:
+The catalog's `shared_movement.walk(destination, within, options)` defaults to radius 3 and 900 ticks. Its `approach` helper checks the current distance before issuing the same journey API. These are script helper defaults, separate from the native defaults.
 
-- Do not build or depend on an online “web-walker node” now.
-- Do not hand-author ordinary road/path waypoints.
-- Keep the Falador-to-Varrock live receipt as the ground-walker regression route.
-- Treat the loaded scene's live collision flags as authoritative over the
-  static archive.
-- Add transition definitions and handlers one real route at a time instead of importing every possible transport flow.
+An avoided start tile can be left, but the route cannot enter avoided tiles. `arrival_tiles` restricts the entire final-target selection, including alternate targets during hazardous refresh. It represents alternatives to one another; `via` represents required progress in order. The retired `interrupt_on_dialogue` alias and unknown walk fields are rejected.
 
-## Collision map source
+A via point is passed only when an observed player position comes within two tiles on its plane. A planned route alone does not pass it. Click reach is capped at the next unpassed via requirement, preventing the game's own local route from cutting across a required corridor.
 
-Use the maintained [`Skretzo/shortest-path`](https://github.com/Skretzo/shortest-path) map, not Microbot's older forked copy. The source inspected for this design is commit [`44a691aafad48bd8f4ef6d00680d627d2aa8153c`](https://github.com/Skretzo/shortest-path/tree/44a691aafad48bd8f4ef6d00680d627d2aa8153c), dated 2026-08-19.
+## Interrupts and continuation
 
-Its [`src/main/resources/collision-map.zip`](https://github.com/Skretzo/shortest-path/blob/44a691aafad48bd8f4ef6d00680d627d2aa8153c/src/main/resources/collision-map.zip) is 1,200,495 bytes, contains 2,726 region entries, and has SHA-256 `2fca3c83778995c96a6511cc523e157352ef526f3b0a969892b62010d5c5e717`. GenericClient vendors that exact artifact and its upstream BSD-2-Clause text. It does not download map data at client startup; provenance is recorded in [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+Interrupts run before arrival, route matching, recovery and input dispatch. The order is:
 
-The reproducible update path is [`osrs-pathfinding/shortest-path-tooling`](https://github.com/osrs-pathfinding/shortest-path-tooling), pinned here at [`d37d53c129d61dc8e2bb8456eb39801688a000c2`](https://github.com/osrs-pathfinding/shortest-path-tooling/tree/d37d53c129d61dc8e2bb8456eb39801688a000c2). Its collision workflow downloads a selected OSRS cache and XTEA keys from [OpenRS2's archive](https://archive.openrs2.org/caches), runs `CollisionMapDumper` through RuneLite's cache module, and produces the replacement `collision-map.zip` ([workflow](https://github.com/osrs-pathfinding/shortest-path-tooling/blob/d37d53c129d61dc8e2bb8456eb39801688a000c2/collision-map-update/README.md), [dumper](https://github.com/osrs-pathfinding/shortest-path-tooling/blob/d37d53c129d61dc8e2bb8456eb39801688a000c2/collision-map-update/CollisionMapDumper.java)).
-
-The static archive supplies unloaded-world terrain. In the loaded top-level
-scene, GenericClient copies the current collision plane into the pinned Lua
-frame and uses it for planning and edge verification.
-
-## What stock RuneLite actually provides
-
-### Live local navigation data
-
-Each `WorldView` exposes the current `Scene` and a collision map per plane ([`WorldView`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/WorldView.java#L50-L82)). A `CollisionData` map is explicitly a 104 by 104 array addressed by scene X/Y coordinates ([`CollisionData`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/CollisionData.java#L29-L48)). The flags describe directional walls and full movement blocks from objects, floor decoration, and terrain such as water ([`CollisionDataFlag`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/CollisionDataFlag.java#L27-L53)).
-
-RuneLite already contains the exact per-step collision logic needed to validate an eight-directional search. `WorldArea.canTravelInDirection` checks the destination footprint, directional wall flags, diagonal corner constraints, and an optional extra predicate ([source](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/coords/WorldArea.java#L225-L438)). Stock RuneLite does not expose a general route-finder API around this data; GenericClient must run its own bounded BFS or A* over a copied collision frame.
-
-The scene is local by definition. `Scene.getTiles()` is 4 by 104 by 104, and its base X/Y identifies the world coordinate represented by scene tile 0,0 ([`Scene`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/Scene.java#L27-L47), [base coordinates](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/Scene.java#L117-L170)). `LocalPoint.fromWorld` returns no point for a destination outside that scene. Live collision therefore cannot answer whether a tile in another region is reachable.
-
-### Walking and progress observation
-
-RuneLite exposes `MenuAction.WALK`, `Client.menuAction(...)`, and the client's current local destination ([`MenuAction.WALK`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/MenuAction.java#L135-L139), [`Client.menuAction`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/Client.java#L2064-L2073), [`getLocalDestinationLocation`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/Client.java#L1077-L1084)). The injected Jagex client remains responsible for the short local route resulting from a walk click. Our planner selects safe, globally directed click targets; it does not need to replace the client's per-click movement engine.
-
-For longer local steps, `Perspective.localToMinimap` projects a `LocalPoint` into the minimap and deliberately caps the default projection to about twenty tiles, accounting for minimap zoom and camera yaw ([source](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/Perspective.java#L509-L618)). GenericClient uses this projection whenever the selected route tile has no safe canvas polygon.
-
-### Data that looks relevant but is not a route graph
-
-RuneLite's `WorldMapData` only answers whether a coordinate belongs to the displayed surface. `WorldMapRenderer` exposes 64-by-64 display regions and map icons, not collision or connectivity ([`WorldMapData`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/worldmap/WorldMapData.java#L27-L40), [`WorldMapRenderer`](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-api/src/main/java/net/runelite/api/worldmap/WorldMapRenderer.java#L27-L44)). `WorldMapPointManager` is a thread-safe list of overlay markers, and clicking one only focuses the displayed map ([manager](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-client/src/main/java/net/runelite/client/ui/overlay/worldmap/WorldMapPointManager.java#L34-L53), [overlay click](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-client/src/main/java/net/runelite/client/ui/overlay/worldmap/WorldMapOverlay.java#L86-L117)).
-
-RuneLite also has a curated `TransportationPointLocation` enum for world-map icons. Some rows carry a second point, while many carry only the icon location; it does not encode complete connectivity, the action to execute, or player requirements ([source](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-client/src/main/java/net/runelite/client/plugins/worldmap/TransportationPointLocation.java#L35-L84)). It can provide hints when adding a transport later, but it is not a walker backend.
-
-## What Microbot's “Web Walker” owns
-
-Microbot demonstrates the data missing from stock RuneLite. It is useful as an architectural reference, but copying its complete runtime would contradict the plan to fill GenericClient only as real automations demand features.
-
-### Static tile graph
-
-The checked-in `collision-map.zip` contains 2,724 region entries and is 1,050,209 bytes in this source snapshot. `SplitFlagMap` loads them into region maps; `FlagMap` represents each 64-by-64 region with two directional bits per tile and a plane count ([`SplitFlagMap`](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/pathfinder/SplitFlagMap.java#L17-L47), [`FlagMap`](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/pathfinder/FlagMap.java#L8-L61), [packaged archive](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/resources/net/runelite/client/plugins/microbot/shortestpath/collision-map.zip)). A dense set of ordinary waypoint objects is unnecessary: tile neighbors are generated lazily from those edge bits.
-
-Microbot includes the offline generator. It reads cache terrain, locations, and object definitions, applies object dimensions/orientation and terrain settings, and writes each region's two-bit passability map ([`CollisionMapDumper`](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/cache/src/main/java/net/runelite/cache/CollisionMapDumper.java#L45-L151), [object/terrain collision construction](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/cache/src/main/java/net/runelite/cache/CollisionMapDumper.java#L162-L349)). The generator also contains a large curated exception list for objects whose cache properties do not directly express desired walker semantics ([source](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/cache/src/main/java/net/runelite/cache/CollisionMapDumper.java#L355-L617)). A world map can be generated, but accuracy still requires versioning and corrections.
-
-### Semantic transition graph
-
-Microbot's transport resources total 8,763 TSV lines and about 0.5 MB in this checkout. `Transport` models origin, destination, interaction action/target/object ID, type, duration, and membership, skill, quest, item, currency, varbit, and varplayer requirements ([model](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/Transport.java#L28-L118), [parsing](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/Transport.java#L217-L422), [resource directory](https://github.com/chsami/microbot/tree/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/resources/net/runelite/client/plugins/microbot/shortestpath)). Network rows such as fairy rings are expanded into origin/destination permutations ([source](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/Transport.java#L537-L584)).
-
-Before searching, `PathfinderConfig` filters the catalog against current world type, skill levels, quest state, varbits/varps, inventory/bank items, currency, and feature availability ([eligibility](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/pathfinder/PathfinderConfig.java#L1215-L1368)). These are the hand-authored “nodes” we eventually need: not arbitrary road waypoints, but discontinuous or conditional edges that ordinary collision cannot describe.
-
-### Planning and execution are separate problems
-
-Microbot expands eight walking neighbors plus eligible transport edges. Its walking frontier uses an A*-style `f = g + heuristic` queue; transport nodes use a separate cost queue, and very long single-target paths can use a bidirectional search ([neighbors](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/pathfinder/CollisionMap.java#L232-L343), [queues](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/pathfinder/Pathfinder.java#L35-L85), [mode selection](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/pathfinder/Pathfinder.java#L731-L778)). It smooths completed paths without collapsing across transports ([source](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/shortestpath/pathfinder/Pathfinder.java#L163-L201)).
-
-The execution layer is substantially larger than the search. `walkTo` is a serialized, off-client-thread operation ([source](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/Rs2Walker.java#L1165-L1310)). It advances along the route with minimap/canvas clicks, then handles doors, transport-specific widgets/dialogues, stalls, off-path movement, live collision invalidation, and partial-route retries ([minimap clicks](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/Rs2Walker.java#L3525-L3607), [off-path replanning](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/Rs2Walker.java#L2061-L2108), [partial retry budget](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/Rs2Walker.java#L3091-L3146), [transport dispatcher](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/Rs2Walker.java#L8690-L9034)). Its smaller nonblocking `walkStep` explicitly omits the door, transport, and stuck-recovery pipeline ([contract](https://github.com/chsami/microbot/blob/56c423becc6ff6d69f289d8dcbeb728021cc2c51/runelite-client/src/main/java/net/runelite/client/plugins/microbot/util/walker/Rs2Walker.java#L1446-L1463)).
-
-This source snapshot contains about 3,239 lines in the basic collision/search/transport model, another 2,311 lines of pathfinder configuration, and a 12,444-line full walker. The point is not that GenericClient needs that code now. It shows why “find a path” and “reliably finish a world route” must be staged.
-
-## Approach comparison
-
-| Approach | What it solves | What it cannot solve alone | Recommendation |
-| --- | --- | --- | --- |
-| Live scene BFS/A* | Correct current collision, dynamic objects, short same-plane routes | Anything outside the loaded 104-by-104 scene; transitions | Add as an overlay after the first real failure |
-| Repeated straight-line clicks | Almost no planner code | Routinely fails around rivers, walls, mountains, buildings, and scene-scale detours | Do not call this a walker |
-| Hand-authored waypoint network | Can bridge selected known routes | High authoring burden and weak off-route recovery; duplicates walkable terrain | Do not use for ordinary ground |
-| Static whole-world tile graph | Routes ordinary ground across unloaded regions | Doors, plane changes, requirements, interfaces, teleports; revision drift | Implemented |
-| Static graph plus transport edges | Practical whole-world routing | Still needs an executor and maintenance | Long-term local design |
-| External route service | Central distribution/computation for many clients | Network/version dependency; still cannot execute or confirm transitions client-side | Optional adapter later |
-
-## Implemented vertical slice
-
-The implementation has four narrow pieces:
-
-```text
-Lua gc.await
-    -> GenericClientWalker (lifecycle and receipt)
-        -> GenericClientPathfinder (static-map A*)
-        -> GenericClientGameInput (synthetic canvas/minimap click)
-```
-
-### Exact supported scope
-
-- Top-level, non-instanced world view only.
-- One-tile player footprint.
-- Start and destination must be on the same plane.
-- Search uses the packaged global map, all eight directions, and the archive's
-  diagonal corner rules. It stops after 250,000 expanded nodes.
-- The requested Chebyshev arrival radius is an integer from 0 through 10.
-- Run is enabled by default at 10% or more energy and verified before route
-  clicks. `run = false` conserves energy for the requesting walk.
-- Accessible same-plane traversal objects are executed through the normal
-  synthetic object-action pipeline and verified before replanning. Explicit
-  locked-door feedback stops immediately; otherwise an unchanged obstacle stops
-  after three attempts.
-- No plane transition, teleport, ship, transport dialogue, or transport widget operation.
-- One active walk for the whole plugin. A second request returns `busy` rather than silently replacing the first.
-- The Lua request owns the game-tick timeout. Ordinary segment handoffs do not
-  consume recovery budget. Genuine off-route/stall recovery starts at six plans,
-  adds one per 16 tiles of initial distance, and caps at 32.
-- There is no straight-line or random fallback. A failure is returned in the
-  action receipt.
-
-The static map can still be stale around changed or dynamic game objects.
-
-### Planning
-
-The plugin loads the 2,726 compressed region entries once at startup. Each tile
-has a north-edge and east-edge passability bit per plane; south and west are
-derived from neighboring tiles. A* runs on one dedicated daemon thread so the
-RuneLite client thread never performs a world search.
-
-The planner:
-
-- treats a blocked start tile specially so the player can leave it;
-- prevents diagonal corner cutting;
-- uses orthogonal cost 10, diagonal cost 14, and an octile heuristic;
-- accepts the first cheapest tile inside the requested arrival radius;
-- uses fixed neighbor ordering and insertion-order tie breaking.
-- breaks long routes into global-guided local segments so a loaded scene is
-  authoritative locally without having to connect directly to an unloaded
-  destination.
-
-Lua receives no collision arrays or route nodes.
-
-### Execution and recovery
-
-At each game tick, the walker observes the immutable player snapshot and active
-route:
-
-1. Complete `arrived` when the player is on the correct plane and within the requested radius.
-2. Enable and verify run when policy permits and at least 10% energy is
-   available. Re-arm only after energy falls below that threshold.
-3. Match the player to a nearby point on the active segment; replan when more than
-   three tiles off route.
-4. Before offering a route leg, compare its nearby edges with live collision.
-   Approach an accessible traversal object, execute its action, and verify the
-   edge opened or the player crossed it before replanning. Retain every solid
-   unowned edge in the active walk's blocked-edge set and apply it to all later
-   plans, even after that edge leaves the loaded scene.
-5. Offer the remaining unobstructed route from farthest to nearest. The input module
-   turns the camera, recomputes projection, and selects the first route tile
-   currently reachable through a visible canvas polygon or minimap projection.
-6. If an object owns the canvas left-click, right-click and move to the exposed
-   `Walk here` row. Confirm canvas selections through `MenuOptionClicked`;
-   confirm minimap dispatch through subsequent player progress. Treat the
-   right-click and row-selection click as one composite interaction, with one
-   behavior roll only after the final selection.
-7. Run one behavior evaluation after every dispatched route, run-toggle, or obstacle click, then retain
-   the accepted waypoint until the player is within two tiles of it or
-   has passed its route index. Retain the final waypoint until arrival instead
-   of re-clicking the same endpoint. Keep a two-game-tick minimum between
-   clicks, replan after eight ticks without player movement, and reduce click
-   distance after a rejected canvas target.
-8. At a segment endpoint, derive the next segment from the global guide and
-   reset the stall clock when that asynchronous plan is published.
-9. Finish after five consecutive click failures, explicit locked-door feedback,
-   three unchanged obstacle attempts, the route's bounded recovery budget, the requested
-   timeout, logout/plane change, explicit script cancellation, no route, or arrival.
-
-### Receipt and diagnostics
+1. Named area membership.
+2. Dialogue not owned by the selected transport.
+3. Poison.
+4. Missing inventory-name prefixes.
+5. Inventory quantity minimums.
+6. Boosted skill minimums.
+7. Varbit equality.
+8. Run-energy threshold.
 
 ```lua
-{
-  status = "arrived", -- or unreachable, unsupported_transition, timed_out,
-                      -- cancelled, busy, click_failed
-  requested = { x = 3200, y = 3200, plane = 0 },
-  reached = { x = 3200, y = 3199, plane = 0 },
-  within = 1,
-  game_ticks = 14,
-  active_game_ticks = 10, -- excludes camera/mouse/click/break interaction time
-  plans = 2,
-  recovery_plans = 0,
-  clicks = 4,
-  obstacle_interactions = 1,
-  obstacles_cleared = 1,
-  live_block_replans = 2,
-  blocked_edges = {
-    { from = { x = 3074, y = 3370, plane = 0 },
-      to = { x = 3074, y = 3371, plane = 0 } },
+local areas = gc.require("monkey_madness_areas")
+local interrupts = {
+  area = {
+    name = "prison",
+    bounds = areas.prison_bounds(),
   },
-  run_toggles = 1,
-  path_tiles = 31,
-  expanded_nodes = 287,
-  reason = "arrival_radius",
+  dialogue = true,
+  poisoned = true,
+  missing_item = { "Antipoison" },
+  inventory_below = { { id = 379, quantity = 4 } },
+  skill_below = { prayer = 12 },
+  varbit_equals = { { id = 25, value = 0 } },
+  run_energy_below = 60,
 }
 ```
 
-Console and `client.log` receive `WALK_REQUESTED`, `WALK_PLANNING`,
-`WALK_PLANNED`, `CAMERA_TURN_STARTED`, `CAMERA_TURN_COMPLETED`,
-`WALK_CLICK_REQUEST`, `WALK_CLICK`, `WALK_INTERACTION_COMPLETED`,
-`WALK_CONTEXT_INTERACTION_COMPLETED`, `WALK_PROGRESS`, `WALK_CLICK_REJECTED`,
-`WALK_OBSTACLE_INTERACTION`, `WALK_OBSTACLE_DISPATCHED`, `WALK_OBSTACLE_CLEARED`,
-`WALK_ROUTE_BLOCKED`, and `WALK_COMPLETED` records. The Lua script receives only
-the terminal receipt.
+The quest runner passes this table as `interrupt_on = interrupts`. Its declared area module supplies the actual prison rectangles with the safe exit removed. Areas may also be an ordered list of named areas, each containing rectangles. Area bounds and inventory names are supplied by Lua; the walker contains no prison or potion decisions. Numeric-ID conditions use arrays of rows, preserving IDs such as 0 or 1 through Lua table conversion. Skill thresholds use boosted values. Energy thresholds use percent, while `player.run_energy` remains hundredths of a percent.
 
-## Live verification
+A match returns `status = "interrupted"`, its predicate name as `reason`, and observed `detail`. A dialogue interruption includes the triggering dialogue frame. Required data that is unavailable returns `status = "unavailable"` with a specific snapshot reason. Input owned by the journey is revoked before either receipt returns.
 
-At Port Sarim jail, a plain `walk.to` from outside first followed the live scene
-around a permanent wall, then detected the public entrance door (`1535`) on its
-oriented blocked edge. The first interaction was deferred until the player was
-adjacent; the next synthetic Open changed the object/edge, triggered a replan,
-and moved the player into the corridor. A subsequent test aimed inside a locked
-cell, reached its cell door (`9563`), received “The door is securely locked,”
-and stopped with an unreachable receipt. The Magic automation now targets
-inmates through the bars instead of routing into those cells.
+Those receipts include a `continuation`. Resumption must keep the original destination, radius, ordered via list and allowed arrival set. It preserves observed via progress, an attempted transport's remaining steps and active-time budget, and failed transport groups. Lua may refresh avoids and interrupt conditions from current observations. The token binds the account and original request, is consumed once, and comes from a bounded cache of the latest 64 continuations. Unknown, changed and replayed tokens are rejected. A new request without a token starts fresh.
 
-A later Port-Sarim-to-Grand-Exchange route exposed three hybrid planning faults:
-scene-array cells without a loaded tile were treated as authoritative, movement
-flags were checked on both sides instead of using RuneLite's destination-side
-one-tile masks, and one local A* was asked to connect directly to an unloaded
-destination. The corrected walker uses a loaded-tile mask, treats RuneLite's
-`0xFFFFFF` scene-edge and `0x1000000` uninitialized collision sentinels as
-unknown, uses RuneLite's movement masks, and advances global-guided 49-tile
-local segments as soon as the player is within two tiles of a handoff. The live
-account crossed the first segment endpoint at `(3034,3263)` and continued north
-without consuming a recovery replan.
+A supply handler should re-read state and rebuild its predicate before resuming. For example, an active stamina effect should first wait for effect expiry; an inactive effect should interrupt for the energy threshold only when the handler would actually drink. Reissuing a predicate that is already true creates an immediate interruption loop.
 
-A breaks-enabled Varrock-to-Grand-Exchange live run completed
-with eight route clicks, eight camera turns, and eight interaction behavior
-receipts. Five clicks selected micro breaks, no click was rejected, and one
-accepted edge-of-minimap leg was automatically shortened after it produced no
-movement. The terminal receipt reported 167 wall-clock game ticks but only 35
-active execution ticks after excluding camera, mouse, click, and break time.
-The seeded mouse duration was 550 milliseconds, and the account finished ready
-at `3166,3483`.
+## Planning and live authority
 
-The retained-waypoint update changed route pacing from a two-tick-only gate.
-Its live Grand-Exchange-to-Varrock
-leg in 42 game ticks with eight clicks, one plan, and no rejected clicks. Six
-handoffs occurred one or two tiles from the accepted waypoint; one occurred at
-three tiles only after the player had passed that waypoint's route index. The
-76-tile return completed in 52 ticks with nine clicks and one plan, leaving the
-account at the Grand Exchange. The final waypoint was never re-clicked. The
-comparable pre-fix walk used 15 clicks over 48 ticks and could replace a
-waypoint from four tiles away.
+The bundled collision archive contains 2,726 region entries; the door archive contains 773. Both were generated for game revision 240, from different caches. Startup reports their separate revisions and artifact hashes and compares each with an observed positive client revision. Matching revision numbers do not prove cache equality or current edge correctness.
 
-The external [`walker.lua`](https://github.com/Pernasua/GenericClientScripts/blob/main/scripts/walker.lua)
-keeps its named destination catalog in Lua and exposes it as a dashboard
-dropdown. Its Varrock Center entry targets `{ x = 3210, y = 3424, plane = 0 }`
-with a three-tile arrival radius and a 600-game-tick timeout. The Java plugin
-continues to own the collision map, A* planning, projection, and click execution.
-After the terminal route receipt and arrival phase, the Lua script invokes the
-core `mouse.offscreen` action so the cursor finishes on the behavior profile's
-stable idle edge.
+The loaded scene supplies copied, immutable collision data and object/NPC footprints. Loaded tiles are authoritative locally. Unloaded or uninitialized scene cells use static knowledge; unknown scene-edge sentinels are not treated as solid terrain. A captured multi-tile object's footprint identifies the crossing, while its reported centre remains the exact native interaction target.
 
-The first attempt from Falador (`3007,3394`) reproduced an execution failure at
-the Falador garden trees: canvas points were either outside the viewport or had
-`Chop down` as the top action. After adding minimap projection and context-menu
-walking, the route completed from `2996,3392` to `3209,3427` in one plan, 172
-game ticks, 56 clicks, and 278 path tiles. Every click had a preceding
-`SYNTHETIC_MOUSE_PATH_GENERATED profile=default-2dc51a50 points=128`
-receipt. A second return from north Varrock reached `3213,3427` in one plan, 26
-game ticks, and nine clicks.
+Planning runs on a dedicated worker. It uses eight-directional movement with cardinal cost 10, diagonal cost 14 and corner checks. Doorway crossings add 80 cost units. A complete plan has a 250,000-node search budget shared by its via legs. Via legs and selected transport edges remain attached to the final route.
 
-Four bounded canvas stress runs separately exercised the right-click branch.
-`Chop down` and `Search` covered several selected points; each produced
-`WALK_CONTEXT_OPEN`, a template-generated move to the context row,
-`dispatch=context_menu action=WALK option=Walk here`, and a completed script.
+Transport costs can make distant destinations cheap. The heuristic therefore computes a lower bound over eligible transport endpoints using reverse Dijkstra and unobstructed same-plane walking distances. It ignores collisions in that lower bound and includes transport costs, so a cheap connection cannot invalidate A* through an overestimated geometric distance. Deterministic tie ordering and primitive sparse search storage preserve reproducibility without allocating a node map for the whole world.
 
-## Expansion sequence driven by real automations
+A local rejoin searches at most 4,096 nodes for nearby retained route points, within 32 tiles. It cannot join beyond the next via requirement or pending transport origin. If that connector fails, the planner searches a complete route again. Rejoin does not change the global search budget or remove valid large detours.
 
-1. **First non-door transition.** Add one edge containing origin, destination,
-   semantic action, prerequisites, completion observation, and cost. Implement
-   only the handler demanded by the route under test.
-2. **Further transports.** Grow the catalog from observed route failures. Keep
-   doors, ladders, network widgets, and item/spell teleports as separate
-   executors because their confirmation contracts differ.
-3. **Optional distribution service.** If maintaining several installations on
-   one revision becomes burdensome, distribute signed/versioned bundles. Route
-   execution and success confirmation remain local.
+A queued plan captures its start, via progress, edge-memory view and eligible transports. Acceptance checks those observations again, including failed search results. A moved start, changed quest requirement, expired memory entry or changed via progress cannot install a stale result. A bounded connection from the latest start may reuse a valid suffix.
 
-This preserves the small Lua interface while letting the Java navigation layer deepen only under pressure from real scripts. No decision here requires the deferred headless work.
+The planner operates on supplied world coordinates with a one-tile player footprint. `gc.read("instance", ...)` provides explicit template-to-scene mapping when a quest needs it; the walker does not infer arbitrary instance destinations or transport requirements.
+
+## Route input and pacing
+
+The native input owner projects candidate route points into the current viewport or minimap. It rechecks live geometry and menu identity after camera movement. A canvas obstruction can require a verified `Walk here` context-menu selection. Minimap dispatch is followed by observed movement; a dispatched click is not arrival proof.
+
+Ordinary journeys sample a profile cadence, usually 2–6 seconds, with occasional longer gaps. Reaching an accepted target does not trigger another click early, and waiting deliberately there does not count as a stall. A profile-selected near click uses 60–90% of available reach. Required via points and transport origins cap both near and far candidates.
+
+`walk_refresh` permits the short hazardous cadence through final arrival. It can refresh or select another allowed final tile while respecting `arrival_tiles`, occupancy and corridor constraints. The default hazardous minimum is one game tick; ordinary rejected/retry input keeps its two-tick floor.
+
+Run toggling requires at least 10% energy when enabled and is verified through the captured run state. It rearms after energy falls below that threshold. Run input cannot compete with an in-flight click, door or transport operation.
+
+After eight ticks without movement, the walker can replan around observed blocking NPC footprints or shorten an ineffective leg. When NPC occupancy temporarily seals the route, it can wait for that occupancy to change and exclude the blocked interval from its execution timeout. The first detour click can be capped to the adjacent planned tile so the game does not collapse it back through the occupied route.
+
+The recovery allowance starts at six plans, adds one per 16 tiles of initial distance, and caps at 32. Routine planning and a successful transport landing are distinct from recovery. Repeated ineffective paths get bounded retries; five consecutive click failures end the journey.
+
+Camera/mouse/input time, behavior pauses, emergency pauses and modeled NPC-block waits are excluded from `active_game_ticks`. `game_ticks` retains elapsed observed journey time. Cancellation accounts for the elapsed part of an input before revoking it. The host's ordinary action timeout does not compete with the walker's active-time budget.
+
+## Doors and account edge memory
+
+A blocked edge with a matching live traversal object gets a bounded interaction. The obstacle owner waits eight ticks for an observed change and permits up to three attempts. Crossing the edge or observing it clear takes precedence over older failure feedback. Locked, solid or exhausted edges trigger a new plan with that edge blocked; another viable route can continue the journey.
+
+Edge observations persist under `navigation/edges-<profile-id>.json`:
+
+| Observation | Lifetime | Routing effect |
+| --- | --- | --- |
+| Locked feedback | Four hours | Block the edge |
+| Solid edge, exhausted or rejected interaction | Five minutes | Block the edge |
+| Cleared crossing | One day | Retain the observation; never override static/live collision |
+
+Only game/spam feedback containing the whole word `locked` establishes a lock. Player chat, `blocked` and `unlocked` do not. Door failures also clear when the captured quest enum or numeric main stage changes; solid and cleared observations retain their own expiry. Quest capture refreshes every ten ticks, and unknown quest state does not flush memory. Auxiliary access flags require their own observed requirements.
+
+Every plan uses an immutable captured memory view. Expiry or new observations invalidate queued plans. Account changes cancel old travel and clear continuations/snapshots. A corrupt account memory file makes navigation unavailable without retaining the previous account's knowledge or preventing independent behavior/scheduler activation.
+
+## Directed transports
+
+The catalog currently contains 56 directed entries, including alternative standing origins for some services. It covers supported ordinary stairs/ladders, the Waterfall raft, Glarial's exit, the GE-to-Stronghold spirit tree, both supported glider directions, repeat Daero travel and the modeled Waydar/Lumdo conversations.
+
+Each entry owns a standing origin, representative destination, arrival region, interaction cost, ordered steps and observed requirements. The planner's 80-unit penalty per semantic step is a route preference, not a measured duration. Some seed restrictions deliberately match the supported quest phase; their evidence and limits are recorded in [navigation-transitions.md](navigation-transitions.md).
+
+An entry executes only after the player reaches its exact standing origin. The selected object/NPC action is re-resolved from the frame. Widget selection is scoped to the specified menu and expected destination label, and visible ancestors and labels are checked again before dispatch. A transport conversation advances only an expected speaker or permitted choice; foreign dialogue returns to Lua even if the request did not ask for ordinary dialogue interruption.
+
+Dispatch does not complete a transport. It waits for the observed landing, and conversation services also require closed dialogue across successive frames. Native input time is excluded from the 60-active-tick transition budget. Missing targets, changed requirements, rejected input or unverified arrival block that service group for the journey and trigger replanning. Scene-loading snapshot gaps preserve completed input until a fresh landing frame is available.
+
+A pause or interrupted continuation never blindly reissues an attempted climb. The retained state observes whether the first attempt landed and continues any remaining owned conversation. Arrival and route matching cannot skip a pending transport.
+
+Item/spell teleports, initial quest conversations, Femi's incompletely proved toll, puzzles and hazardous prayer/supply boundaries remain explicit quest behavior. The catalog grows only from supported origins, requirements, target identities and postconditions.
+
+## Ownership and receipts
+
+| Owner | Responsibility |
+| --- | --- |
+| `GenericClientWalkRequest`, `GenericClientWalkInterrupts` | Immutable constraints and ordered snapshot predicates |
+| `GenericClientWalker` | Admission, tick precedence, plan acceptance and native dispatch |
+| `GenericClientWalkJourney` | Progress, cadence, time accounting and terminal receipt |
+| `GenericClientWalkPlanner`, `GenericClientPathfinder`, `GenericClientTransportGraph` | Captured work, search and admissible transport estimates |
+| `GenericClientWalkObstacles`, `GenericClientEdgeMemory` | Door attempts and account observations |
+| `GenericClientWalkTransitions`, `GenericClientTransportCatalog`, `GenericClientTransport` | Selected transport progress, evidence-backed entries and native steps |
+| Existing game/object/NPC/widget/dialogue inputs | Projection, target validation and scoped synthetic input |
+
+Journey, click, obstacle and transport mutations stay under the walker monitor. Worker plans use captured immutable inputs. Native calls run outside that monitor and retain the context/revision selected inside it. Completion checks the original journey and revision before changing state. The journey's input ticket is revoked before a terminal receipt is delivered; independently owned safety input remains valid.
+
+Only one journey is active. Another request receives `busy`. Terminal statuses include `arrived`, `interrupted`, `unavailable`, `unreachable`, `search_limit`, `unsupported_transition`, `timed_out`, `cancelled` and `click_failed`. `unsupported_transition` includes an unmodeled plane change or lack of an eligible plane connection. A failed via leg includes its one-based `segment`.
+
+Receipts include requested/reached positions, arrival constraints, via progress, elapsed/active ticks, plan and rejoin counts, expanded nodes, click receipts, obstacle outcomes, `blocked_edges`, `edge_memory`, selected `transports`, and the terminal reason. Interrupted/unavailable receipts can add continuation and triggering observations. `last_plan_millis` includes time from queueing to acceptance, not only worker CPU time.
+
+## Verification
+
+```bash
+./gradlew --offline routeAudit
+./gradlew --offline plannerBenchmark
+```
+
+The current audit plans 34 authored journeys across 59 account-profile checks and selects all 56 catalog entries with passable standing endpoints. It includes constrained corridors, landing transitions and failed-quest eligibility. Pure optimality checks compare transport searches against exhaustive small graphs; native-input tests cover menu identity, queued cancellation, hidden widgets and conversation ownership.
+
+Historical builds were exercised around Port Sarim doors and the Varrock/Grand Exchange route. Those receipts predate the current journey, transport and behavior cutover. Source tests and historical routes do not establish a loaded artifact or fresh live acceptance. Installation and safe live receipts are separate gates; hazardous routes require the user watching.

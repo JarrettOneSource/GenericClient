@@ -1,5 +1,7 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientErrors.rootMessage;
+
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -300,7 +302,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		Map<String, Object> account = accountSnapshot();
 		GenericClientRuleEngine.Evaluation decision = ruleEngine.evaluate(
 			config, scheduleSnapshot, account, state.getCooldowns(), now);
-		GenericClientLuaHost.RunState run = runtime.getRunState();
+		GenericClientLuaRun.State run = runtime.getRunState();
 		boolean attentionPending = attentionRequired;
 		String attentionDetail = attentionReason;
 		boolean pausePending = state.isPaused() || manualPauseRequested;
@@ -332,7 +334,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 	}
 
 	private AutomationMode selectMode(
-		GenericClientLuaHost.RunState run,
+		GenericClientLuaRun.State run,
 		GenericClientRuleEngine.Evaluation decision,
 		boolean attentionPending,
 		String attentionDetail,
@@ -402,7 +404,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		return new AutomationMode("running", "rule " + owner + " retains its script lease");
 	}
 
-	private void handleTerminalRun(GenericClientLuaHost.RunState run, long now)
+	private void handleTerminalRun(GenericClientLuaRun.State run, long now)
 	{
 		String ruleId = run.getRuleId();
 		GenericClientAutomationConfig.RuleSpec rule = config.getRule(ruleId);
@@ -473,7 +475,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		}));
 	}
 
-	private void stopIfOwned(GenericClientLuaHost.RunState run, String reason)
+	private void stopIfOwned(GenericClientLuaRun.State run, String reason)
 	{
 		if (run.isRunning() && run.getRuleId() != null)
 		{
@@ -483,7 +485,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 
 	private void stopOwnedRun(String reason)
 	{
-		GenericClientLuaHost.RunState run = runtime.getRunState();
+		GenericClientLuaRun.State run = runtime.getRunState();
 		if (run.isRunning() && run.getRuleId() != null)
 		{
 			try
@@ -516,7 +518,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		String trigger,
 		GenericClientSchedule.Snapshot scheduleSnapshot,
 		GenericClientRuleEngine.Evaluation decision,
-		GenericClientLuaHost.RunState run,
+		GenericClientLuaRun.State run,
 		boolean pausePending,
 		boolean attentionPending)
 	{
@@ -657,15 +659,6 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		return Collections.unmodifiableMap(value);
 	}
 
-	private static String rootMessage(Throwable error)
-	{
-		Throwable current = error;
-		while (current.getCause() != null)
-		{
-			current = current.getCause();
-		}
-		return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
-	}
 
 	@Override
 	public void close()
@@ -717,7 +710,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 
 		CompletableFuture<String> stopScheduled(String ruleId, String reason);
 
-		GenericClientLuaHost.RunState getRunState();
+		GenericClientLuaRun.State getRunState();
 
 		void setManualStopListener(Runnable listener);
 	}
@@ -734,13 +727,13 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		@Override
 		public List<Map<String, Object>> listScriptValues()
 		{
-			return host.listScriptValues();
+			return host.catalog.listScriptValues();
 		}
 
 		@Override
 		public CompletableFuture<List<GenericClientScriptInput>> describe(String scriptId)
 		{
-			return host.describe(scriptId);
+			return host.catalog.describe(scriptId);
 		}
 
 		@Override
@@ -759,7 +752,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		}
 
 		@Override
-		public GenericClientLuaHost.RunState getRunState()
+		public GenericClientLuaRun.State getRunState()
 		{
 			return host.getRunState();
 		}

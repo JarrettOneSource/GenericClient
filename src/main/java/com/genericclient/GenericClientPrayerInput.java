@@ -1,10 +1,9 @@
 package com.genericclient;
 
-import static com.genericclient.GenericClientWidgetTree.clickable;
-import static com.genericclient.GenericClientWidgetTree.descendants;
-import static com.genericclient.GenericClientWidgetTree.hasAction;
+import static com.genericclient.GenericClientWidgets.clickable;
+import static com.genericclient.GenericClientWidgets.descendants;
+import static com.genericclient.GenericClientWidgets.hasAction;
 
-import java.awt.Point;
 import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -42,6 +41,7 @@ final class GenericClientPrayerInput
 	private final ScheduledExecutorService executor;
 	private final GenericClientMenuInput menuInput;
 	private final java.util.function.Consumer<String> reporter;
+	private final GenericClientSerialActionQueue actions = new GenericClientSerialActionQueue();
 
 	GenericClientPrayerInput(
 		Client client,
@@ -63,6 +63,24 @@ final class GenericClientPrayerInput
 		GenericClientActivityContext activityContext)
 	{
 		Setting prayer = Setting.fromName(name);
+		return actions.submit(
+			() -> setNow(prayer, enabled, activityContext),
+			() -> receipt(
+				"rejected", "prayer_action_cancelled", prayer, enabled,
+				new ArrayList<>()));
+	}
+
+	void cancelPending(String reason)
+	{
+		actions.cancelPending();
+		reporter.accept("PRAYER_PENDING_CANCELLED reason=" + reason);
+	}
+
+	private CompletableFuture<Map<String, Object>> setNow(
+		Setting prayer,
+		boolean enabled,
+		GenericClientActivityContext activityContext)
+	{
 		List<Map<String, Object>> steps = new ArrayList<>();
 		reporter.accept("PRAYER_SETTING prayer=" + prayer.id + " enabled=" + enabled);
 		return clientRead(() -> preflight(prayer, enabled)).thenCompose(rejection ->
@@ -130,6 +148,11 @@ final class GenericClientPrayerInput
 		return client.getVarbitValue(prayer.varbit) != 0;
 	}
 
+	boolean isActive(String name)
+	{
+		return active(Setting.fromName(name));
+	}
+
 	private CompletableFuture<Boolean> ensurePrayerTab(
 		GenericClientActivityContext activityContext,
 		List<Map<String, Object>> steps)
@@ -157,12 +180,12 @@ final class GenericClientPrayerInput
 
 	private GenericClientMenuInput.Resolution resolvePrayerTab()
 	{
-		return resolveWidget(visibleWidget(PRAYER_TABS), "Prayer", "prayer_tab");
+		return GenericClientUiInput.resolveWidget(client, visibleWidget(PRAYER_TABS), "Prayer", "prayer_tab");
 	}
 
 	private GenericClientMenuInput.Resolution resolvePrayer(Setting prayer, boolean enabled)
 	{
-		return resolveWidget(
+		return GenericClientUiInput.resolveWidget(client,
 			findPrayerWidget(prayer, enabled),
 			enabled ? "Activate" : "Deactivate",
 			"prayer:" + prayer.id);
@@ -210,37 +233,6 @@ final class GenericClientPrayerInput
 			}
 		}
 		return null;
-	}
-
-	private GenericClientMenuInput.Resolution resolveWidget(
-		Widget widget,
-		String action,
-		String description)
-	{
-		if (client.getGameState() != GameState.LOGGED_IN)
-		{
-			return GenericClientMenuInput.Resolution.rejected("client_not_logged_in");
-		}
-		if (widget == null)
-		{
-			return GenericClientMenuInput.Resolution.rejected(description + "_not_visible");
-		}
-		Point point = GenericClientMenuInput.randomPointInside(
-			widget.getBounds(), client.getCanvasWidth(), client.getCanvasHeight());
-		if (point == null)
-		{
-			return GenericClientMenuInput.Resolution.rejected(description + "_not_clickable");
-		}
-		Map<String, Object> value = new LinkedHashMap<>();
-		value.put("kind", "widget");
-		value.put("widget_id", (long) widget.getId());
-		value.put("widget_index", (long) widget.getIndex());
-		return GenericClientMenuInput.Resolution.resolved(new GenericClientMenuInput.Target(
-			point,
-			action,
-			description,
-			value,
-			entry -> false));
 	}
 
 	private CompletableFuture<Boolean> waitFor(BooleanSupplier condition)

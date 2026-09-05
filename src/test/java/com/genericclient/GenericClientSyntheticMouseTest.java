@@ -20,6 +20,8 @@ import java.util.Random;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -28,6 +30,130 @@ public class GenericClientSyntheticMouseTest
 {
 	@Rule
 	public TemporaryFolder temporaryFolder = new TemporaryFolder();
+
+	@Test
+	public void cancellingAnOldRestOwnerCannotCancelItsReplacement() throws Exception
+	{
+		ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+		java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+		executor.submit(() -> { release.await(); return null; });
+		try (GenericClientSyntheticMouse mouse = mouse(canvas(), executor, new Point(100, 100), 500))
+		{
+			GenericClientActivityContext firstOwner = GenericClientActivityContext.none().openInputScope();
+			GenericClientActivityContext nextOwner = GenericClientActivityContext.none().openInputScope();
+			java.util.concurrent.CompletableFuture<String> first = mouse.moveRest(new Point(200, 200), 500, firstOwner);
+			java.util.concurrent.CompletableFuture<String> next = mouse.moveOffscreen(GenericClientBehaviorProfile.Edge.LEFT, nextOwner);
+			assertTrue(first.isCompletedExceptionally());
+			mouse.cancelRest("old_window", firstOwner);
+			assertFalse(next.isDone());
+			assertTrue(mouse.isMoving());
+			mouse.cancelRest("new_window", nextOwner);
+			assertTrue(next.isCompletedExceptionally());
+			assertFalse(mouse.isMoving());
+		}
+		finally { release.countDown(); executor.shutdownNow(); }
+	}
+
+	@Test
+	public void globalCancellationRevokesAQueuedClickWithoutAnAwaitTicket() throws Exception
+	{
+		Canvas canvas = canvas();
+		List<Integer> events = new ArrayList<>();
+		canvas.addMouseListener(listener(events));
+		ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+		java.util.concurrent.CountDownLatch queued = new java.util.concurrent.CountDownLatch(1);
+		java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+		try (GenericClientSyntheticMouse mouse = mouse(canvas, executor, new Point(100, 100), 500))
+		{
+			javax.swing.SwingUtilities.invokeLater(() -> {
+				queued.countDown();
+				try { release.await(); }
+				catch (InterruptedException exception) { Thread.currentThread().interrupt(); }
+			});
+			assertTrue(queued.await(2, TimeUnit.SECONDS));
+			java.util.concurrent.CompletableFuture<String> click = mouse.click(MouseEvent.BUTTON1);
+			mouse.cancel("manual_takeover");
+			release.countDown();
+			assertTrue(click.handle((receipt, error) -> error != null).get(2, TimeUnit.SECONDS));
+			assertFalse(events.contains(MouseEvent.MOUSE_PRESSED));
+			assertFalse(mouse.isActionActive());
+			assertEquals("SYNTHETIC_LEFT_CLICK", mouse.click(MouseEvent.BUTTON1).get(2, TimeUnit.SECONDS));
+		}
+		finally { release.countDown(); executor.shutdownNow(); }
+	}
+
+	@Test
+	public void aQueuedClickKeepsRestOutUntilTheCanvasReceivesIt() throws Exception
+	{
+		Canvas canvas = canvas();
+		ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+		java.util.concurrent.CountDownLatch queued = new java.util.concurrent.CountDownLatch(1);
+		java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+		try (GenericClientSyntheticMouse mouse = mouse(canvas, executor, new Point(100, 100), 500))
+		{
+			javax.swing.SwingUtilities.invokeLater(() -> {
+				queued.countDown();
+				try { release.await(); }
+				catch (InterruptedException exception) { Thread.currentThread().interrupt(); }
+			});
+			assertTrue(queued.await(2, TimeUnit.SECONDS));
+			java.util.concurrent.CompletableFuture<String> click = mouse.click(MouseEvent.BUTTON1);
+			assertTrue(mouse.isActionActive());
+			assertTrue(mouse.moveRest(new Point(200, 200), 100, GenericClientActivityContext.none()).isCompletedExceptionally());
+			release.countDown();
+			assertEquals("SYNTHETIC_LEFT_CLICK", click.get(2, TimeUnit.SECONDS));
+			assertFalse(mouse.isActionActive());
+			assertEquals(new Point(100, 100), mouse.getLastClick());
+		}
+		finally { release.countDown(); executor.shutdownNow(); }
+	}
+
+	@Test
+	public void aClickPreemptsRestWithoutLettingQueuedMotionMoveItsTarget() throws Exception
+	{
+		Canvas canvas = canvas();
+		List<Integer> events = new ArrayList<>();
+		canvas.addMouseListener(listener(events));
+		ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+		java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+		executor.submit(() -> { release.await(); return null; });
+		try (GenericClientSyntheticMouse mouse = mouse(canvas, executor, new Point(100, 100), 500))
+		{
+			java.util.concurrent.CompletableFuture<String> rest = mouse.moveRest(mouse.offscreenTarget(GenericClientBehaviorProfile.Edge.LEFT), 500, GenericClientActivityContext.none());
+			mouse.click(MouseEvent.BUTTON1).get(2, TimeUnit.SECONDS);
+			assertTrue(rest.isCompletedExceptionally());
+			assertFalse(mouse.isMoving());
+			release.countDown();
+			executor.submit(() -> { }).get(2, TimeUnit.SECONDS);
+			javax.swing.SwingUtilities.invokeAndWait(() -> { });
+			assertEquals(new Point(100, 100), mouse.getPosition());
+			assertTrue(events.contains(MouseEvent.MOUSE_PRESSED));
+		}
+		finally { release.countDown(); executor.shutdownNow(); }
+	}
+
+	@Test
+	public void cancelledActionCannotFinishAMoveOrDispatchAQueuedClick() throws Exception
+	{
+		Canvas canvas = canvas();
+		List<Integer> events = new ArrayList<>();
+		canvas.addMouseListener(listener(events));
+		ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+		GenericClientSyntheticMouse mouse = mouse(canvas, executor, new Point(10, 10), 500);
+		GenericClientActionBoundary.Ticket ticket = new GenericClientActionBoundary.Ticket();
+		GenericClientActivityContext context = GenericClientActivityContext.none().withTicket(ticket);
+		try
+		{
+			java.util.concurrent.CompletableFuture<String> move = mouse.move(new Point(200, 150), context);
+			ticket.cancel();
+			assertTrue(move.handle((value, error) -> error != null).get(2, TimeUnit.SECONDS));
+			assertTrue(mouse.click(MouseEvent.BUTTON1, context).handle((value, error) -> error != null)
+				.get(2, TimeUnit.SECONDS));
+			assertFalse(events.contains(MouseEvent.MOUSE_PRESSED));
+			assertFalse(mouse.isMoving());
+		}
+		finally { mouse.close(); executor.shutdownNow(); }
+	}
 
 	@Test
 	public void movesAndClicksThroughCanvasEventsInOrder() throws Exception
@@ -94,7 +220,7 @@ public class GenericClientSyntheticMouseTest
 		GenericClientSyntheticMouse mouse = mouse(canvas, executor, new Point(100, 100), 25);
 		try
 		{
-			mouse.moveOffscreen(GenericClientBehaviorProfile.Edge.LEFT).get(2, TimeUnit.SECONDS);
+			mouse.moveOffscreen(GenericClientBehaviorProfile.Edge.LEFT, GenericClientActivityContext.none()).get(2, TimeUnit.SECONDS);
 			Point outside = mouse.getPosition();
 			assertTrue(outside.x < 0);
 			assertTrue(mouse.isOutside());
@@ -233,12 +359,38 @@ public class GenericClientSyntheticMouseTest
 			java.util.concurrent.CompletableFuture<String> movement =
 				mouse.move(new Point(700, 500));
 
+			AtomicReference<Boolean> callbackHeldLock = new AtomicReference<>();
+			movement.whenComplete((value, error) -> callbackHeldLock.set(Thread.holdsLock(mouse)));
 			mouse.cancel("random_event");
 
 			assertTrue(movement.isCompletedExceptionally());
+			assertEquals(Boolean.FALSE, callbackHeldLock.get());
 			assertFalse(mouse.isMoving());
 			assertEquals("SYNTHETIC_LEFT_CLICK",
 				mouse.click(MouseEvent.BUTTON1).get(2, TimeUnit.SECONDS));
+		}
+		finally
+		{
+			mouse.close();
+			executor.shutdownNow();
+		}
+	}
+
+	@Test
+	public void normalInputPreemptsAnIdleOffscreenPark() throws Exception
+	{
+		Canvas canvas = canvas();
+		ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+		GenericClientSyntheticMouse mouse = mouse(canvas, executor, new Point(100, 100), 500);
+		try
+		{
+			java.util.concurrent.CompletableFuture<String> idle =
+				mouse.moveRest(mouse.offscreenTarget(GenericClientBehaviorProfile.Edge.RIGHT), 500, GenericClientActivityContext.none());
+			java.util.concurrent.CompletableFuture<String> action = mouse.move(new Point(300, 250));
+
+			assertTrue(idle.isCompletedExceptionally());
+			assertTrue(action.get(2, TimeUnit.SECONDS).contains("destination=300,250"));
+			assertFalse(mouse.isOutside());
 		}
 		finally
 		{
@@ -276,6 +428,60 @@ public class GenericClientSyntheticMouseTest
 		}
 	}
 
+	@Test
+	public void realCanvasMovementCanImmediatelyPreemptSyntheticMovement() throws Exception
+	{
+		Canvas canvas = canvas();
+		ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+		AtomicInteger takeovers = new AtomicInteger();
+		AtomicReference<GenericClientSyntheticMouse> reference = new AtomicReference<>();
+		GenericClientMouseProfile profile = loadProfile();
+		GenericClientSyntheticMouse mouse = new GenericClientSyntheticMouse(
+			canvas,
+			executor,
+			() -> profile,
+			() -> 500,
+			new Point(10, 10),
+			new GenericClientMouseEffectOverlay(
+				() -> GenericClientMouseEffect.TRAIL,
+				canvas::getWidth,
+				canvas::getHeight,
+				System::currentTimeMillis),
+			message -> { },
+			() -> new Random(7),
+			point ->
+			{
+				takeovers.incrementAndGet();
+				reference.get().cancel("manual_mouse_preemption");
+			});
+		reference.set(mouse);
+		try
+		{
+			java.util.concurrent.CompletableFuture<String> movement =
+				mouse.move(new Point(700, 500));
+			canvas.dispatchEvent(new MouseEvent(
+				canvas,
+				MouseEvent.MOUSE_MOVED,
+				System.currentTimeMillis(),
+				0,
+				333,
+				222,
+				0,
+				false,
+				MouseEvent.NOBUTTON));
+
+			assertTrue(movement.isCompletedExceptionally());
+			assertFalse(mouse.isMoving());
+			assertEquals(new Point(333, 222), mouse.getPosition());
+			assertEquals(1, takeovers.get());
+		}
+		finally
+		{
+			mouse.close();
+			executor.shutdownNow();
+		}
+	}
+
 	private GenericClientSyntheticMouse mouse(
 		Canvas canvas,
 		ScheduledExecutorService executor,
@@ -296,7 +502,8 @@ public class GenericClientSyntheticMouseTest
 				canvas::getHeight,
 				System::currentTimeMillis),
 			message -> { },
-			() -> random);
+			() -> random,
+			point -> { });
 	}
 
 	private GenericClientMouseProfile loadProfile() throws Exception

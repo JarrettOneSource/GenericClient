@@ -1,31 +1,40 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientWidgets.isVisible;
+import static com.genericclient.GenericClientWidgets.matchesWidget;
+
 import java.awt.Point;
 import java.awt.Rectangle;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
+import net.runelite.client.callback.ClientThread;
+import net.runelite.client.util.Text;
 
 final class GenericClientUiInput
 {
 	private final Client client;
+	private final ClientThread clientThread;
 	private final GenericClientMenuInput menuInput;
 	private final GenericClientSyntheticKeyboard keyboard;
-	private final GenericClientBehaviorController behavior;
 
 	GenericClientUiInput(
 		Client client,
+		ClientThread clientThread,
 		GenericClientMenuInput menuInput,
-		GenericClientSyntheticKeyboard keyboard,
-		GenericClientBehaviorController behavior)
+		GenericClientSyntheticKeyboard keyboard)
 	{
 		this.client = client;
+		this.clientThread = clientThread;
 		this.menuInput = menuInput;
 		this.keyboard = keyboard;
-		this.behavior = behavior;
 	}
 
 	CompletableFuture<Map<String, Object>> click(
@@ -40,45 +49,91 @@ final class GenericClientUiInput
 		return menuInput.interactDirect(() -> resolve(widgetId, widgetIndex), activityContext);
 	}
 
-	CompletableFuture<Map<String, Object>> closeTopLevel(GenericClientActivityContext activityContext)
+	CompletableFuture<Map<String, Object>> closeTopLevel(GenericClientActivityContext context)
 	{
-		return behavior.beforeAction(activityContext).thenCompose(before ->
-			keyboard.pressEscape().thenCompose(keyboardReceipt ->
-				behavior.afterAction(activityContext).thenApply(after ->
-				{
-					Map<String, Object> receipt = new LinkedHashMap<>();
-					receipt.put("status", "dispatched");
-					receipt.put("result", "escape_dispatched");
-					receipt.put("keyboard", keyboardReceipt);
-					receipt.put("behavior_before", before);
-					receipt.put("behavior_after", after);
-					receipt.put("click_count", 0L);
-					return receipt;
-				})));
+		return keyboard.pressEscape(context).thenApply(keyboardReceipt ->
+		{
+			Map<String, Object> receipt = new LinkedHashMap<>();
+			receipt.put("status", "dispatched");
+			receipt.put("result", "escape_dispatched");
+			receipt.put("keyboard", keyboardReceipt);
+			receipt.put("click_count", 0L);
+			return receipt;
+		});
+	}
+
+	CompletableFuture<Map<String, Object>> selectDestination(int menuId, String label, GenericClientActivityContext context)
+	{
+		return menuInput.interactDirect(() -> resolveDestination(menuId, label), context);
 	}
 
 	CompletableFuture<Map<String, Object>> key(
-		String key,
-		GenericClientActivityContext activityContext)
+		String key, GenericClientActivityContext context)
 	{
-		if (key == null || key.length() != 1 || key.charAt(0) < 32 || key.charAt(0) > 126)
+		String text = "SPACE".equalsIgnoreCase(key) ? " " : key;
+		if (text == null || text.length() != 1 || text.charAt(0) < 32 || text.charAt(0) > 126)
 		{
-			throw new IllegalArgumentException("ui.key requires one printable ASCII character");
+			throw new IllegalArgumentException(
+				"ui.key requires one printable ASCII character or SPACE");
 		}
-		return behavior.beforeAction(activityContext).thenCompose(before ->
-			keyboard.type(key).thenCompose(keyboardReceipt ->
-				behavior.afterAction(activityContext).thenApply(after ->
-				{
-					Map<String, Object> receipt = new LinkedHashMap<>();
-					receipt.put("status", "dispatched");
-					receipt.put("result", "key_dispatched");
-					receipt.put("key", key);
-					receipt.put("keyboard", keyboardReceipt);
-					receipt.put("behavior_before", before);
-					receipt.put("behavior_after", after);
-					receipt.put("click_count", 0L);
-					return receipt;
-				})));
+		if (isDigit(text))
+		{
+			return numberedMenuVisible().thenCompose(visible -> visible
+				? dispatchKey(text, context)
+				: CompletableFuture.completedFuture(rejectedKey(text)));
+		}
+		return dispatchKey(text, context);
+	}
+
+	private CompletableFuture<Map<String, Object>> dispatchKey(String text, GenericClientActivityContext context)
+	{
+		return sendKey(text, context).thenApply(keyboardReceipt ->
+		{
+			Map<String, Object> receipt = new LinkedHashMap<>();
+			receipt.put("status", "dispatched");
+			receipt.put("result", "key_dispatched");
+			receipt.put("key", " ".equals(text) ? "SPACE" : text);
+			receipt.put("keyboard", keyboardReceipt);
+			receipt.put("click_count", 0L);
+			return receipt;
+		});
+	}
+
+	private CompletableFuture<String> sendKey(String text, GenericClientActivityContext context)
+	{
+		if (" ".equals(text))
+		{
+			return keyboard.pressSpace(0L, context);
+		}
+		return keyboard.type(text, false, 0L, context);
+	}
+
+	private CompletableFuture<Boolean> numberedMenuVisible()
+	{
+		CompletableFuture<Boolean> result = new CompletableFuture<>();
+		clientThread.invoke(() -> result.complete(
+			isVisible(client.getWidget(InterfaceID.Menu.LJ_LAYER2)) ||
+			isVisible(client.getWidget(InterfaceID.Menu.LJ_LAYER1)) ||
+			isVisible(client.getWidget(InterfaceID.Menu.KEYLISTENERS)) ||
+			isVisible(client.getWidget(InterfaceID.MenuNew.UNIVERSE)) ||
+			isVisible(client.getWidget(InterfaceID.MenuNew.CONTENT)) ||
+			isVisible(client.getWidget(InterfaceID.MenuNew.KEYLISTENERS))));
+		return result;
+	}
+
+	private static boolean isDigit(String text)
+	{
+		return text.length() == 1 && text.charAt(0) >= '1' && text.charAt(0) <= '9';
+	}
+
+	private static Map<String, Object> rejectedKey(String text)
+	{
+		Map<String, Object> receipt = new LinkedHashMap<>();
+		receipt.put("status", "rejected");
+		receipt.put("result", "numbered_menu_not_visible");
+		receipt.put("key", text);
+		receipt.put("click_count", 0L);
+		return receipt;
 	}
 
 	private GenericClientMenuInput.Resolution resolve(int widgetId, Integer widgetIndex)
@@ -92,27 +147,60 @@ final class GenericClientUiInput
 		{
 			widget = indexedChild(widget.getDynamicChildren(), widgetIndex);
 		}
-		if (widget == null || widget.isHidden() || widget.isSelfHidden())
+		return resolveWidget(client, widget, "Click", "widget:" + widgetId);
+	}
+
+	private GenericClientMenuInput.Resolution resolveDestination(int menuId, String label)
+	{
+		if (client.getGameState() != GameState.LOGGED_IN)
+			return GenericClientMenuInput.Resolution.rejected("client_not_logged_in");
+		for (Widget widget : GenericClientWidgets.visible(client.getWidget(menuId)))
 		{
-			return GenericClientMenuInput.Resolution.rejected("widget_not_visible:" + widgetId);
+			String[] actions = widget.getActions();
+			if (GenericClientWidgets.matchesLabel(label, widget.getText(), widget.getName(),
+				actions == null ? List.of() : Arrays.asList(actions)))
+				return resolveWidget(client, widget, "Click", "widget:" + widget.getId());
 		}
+		return GenericClientMenuInput.Resolution.rejected("destination_not_visible:" + label);
+	}
+
+	static GenericClientMenuInput.Resolution resolveWidget(
+		Client client,
+		Widget widget,
+		String action,
+		String description)
+	{
+		if (client.getGameState() != GameState.LOGGED_IN)
+		{
+			return GenericClientMenuInput.Resolution.rejected("client_not_logged_in");
+		}
+		if (!isVisible(widget))
+		{
+			return GenericClientMenuInput.Resolution.rejected(description + "_not_visible");
+		}
+		Rectangle bounds = widget.getBounds();
 		Point point = GenericClientMenuInput.randomPointInside(
-			widget.getBounds(), new Rectangle(0, 0, client.getCanvasWidth(), client.getCanvasHeight()));
+			bounds, client.getCanvasWidth(), client.getCanvasHeight());
 		if (point == null)
 		{
-			return GenericClientMenuInput.Resolution.rejected("widget_not_clickable:" + widgetId);
+			return GenericClientMenuInput.Resolution.rejected(description + "_not_clickable");
 		}
-		Map<String, Object> target = new LinkedHashMap<>();
-		target.put("kind", "widget");
-		target.put("widget_id", (long) widget.getId());
-		target.put("widget_index", (long) widget.getIndex());
-		Widget targetWidget = widget;
+		Map<String, Object> value = new LinkedHashMap<>();
+		value.put("kind", "widget");
+		value.put("widget_id", (long) widget.getId());
+		value.put("widget_index", (long) widget.getIndex());
+		value.put("sprite_id", (long) widget.getSpriteId());
+		value.put("name", Text.removeTags(Objects.toString(widget.getName(), "")));
+		value.put("text", Text.removeTags(Objects.toString(widget.getText(), "")));
+		value.put("actions", widget.getActions());
+		value.put("bounds", Map.of("x", (long) bounds.x, "y", (long) bounds.y,
+			"width", (long) bounds.width, "height", (long) bounds.height));
 		return GenericClientMenuInput.Resolution.resolved(new GenericClientMenuInput.Target(
 			point,
-			"Click",
-			"widget:" + widgetId,
-			target,
-			entry -> matchesWidget(entry, targetWidget)));
+			action,
+			description,
+			value,
+			entry -> matchesWidget(entry, widget), bounds));
 	}
 
 	private static Widget indexedChild(Widget[] children, int index)
@@ -129,16 +217,5 @@ final class GenericClientUiInput
 			}
 		}
 		return null;
-	}
-
-	private static boolean matchesWidget(net.runelite.api.MenuEntry entry, Widget target)
-	{
-		Widget widget = entry.getWidget();
-		if (widget != null)
-		{
-			return widget.getId() == target.getId() && widget.getIndex() == target.getIndex();
-		}
-		return entry.getParam1() == target.getId() &&
-			(target.getIndex() < 0 || entry.getParam0() == target.getIndex());
 	}
 }

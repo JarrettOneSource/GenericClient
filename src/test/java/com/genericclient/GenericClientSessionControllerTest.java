@@ -214,6 +214,39 @@ public class GenericClientSessionControllerTest
 	}
 
 	@Test
+	public void doesNotResubmitARejectedLoginAttempt() throws Exception
+	{
+		FakeView view = new FakeView();
+		view.gameState = GameState.LOGIN_SCREEN;
+		view.launcherDisplayName = "Player";
+		FakeInput input = new FakeInput();
+
+		try (Fixture fixture = fixture(view, input))
+		{
+			CompletableFuture<String> login = fixture.controller.ensureLoggedIn();
+			for (int attempt = 0; attempt < 100 && input.clicks.get() == 0; attempt++)
+			{
+				Thread.sleep(5L);
+			}
+			assertEquals(1, input.clicks.get());
+
+			view.gameState = GameState.LOGGING_IN;
+			fixture.controller.onGameStateChanged(GameState.LOGGING_IN);
+			view.gameState = GameState.LOGIN_SCREEN;
+			try
+			{
+				login.get(2, TimeUnit.SECONDS);
+				throw new AssertionError("Expected rejected login to fail");
+			}
+			catch (ExecutionException expected)
+			{
+				assertTrue(expected.getCause().getMessage().contains("returned to the login screen"));
+			}
+			assertEquals(1, input.clicks.get());
+		}
+	}
+
+	@Test
 	public void completesImmediatelyWhenAlreadyInTheWorld() throws Exception
 	{
 		FakeView view = new FakeView();

@@ -1,5 +1,7 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientWidgets.isVisible;
+import static com.genericclient.GenericClientWidgets.matchesWidget;
 import static com.genericclient.GenericClientInteractionReceipts.clickCount;
 import static com.genericclient.GenericClientInteractionReceipts.composite;
 import static com.genericclient.GenericClientInteractionReceipts.rejected;
@@ -27,6 +29,7 @@ final class GenericClientInventoryInput
 {
 	private static final long INVENTORY_POLL_MILLIS = 50L;
 	private static final int INVENTORY_POLL_ATTEMPTS = 10;
+	private static final int INVENTORY_TAB_POLL_ATTEMPTS = 40;
 	private static final int ITEM_POLL_ATTEMPTS = 40;
 	private static final int[] INVENTORY_TABS =
 	{
@@ -74,21 +77,101 @@ final class GenericClientInventoryInput
 			: openInventoryThenInteract(itemId, requestedSlot, cleanAction, activityContext));
 	}
 
+	CompletableFuture<Map<String, Object>> castSelectedSpellOnItem(
+		int itemId,
+		Integer requestedSlot,
+		int spellWidgetId,
+		String spellName,
+		GenericClientActivityContext activityContext)
+	{
+		if (itemId < 0)
+		{
+			throw new IllegalArgumentException("Item id cannot be negative");
+		}
+		if (requestedSlot != null && (requestedSlot < 0 || requestedSlot >= 28))
+		{
+			throw new IllegalArgumentException("Inventory slot must be between 0 and 27");
+		}
+		String cleanSpellName = requireText(spellName, "Spell name");
+		CompletableFuture<Boolean> inventoryVisible = new CompletableFuture<>();
+		clientThread.invoke(() -> inventoryVisible.complete(visibleInventory() != null));
+		return inventoryVisible.thenCompose(visible -> visible
+			? castSelectedSpellOnVisibleItem(
+				itemId, requestedSlot, spellWidgetId, cleanSpellName, activityContext)
+			: openInventoryThenCastSelectedSpell(
+				itemId, requestedSlot, spellWidgetId, cleanSpellName, activityContext));
+	}
+
+	private CompletableFuture<Map<String, Object>> openInventoryThenCastSelectedSpell(
+		int itemId,
+		Integer requestedSlot,
+		int spellWidgetId,
+		String spellName,
+		GenericClientActivityContext activityContext)
+	{
+		return waitForInventoryTab().thenCompose(tabVisible ->
+		{
+			if (!tabVisible)
+			{
+				return CompletableFuture.completedFuture(rejected("inventory_tab_not_visible"));
+			}
+			return menuInput.interactDirect(this::resolveInventoryTab, activityContext)
+				.thenCompose(tabReceipt ->
+				{
+					if (!wasDispatched(tabReceipt))
+					{
+						return CompletableFuture.completedFuture(tabReceipt);
+					}
+					return waitForInventory().thenCompose(visible ->
+					{
+						if (!visible)
+						{
+							return CompletableFuture.completedFuture(composite(
+								"open_inventory_then_spell_item",
+								tabReceipt,
+								rejected("inventory_did_not_open")));
+						}
+						return castSelectedSpellOnVisibleItem(
+							itemId,
+							requestedSlot,
+							spellWidgetId,
+							spellName,
+							activityContext).thenApply(itemReceipt -> composite(
+								"open_inventory_then_spell_item", tabReceipt, itemReceipt));
+					});
+				});
+		});
+	}
+
+	private CompletableFuture<Map<String, Object>> castSelectedSpellOnVisibleItem(
+		int itemId,
+		Integer requestedSlot,
+		int spellWidgetId,
+		String spellName,
+		GenericClientActivityContext activityContext)
+	{
+		return waitForItem(itemId, requestedSlot, null).thenCompose(ignored ->
+			menuInput.interact(
+				() -> resolveSelectedSpellOnItem(
+					itemId, requestedSlot, spellWidgetId, spellName),
+				activityContext));
+	}
+
 	private CompletableFuture<Map<String, Object>> openInventoryThenInteract(
 		int itemId,
 		Integer requestedSlot,
 		String action,
 		GenericClientActivityContext activityContext)
 	{
-		return menuInput.interactDirect(this::resolveInventoryTab, activityContext).thenCompose(tabReceipt ->
+		return waitForInventoryTab().thenCompose(tabVisible ->
 		{
-			if (!wasDispatched(tabReceipt))
+			if (!tabVisible)
 			{
-				return CompletableFuture.completedFuture(tabReceipt);
+				return CompletableFuture.completedFuture(rejected("inventory_tab_not_visible"));
 			}
-			return waitForInventory().thenCompose(visible ->
+			return menuInput.interactDirect(this::resolveInventoryTab, activityContext).thenCompose(tabReceipt ->
 			{
-				if (!visible)
+				if (!wasDispatched(tabReceipt))
 				{
 					return retryInventoryThenInteract(
 						itemId, requestedSlot, action, activityContext).thenApply(retry ->
@@ -99,6 +182,32 @@ final class GenericClientInventoryInput
 						"open_inventory_then_item", tabReceipt, itemReceipt));
 			});
 		});
+	}
+
+	private CompletableFuture<Boolean> waitForInventoryTab()
+	{
+		CompletableFuture<Boolean> result = new CompletableFuture<>();
+		pollInventoryTab(0, result);
+		return result;
+	}
+
+	private void pollInventoryTab(int attempt, CompletableFuture<Boolean> result)
+	{
+		executor.schedule(() -> clientThread.invoke(() ->
+		{
+			if (visibleWidget(INVENTORY_TABS) != null)
+			{
+				result.complete(true);
+			}
+			else if (attempt + 1 >= INVENTORY_TAB_POLL_ATTEMPTS)
+			{
+				result.complete(false);
+			}
+			else
+			{
+				pollInventoryTab(attempt + 1, result);
+			}
+		}), INVENTORY_POLL_MILLIS, TimeUnit.MILLISECONDS);
 	}
 
 	private CompletableFuture<Map<String, Object>> retryInventoryThenInteract(
@@ -163,7 +272,7 @@ final class GenericClientInventoryInput
 	{
 		return waitForItem(itemId, requestedSlot, action).thenCompose(ignored ->
 			menuInput.interact(
-				() -> resolveItem(itemId, requestedSlot, action),
+				() -> resolveItem(itemId, requestedSlot, action, null),
 				activityContext));
 	}
 
@@ -184,7 +293,7 @@ final class GenericClientInventoryInput
 		return result;
 	}
 
-	CompletableFuture<Map<String, Object>> clearSelectedItem(int itemId, Integer requestedSlot)
+	CompletableFuture<Map<String, Object>> clearSelectedItem(int itemId, Integer requestedSlot, GenericClientActivityContext activityContext)
 	{
 		CompletableFuture<Boolean> selected = new CompletableFuture<>();
 		clientThread.invoke(() -> selected.complete(
@@ -203,7 +312,7 @@ final class GenericClientInventoryInput
 				itemId,
 				requestedSlot,
 				"Use",
-				GenericClientActivityContext.none()).thenCompose(clicked ->
+				activityContext).thenCompose(clicked ->
 			{
 				if (!"dispatched".equals(clicked.get("status")))
 				{
@@ -334,7 +443,7 @@ final class GenericClientInventoryInput
 			entry -> matchesWidget(entry, tab)));
 	}
 
-	private GenericClientMenuInput.Resolution resolveItem(int itemId, Integer requestedSlot, String action)
+	private GenericClientMenuInput.Resolution resolveItem(int itemId, Integer requestedSlot, String action, String spellName)
 	{
 		if (client.getGameState() != GameState.LOGGED_IN)
 		{
@@ -345,7 +454,7 @@ final class GenericClientInventoryInput
 		{
 			return GenericClientMenuInput.Resolution.rejected("inventory_not_visible");
 		}
-		Widget item = findItem(itemId, requestedSlot, action);
+		Widget item = findItem(itemId, requestedSlot, spellName == null ? action : null);
 		if (item == null)
 		{
 			return GenericClientMenuInput.Resolution.rejected("matching_inventory_item_not_found");
@@ -367,12 +476,33 @@ final class GenericClientInventoryInput
 		value.put("name", itemName);
 		value.put("slot", (long) slot);
 		value.put("quantity", (long) item.getItemQuantity());
+		if (spellName != null) value.put("spell", spellName);
+		String description = spellName == null ? "inventory_item:" : "spell_item:" + spellName + ":";
 		return GenericClientMenuInput.Resolution.resolved(new GenericClientMenuInput.Target(
 			point,
 			action,
-			"inventory_item:" + itemId + ":" + slot,
+			description + itemId + ":" + slot,
 			value,
-			entry -> matchesItem(entry, itemId, slot, widgetId, action)));
+			entry -> matchesItem(entry, itemId, slot, widgetId, action), bounds));
+	}
+
+	private GenericClientMenuInput.Resolution resolveSelectedSpellOnItem(
+		int itemId,
+		Integer requestedSlot,
+		int spellWidgetId,
+		String spellName)
+	{
+		if (client.getGameState() != GameState.LOGGED_IN)
+		{
+			return GenericClientMenuInput.Resolution.rejected("client_not_logged_in");
+		}
+		Widget selected = client.getSelectedWidget();
+		if (!client.isWidgetSelected() || selected == null || selected.getId() != spellWidgetId)
+		{
+			return GenericClientMenuInput.Resolution.rejected(
+				"requested_spell_not_selected:" + spellName);
+		}
+		return resolveItem(itemId, requestedSlot, "Cast", spellName);
 	}
 
 	private Widget findItem(int itemId, Integer requestedSlot, String action)
@@ -384,13 +514,12 @@ final class GenericClientInventoryInput
 		}
 		for (Widget item : itemChildren(inventory))
 		{
-			if (item == null || item.isHidden() || item.getItemId() != itemId ||
+			if (!isVisible(item) || item.getItemId() != itemId ||
 				(requestedSlot != null && item.getIndex() != requestedSlot))
 			{
 				continue;
 			}
-			ItemComposition composition = client.getItemDefinition(item.getItemId());
-			if (hasAction(composition, action))
+			if (action == null || hasAction(client.getItemDefinition(item.getItemId()), action))
 			{
 				return item;
 			}
@@ -419,18 +548,6 @@ final class GenericClientInventoryInput
 			}
 		}
 		return null;
-	}
-
-	static boolean isVisible(Widget widget)
-	{
-		for (Widget current = widget; current != null; current = current.getParent())
-		{
-			if (current.isHidden() || current.isSelfHidden())
-			{
-				return false;
-			}
-		}
-		return widget != null;
 	}
 
 	private static List<Widget> itemChildren(Widget inventory)
@@ -468,17 +585,6 @@ final class GenericClientInventoryInput
 			}
 		}
 		return false;
-	}
-
-	private static boolean matchesWidget(MenuEntry entry, Widget target)
-	{
-		Widget widget = entry.getWidget();
-		if (widget != null)
-		{
-			return widget.getId() == target.getId() && widget.getIndex() == target.getIndex();
-		}
-		return entry.getParam1() == target.getId() &&
-			(target.getIndex() < 0 || entry.getParam0() == target.getIndex());
 	}
 
 	static boolean matchesItem(

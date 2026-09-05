@@ -18,6 +18,11 @@ The upstream file at the pinned commit contains the literal placeholders
 `<YEAR>` and `<COPYRIGHT HOLDER>`; they are preserved exactly instead of being
 silently attributed by GenericClient.
 
+`door-map.zip` is generated from OpenRS2 cache 2686 with RuneLite cache tools
+and the `osrs-pathfinding/shortest-path-tooling` collision dumper. Its vendored
+SHA-256 is
+`a5d95b4ddecda08bf0016af72f48b358b68d34d0af7930c3ae55eb57cd3eb2ec`.
+
 ## Infinitay/Random-Event-Helper
 
 The Capt' Arnav Lua solver's dial model and RuneLite interface mapping were

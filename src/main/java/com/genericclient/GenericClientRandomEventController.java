@@ -1,5 +1,7 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientErrors.rootMessage;
+
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -148,6 +150,33 @@ final class GenericClientRandomEventController
 			" npc=" + detected.npcName +
 			" solver=" + (detected.solverScript == null ? "unregistered" : detected.solverScript));
 		alert.accept("Random event detected: " + detected.npcName);
+		String deferredActivity = runtime.randomEventDeferralActivity();
+		if (deferredActivity != null && !deferredActivity.isBlank())
+		{
+			synchronized (this)
+			{
+				detected.state = "deferred_activity";
+				detected.solverStatus = "deferred_activity";
+				detected.deferredActivity = deferredActivity;
+				detected.autoTalkStatus = "not_started";
+				publishCurrent();
+			}
+			reporter.accept("RANDOM_EVENT_DEFERRED event=" + detected.eventKey +
+				" activity=" + deferredActivity);
+			return;
+		}
+		if (!runtime.isAutomationActive())
+		{
+			synchronized (this)
+			{
+				detected.state = "attention_required";
+				detected.solverStatus = "deferred_idle";
+				detected.autoTalkStatus = "not_started";
+				publishCurrent();
+			}
+			reporter.accept("RANDOM_EVENT_DEFERRED_IDLE event=" + detected.eventKey);
+			return;
+		}
 		try
 		{
 			runtime.interrupt(detected.eventKey, detected.solverScript)
@@ -170,6 +199,16 @@ final class GenericClientRandomEventController
 			}
 			current.present = false;
 			current.despawnedTick = gameTick;
+			if ("deferred_activity".equals(current.state))
+			{
+				current.active = false;
+				current.state = "completed";
+				current.resolution = "deferred_activity_despawned";
+				current.completedAt = clock.instant();
+				reporter.accept("RANDOM_EVENT_DEFERRED_COMPLETED event=" +
+					current.eventKey + " activity=" + current.deferredActivity +
+					" despawn_tick=" + gameTick);
+			}
 			publishCurrent();
 		}
 	}
@@ -343,10 +382,13 @@ final class GenericClientRandomEventController
 		boolean resumeInterrupted)
 	{
 		EventRecord resolving;
+		boolean runtimeOwned;
 		synchronized (this)
 		{
 			ensureActive();
 			resolving = current;
+			runtimeOwned = !"deferred_idle".equals(resolving.solverStatus) &&
+				!"deferred_activity".equals(resolving.solverStatus);
 			resolving.state = "releasing";
 			resolving.resolution = reason;
 			publishCurrent();
@@ -355,7 +397,11 @@ final class GenericClientRandomEventController
 		final CompletableFuture<String> release;
 		try
 		{
-			release = runtime.release(resolving.eventKey, resumeInterrupted);
+			release = runtimeOwned
+				? runtime.release(resolving.eventKey, resumeInterrupted)
+				: CompletableFuture.completedFuture(
+					"RANDOM_EVENT_RELEASED event=" + resolving.eventKey +
+						" deferred_idle=true");
 		}
 		catch (RuntimeException exception)
 		{
@@ -446,15 +492,6 @@ final class GenericClientRandomEventController
 		return reason.trim();
 	}
 
-	private static String rootMessage(Throwable error)
-	{
-		Throwable current = error;
-		while (current.getCause() != null)
-		{
-			current = current.getCause();
-		}
-		return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
-	}
 
 	@FunctionalInterface
 	interface SolverLookup
@@ -470,6 +507,16 @@ final class GenericClientRandomEventController
 
 	interface Runtime
 	{
+		default String randomEventDeferralActivity()
+		{
+			return null;
+		}
+
+		default boolean isAutomationActive()
+		{
+			return true;
+		}
+
 		CompletableFuture<String> interrupt(String eventKey, String solverScript);
 
 		CompletableFuture<String> release(String eventKey, boolean resumeInterrupted);
@@ -495,6 +542,7 @@ final class GenericClientRandomEventController
 		private String solverStatus;
 		private String autoTalkStatus = "not_needed";
 		private String autoTalkResult;
+		private String deferredActivity;
 		private String lastError;
 		private String resolution;
 		private Instant completedAt;
@@ -554,8 +602,10 @@ final class GenericClientRandomEventController
 			Map<String, Object> value = new LinkedHashMap<>();
 			value.put("available", true);
 			value.put("active", active);
-			value.put("blocks_automation", active);
+			boolean blocksAutomation = active && !"deferred_activity".equals(state);
+			value.put("blocks_automation", blocksAutomation);
 			value.put("attention_required", active &&
+				!"deferred_activity".equals(state) &&
 				("attention_required".equals(state) || "start_failed".equals(solverStatus)));
 			value.put("state", state);
 			value.put("event_key", eventKey);
@@ -573,6 +623,7 @@ final class GenericClientRandomEventController
 			value.put("solver_status", solverStatus);
 			value.put("auto_talk_status", autoTalkStatus);
 			value.put("auto_talk_result", autoTalkResult);
+			value.put("deferred_activity", deferredActivity);
 			value.put("last_error", lastError);
 			value.put("resolution", resolution);
 			value.put("completed_at", completedAt == null ? null : completedAt.toString());

@@ -45,10 +45,12 @@ final class GenericClientScriptOverlay extends Overlay
 	{
 		GenericClientActiveScript script = scriptSupplier.get();
 		boolean running = script != null && script.isRunning();
-		String title = running ? compact(script.getName(), 24) : "GenericClient";
+		String title = running
+			? (script.getName() == null ? "Script" : script.getName())
+			: "GenericClient";
 		String activity = displayDescriptor(activitySupplier.get());
 		String scriptState = running
-			? compact(displayDescriptor(scriptStateSupplier.get()), 28)
+			? displayDescriptor(scriptStateSupplier.get())
 			: "Idle";
 		String meta = running ? formatRuntime(script.getRuntimeMillis()) : "";
 		List<GenericClientOverlayRow> rows = running
@@ -130,15 +132,6 @@ final class GenericClientScriptOverlay extends Overlay
 		return hours == 0L
 			? String.format(java.util.Locale.ROOT, "%d:%02d", minutes, remainder)
 			: String.format(java.util.Locale.ROOT, "%d:%02d:%02d", hours, minutes, remainder);
-	}
-
-	private static String compact(String value, int maximum)
-	{
-		if (value == null)
-		{
-			return "Script";
-		}
-		return value.length() <= maximum ? value : value.substring(0, maximum - 1) + "…";
 	}
 
 	private static String displayDescriptor(String descriptor)

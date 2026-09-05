@@ -1,18 +1,16 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientErrors.rootMessage;
+
 import java.awt.Canvas;
 import java.awt.Point;
 import java.awt.Shape;
 import java.awt.event.MouseEvent;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import net.runelite.api.Client;
@@ -25,38 +23,32 @@ final class GenericClientMenuInput implements AutoCloseable
 	private static final long HOVER_SETTLE_MILLIS = 75L;
 	private static final long CONTEXT_MENU_SETTLE_MILLIS = 150L;
 	private static final long CLICK_RESULT_TIMEOUT_MILLIS = 2_500L;
-	private static final long POST_LONG_BREAK_SETTLE_MILLIS = 100L;
 	private static final int CONTEXT_MENU_ENTRY_HEIGHT = 15;
 	private static final int MAX_DYNAMIC_RETARGETS = 12;
 	private static final int MAX_CONTEXT_REOPENS = 3;
-	private static final int MAX_POST_LONG_BREAK_RESOLVE_RETRIES = 50;
+	private static final int MAX_SELECTED_WIDGET_MENU_SETTLE_RETRIES = 10;
 
 	private final Client client;
 	private final ClientThread clientThread;
-	private final ScheduledExecutorService executor;
 	private final GenericClientSyntheticMouse syntheticMouse;
-	private final GenericClientBehaviorController behavior;
 	private final Consumer<String> reporter;
 	private final AtomicBoolean running = new AtomicBoolean();
-	private final List<ScheduledFuture<?>> pending = new CopyOnWriteArrayList<>();
 
 	private volatile CompletableFuture<Map<String, Object>> activeResult;
+	private final GenericClientInputCallbacks callbacks;
 	private volatile TargetResolver resolver;
 	private volatile Target target;
 	private volatile GenericClientActivityContext activityContext;
 	private volatile boolean directClick;
 	private volatile boolean awaitingMenuResult;
 	private volatile boolean clickFinished;
-	private volatile boolean behaviorAfterStarted;
 	private volatile Map<String, Object> observedMenuResult;
 	private volatile int clickCount;
 	private volatile int dynamicRetargetCount;
 	private volatile int contextReopenCount;
-	private volatile int postLongBreakResolveRetries;
+	private volatile int selectedWidgetMenuSettleRetries;
 	private volatile String dispatch;
 	private volatile boolean cursorRetained;
-	private volatile Map<String, Object> behaviorBefore = Collections.emptyMap();
-	private volatile Map<String, Object> behaviorAfter = Collections.emptyMap();
 	private volatile Map<String, Object> receiptMetadata = Collections.emptyMap();
 	private volatile boolean closed;
 
@@ -65,14 +57,12 @@ final class GenericClientMenuInput implements AutoCloseable
 		ClientThread clientThread,
 		ScheduledExecutorService executor,
 		GenericClientSyntheticMouse syntheticMouse,
-		GenericClientBehaviorController behavior,
 		Consumer<String> reporter)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
-		this.executor = executor;
+		this.callbacks = new GenericClientInputCallbacks(this, () -> this.activeResult, executor);
 		this.syntheticMouse = syntheticMouse;
-		this.behavior = behavior;
 		this.reporter = reporter;
 	}
 
@@ -96,7 +86,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		return start(resolver, activityContext, true, preInteractionResolver);
 	}
 
-	private CompletableFuture<Map<String, Object>> start(
+	private synchronized CompletableFuture<Map<String, Object>> start(
 		TargetResolver resolver,
 		GenericClientActivityContext activityContext,
 		boolean directClick,
@@ -107,9 +97,9 @@ final class GenericClientMenuInput implements AutoCloseable
 			throw new IllegalArgumentException("Menu target resolver cannot be null");
 		}
 		CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
-		if (closed)
+		if (closed || !activityContext.isInputAllowed())
 		{
-			result.complete(immediateRejected("input_closed"));
+			result.complete(immediateRejected(closed ? "input_closed" : "action_cancelled"));
 			return result;
 		}
 		if (!running.compareAndSet(false, true))
@@ -126,27 +116,15 @@ final class GenericClientMenuInput implements AutoCloseable
 		target = null;
 		awaitingMenuResult = false;
 		clickFinished = false;
-		behaviorAfterStarted = false;
 		observedMenuResult = null;
 		clickCount = 0;
 		dynamicRetargetCount = 0;
 		contextReopenCount = 0;
-		postLongBreakResolveRetries = 0;
+		selectedWidgetMenuSettleRetries = 0;
 		dispatch = null;
 		cursorRetained = false;
-		behaviorBefore = Collections.emptyMap();
-		behaviorAfter = Collections.emptyMap();
 
-		behavior.beforeAction(activityContext).whenComplete((before, error) ->
-		{
-			if (error != null)
-			{
-				finishRejected("behavior_before: " + rootMessage(error));
-				return;
-			}
-			behaviorBefore = before;
-			clientThread.invoke(() -> prepareOnClientThread(preInteractionResolver));
-		});
+		invokeCurrent(() -> prepareOnClientThread(preInteractionResolver));
 		return result;
 	}
 
@@ -180,8 +158,8 @@ final class GenericClientMenuInput implements AutoCloseable
 		}
 		else
 		{
-			schedule(
-				() -> clientThread.invoke(this::resolveTargetOnClientThread),
+			callbacks.schedule(
+				() -> invokeCurrent(this::resolveTargetOnClientThread),
 				preInteraction.delayMillis);
 		}
 	}
@@ -191,12 +169,17 @@ final class GenericClientMenuInput implements AutoCloseable
 		return running.get();
 	}
 
-	void cancel(String reason)
+	synchronized void cancel(String reason)
 	{
 		if (running.get())
 		{
 			finishRejected("cancelled: " + reason);
 		}
+	}
+
+	synchronized void cancel(String reason, GenericClientActivityContext owner)
+	{
+		if (running.get() && activityContext.ownsSameInput(owner)) finishRejected("cancelled: " + reason);
 	}
 
 	void onMenuOptionClicked(MenuOptionClicked event)
@@ -238,10 +221,6 @@ final class GenericClientMenuInput implements AutoCloseable
 		if (resolution == null || resolution.target == null)
 		{
 			String reason = resolution == null ? "target_unavailable" : resolution.reason;
-			if (retryAfterLongBreak(reason))
-			{
-				return;
-			}
 			finishRejected(reason);
 			return;
 		}
@@ -252,10 +231,6 @@ final class GenericClientMenuInput implements AutoCloseable
 		if (canvas == null || !canvas.isShowing())
 		{
 			target = null;
-			if (retryAfterLongBreak("canvas_not_showing"))
-			{
-				return;
-			}
 			finishRejected("canvas_not_showing");
 			return;
 		}
@@ -267,36 +242,21 @@ final class GenericClientMenuInput implements AutoCloseable
 			cursorRetained = true;
 			reporter.accept("MENU_INTERACTION_CURSOR_RETAINED description=" + target.description +
 				" action=" + target.action + " canvas=" + mouse.getX() + "," + mouse.getY());
-			schedule(() -> clientThread.invoke(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+			callbacks.schedule(() -> invokeCurrent(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
 			return;
 		}
-		syntheticMouse.move(target.point).whenComplete((ignored, error) ->
+		syntheticMouse.move(target.point, activityContext).whenComplete(callbacks.bind((ignored, error) ->
 		{
 			if (error != null)
 			{
 				finishRejected("synthetic_mouse_move: " + rootMessage(error));
 				return;
 			}
-			schedule(() -> clientThread.invoke(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
-		});
+			callbacks.schedule(() -> invokeCurrent(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+		}));
 	}
 
-	private boolean retryAfterLongBreak(String reason)
-	{
-		if (!"long".equals(behaviorBefore.get("kind")) ||
-			!"completed".equals(behaviorBefore.get("status")) ||
-			postLongBreakResolveRetries >= MAX_POST_LONG_BREAK_RESOLVE_RETRIES)
-		{
-			return false;
-		}
-		postLongBreakResolveRetries++;
-		reporter.accept("MENU_INTERACTION_POST_BREAK_SETTLE attempt=" +
-			postLongBreakResolveRetries + " reason=" + reason);
-		schedule(
-			() -> clientThread.invoke(this::resolveTargetOnClientThread),
-			POST_LONG_BREAK_SETTLE_MILLIS);
-		return true;
-	}
+
 
 	private void verifyHoverAndClick()
 	{
@@ -335,6 +295,18 @@ final class GenericClientMenuInput implements AutoCloseable
 		int desiredIndex = findEntryIndex(entries, current);
 		if (desiredIndex < 0)
 		{
+			boolean onlyCancel = entries.length == 1 &&
+				entries[0] != null && entries[0].getType() == net.runelite.api.MenuAction.CANCEL;
+			if (shouldSettleSelectedWidgetTarget(
+				client.isWidgetSelected(), onlyCancel, selectedWidgetMenuSettleRetries))
+			{
+				selectedWidgetMenuSettleRetries++;
+				reporter.accept("MENU_INTERACTION_SELECTED_WIDGET_SETTLE description=" +
+					current.description + " attempt=" + selectedWidgetMenuSettleRetries);
+				callbacks.schedule(() -> invokeCurrent(this::verifyHoverAndClick),
+					HOVER_SETTLE_MILLIS);
+				return;
+			}
 			reportMenuEntries(entries, current);
 			finishRejected("hover_has_no_matching_action");
 			return;
@@ -385,7 +357,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		reporter.accept("MENU_INTERACTION_RETARGET description=" + destination.description +
 			" attempt=" + dynamicRetargetCount +
 			" canvas=" + destination.point.x + "," + destination.point.y);
-		syntheticMouse.move(destination.point).whenComplete((ignored, error) ->
+		syntheticMouse.move(destination.point, activityContext).whenComplete(callbacks.bind((ignored, error) ->
 		{
 			if (error != null)
 			{
@@ -394,9 +366,9 @@ final class GenericClientMenuInput implements AutoCloseable
 			}
 			if (target == destination)
 			{
-				schedule(() -> clientThread.invoke(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+				callbacks.schedule(() -> invokeCurrent(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
 			}
-		});
+		}));
 		return null;
 	}
 
@@ -409,50 +381,38 @@ final class GenericClientMenuInput implements AutoCloseable
 		cursorRetained = false;
 		reporter.accept("MENU_INTERACTION_CURSOR_RETENTION_EXPIRED description=" +
 			current.description + " canvas=" + current.point.x + "," + current.point.y);
-		syntheticMouse.move(current.point).whenComplete((ignored, error) ->
+		syntheticMouse.move(current.point, activityContext).whenComplete(callbacks.bind((ignored, error) ->
 		{
 			if (error != null)
 			{
 				finishRejected("synthetic_mouse_move: " + rootMessage(error));
 				return;
 			}
-			schedule(() -> clientThread.invoke(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
-		});
+			callbacks.schedule(() -> invokeCurrent(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+		}));
 		return true;
 	}
 
 	private void dispatchDirectClick()
 	{
 		Target current = target;
-		if (!running.get() || current == null)
-		{
-			return;
-		}
+		if (!running.get() || current == null) return;
 		dispatch = "direct_click";
 		clickCount++;
-		syntheticMouse.click(MouseEvent.BUTTON1).whenComplete((ignored, clickError) ->
+		syntheticMouse.click(MouseEvent.BUTTON1, activityContext).whenComplete(callbacks.bind((ignored, error) ->
 		{
-			if (clickError != null)
+			if (error != null)
 			{
-				finishRejected("synthetic_click: " + rootMessage(clickError));
+				finishRejected("synthetic_click: " + rootMessage(error));
 				return;
 			}
-			behavior.afterAction(activityContext).whenComplete((after, behaviorError) ->
-			{
-				if (behaviorError != null)
-				{
-					finishRejected("behavior_after: " + rootMessage(behaviorError));
-					return;
-				}
-				behaviorAfter = after;
-				Map<String, Object> observed = new LinkedHashMap<>();
-				observed.put("result", "direct_widget_click");
-				observed.put("menu_action", "direct_widget");
-				observed.put("menu_option", current.action);
-				observed.put("menu_target", "");
-				finishSuccess(observed);
-			});
-		});
+			Map<String, Object> observed = new LinkedHashMap<>();
+			observed.put("result", "direct_widget_click");
+			observed.put("menu_action", "direct_widget");
+			observed.put("menu_option", current.action);
+			observed.put("menu_target", "");
+			finishSuccess(observed);
+		}));
 	}
 
 	private void reportMenuEntries(MenuEntry[] entries, Target current)
@@ -481,7 +441,7 @@ final class GenericClientMenuInput implements AutoCloseable
 	{
 		dispatch = "context_menu";
 		clickCount++;
-		syntheticMouse.click(MouseEvent.BUTTON3).whenComplete((ignored, clickError) ->
+		syntheticMouse.click(MouseEvent.BUTTON3, activityContext).whenComplete(callbacks.bind((ignored, clickError) ->
 		{
 			if (clickError != null)
 			{
@@ -490,8 +450,8 @@ final class GenericClientMenuInput implements AutoCloseable
 			}
 			// Opening the menu and selecting its entry are one composite interaction.
 			// Moving offscreen between those clicks closes the menu before it can be used.
-			schedule(() -> clientThread.invoke(this::moveToContextEntry), CONTEXT_MENU_SETTLE_MILLIS);
-		});
+			callbacks.schedule(() -> invokeCurrent(this::moveToContextEntry), CONTEXT_MENU_SETTLE_MILLIS);
+		}));
 	}
 
 	private void moveToContextEntry()
@@ -528,15 +488,15 @@ final class GenericClientMenuInput implements AutoCloseable
 			client.getMenu().getMenuX() + client.getMenu().getMenuWidth() / 2,
 			client.getMenu().getMenuY() + headerHeight +
 				rowFromTop * CONTEXT_MENU_ENTRY_HEIGHT + CONTEXT_MENU_ENTRY_HEIGHT / 2);
-		syntheticMouse.move(destination).whenComplete((ignored, error) ->
+		syntheticMouse.move(destination, activityContext).whenComplete(callbacks.bind((ignored, error) ->
 		{
 			if (error != null)
 			{
 				finishRejected("synthetic_context_move: " + rootMessage(error));
 				return;
 			}
-			schedule(() -> clientThread.invoke(this::clickContextEntry), HOVER_SETTLE_MILLIS);
-		});
+			callbacks.schedule(() -> invokeCurrent(this::clickContextEntry), HOVER_SETTLE_MILLIS);
+		}));
 	}
 
 	private void clickContextEntry()
@@ -560,10 +520,9 @@ final class GenericClientMenuInput implements AutoCloseable
 		this.dispatch = dispatch;
 		awaitingMenuResult = true;
 		clickFinished = false;
-		behaviorAfterStarted = false;
 		observedMenuResult = null;
 		clickCount++;
-		syntheticMouse.click(MouseEvent.BUTTON1).whenComplete((ignored, error) ->
+		syntheticMouse.click(MouseEvent.BUTTON1, activityContext).whenComplete(callbacks.bind((ignored, error) ->
 		{
 			if (error != null)
 			{
@@ -573,8 +532,8 @@ final class GenericClientMenuInput implements AutoCloseable
 			}
 			clickFinished = true;
 			finishLeftClickIfReady();
-		});
-		schedule(() ->
+		}));
+		callbacks.schedule(() ->
 		{
 			if (awaitingMenuResult || !clickFinished)
 			{
@@ -586,28 +545,10 @@ final class GenericClientMenuInput implements AutoCloseable
 		}, CLICK_RESULT_TIMEOUT_MILLIS);
 	}
 
-	private void finishLeftClickIfReady()
+	private synchronized void finishLeftClickIfReady()
 	{
-		final Map<String, Object> observed;
-		synchronized (this)
-		{
-			if (!running.get() || !clickFinished || observedMenuResult == null || behaviorAfterStarted)
-			{
-				return;
-			}
-			behaviorAfterStarted = true;
-			observed = new LinkedHashMap<>(observedMenuResult);
-		}
-		behavior.afterAction(activityContext).whenComplete((after, error) ->
-		{
-			if (error != null)
-			{
-				finishRejected("behavior_after: " + rootMessage(error));
-				return;
-			}
-			behaviorAfter = after;
-			finishSuccess(observed);
-		});
+		if (!running.get() || !clickFinished || observedMenuResult == null) return;
+		finishSuccess(new LinkedHashMap<>(observedMenuResult));
 	}
 
 	static int findEntryIndex(MenuEntry[] entries, Target target)
@@ -620,6 +561,15 @@ final class GenericClientMenuInput implements AutoCloseable
 			}
 		}
 		return -1;
+	}
+
+	static boolean shouldSettleSelectedWidgetTarget(
+		boolean widgetSelected,
+		boolean onlyCancel,
+		int attempts)
+	{
+		return widgetSelected && onlyCancel &&
+			attempts < MAX_SELECTED_WIDGET_MENU_SETTLE_RETRIES;
 	}
 
 	static Point randomPointInside(Shape shape, int canvasWidth, int canvasHeight)
@@ -728,11 +678,6 @@ final class GenericClientMenuInput implements AutoCloseable
 		receipt.put("dispatch", dispatch);
 		receipt.put("click_count", (long) clickCount);
 		receipt.put("cursor_retained", cursorRetained);
-		receipt.put("behavior_before", behaviorBefore);
-		if (!behaviorAfter.isEmpty())
-		{
-			receipt.put("behavior_after", behaviorAfter);
-		}
 		return receipt;
 	}
 
@@ -745,7 +690,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		return receipt;
 	}
 
-	private void finish(Map<String, Object> receipt)
+	private synchronized void finish(Map<String, Object> receipt)
 	{
 		if (!running.getAndSet(false))
 		{
@@ -753,9 +698,8 @@ final class GenericClientMenuInput implements AutoCloseable
 		}
 		awaitingMenuResult = false;
 		clickFinished = false;
-		behaviorAfterStarted = false;
 		observedMenuResult = null;
-		cancelPending();
+		callbacks.cancelPending();
 		reporter.accept("MENU_INTERACTION_COMPLETED status=" + receipt.get("status") +
 			" result=" + receipt.get("result") + " clicks=" + receipt.get("click_count"));
 		CompletableFuture<Map<String, Object>> completion = activeResult;
@@ -765,43 +709,21 @@ final class GenericClientMenuInput implements AutoCloseable
 		receiptMetadata = Collections.emptyMap();
 		if (completion != null)
 		{
-			completion.complete(receipt);
+			completion.completeAsync(() -> receipt);
 		}
 	}
 
-	private void schedule(Runnable runnable, long delayMillis)
+	private void invokeCurrent(Runnable action)
 	{
-		ScheduledFuture<?> future = executor.schedule(() ->
-		{
-			if (running.get())
-			{
-				runnable.run();
-			}
-		}, delayMillis, TimeUnit.MILLISECONDS);
-		pending.add(future);
+		clientThread.invoke(callbacks.bind(() -> {
+			if (activityContext.isInputAllowed()) action.run();
+			else finishRejected("action_cancelled");
+		}));
 	}
 
-	private void cancelPending()
-	{
-		for (ScheduledFuture<?> future : pending)
-		{
-			future.cancel(false);
-		}
-		pending.clear();
-	}
-
-	private static String rootMessage(Throwable error)
-	{
-		Throwable current = error;
-		while (current.getCause() != null)
-		{
-			current = current.getCause();
-		}
-		return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
-	}
 
 	@Override
-	public void close()
+	public synchronized void close()
 	{
 		closed = true;
 		if (running.get())
@@ -810,7 +732,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		}
 		else
 		{
-			cancelPending();
+			callbacks.cancelPending();
 		}
 	}
 

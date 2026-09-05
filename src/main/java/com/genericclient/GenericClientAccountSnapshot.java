@@ -34,6 +34,39 @@ final class GenericClientAccountSnapshot
 	private final CashSnapshot cash;
 	private final CombatSnapshot combat;
 
+	long inventoryQuantity(int itemId)
+	{
+		return inventory.available ? inventory.quantity(itemId) : -1L;
+	}
+
+	Boolean inventoryContainsPrefix(String prefix)
+	{
+		if (!inventory.available) return null;
+		String wanted = prefix.toLowerCase(java.util.Locale.ROOT);
+		boolean unknown = false;
+		for (ItemSnapshot item : inventory.items)
+		{
+			if (item.quantity <= 0) continue;
+			if (item.name == null || item.name.isBlank() || "<unknown>".equals(item.name)) unknown = true;
+			else if (item.name.toLowerCase(java.util.Locale.ROOT).startsWith(wanted)) return true;
+		}
+		return unknown ? null : false;
+	}
+
+	Integer boostedSkill(String name)
+	{
+		if (!loggedIn) return null;
+		for (SkillSnapshot skill : skills) if (skill.name.equals(name)) return skill.boostedLevel;
+		return null;
+	}
+
+	String questState(String key)
+	{
+		if (quests.available)
+			for (QuestSnapshot quest : quests.quests) if (quest.key.equals(key)) return quest.state;
+		return null;
+	}
+
 	GenericClientAccountSnapshot(
 		boolean loggedIn,
 		int totalLevel,
@@ -518,17 +551,26 @@ final class GenericClientAccountSnapshot
 		}
 	}
 
+	String questStateKey()
+	{
+		return quests.stateKey;
+	}
+
 	static final class QuestListSnapshot
 	{
 		private final boolean available;
 		private final long refreshedGameTick;
 		private final List<QuestSnapshot> quests;
+		private final String stateKey;
 
 		QuestListSnapshot(boolean available, long refreshedGameTick, List<QuestSnapshot> quests)
 		{
 			this.available = available;
 			this.refreshedGameTick = refreshedGameTick;
 			this.quests = Collections.unmodifiableList(new ArrayList<>(quests));
+			this.stateKey = available ? quests.stream()
+				.map(quest -> quest.id + ":" + quest.state + ":" + quest.progress)
+				.collect(Collectors.joining(";")) : null;
 		}
 
 		static QuestListSnapshot unavailable()
@@ -568,13 +610,15 @@ final class GenericClientAccountSnapshot
 		private final int id;
 		private final String name;
 		private final String state;
+		private final int progress;
 
-		QuestSnapshot(String key, int id, String name, String state)
+		QuestSnapshot(String key, int id, String name, String state, int progress)
 		{
 			this.key = key;
 			this.id = id;
 			this.name = name;
 			this.state = state;
+			this.progress = progress;
 		}
 
 		Map<String, Object> toMap()
@@ -583,6 +627,7 @@ final class GenericClientAccountSnapshot
 			value.put("id", (long) id);
 			value.put("name", name);
 			value.put("state", state);
+			value.put("progress", progress < 0 ? null : progress);
 			return value;
 		}
 	}

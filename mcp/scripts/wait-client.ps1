@@ -13,6 +13,9 @@ $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
 $lastLine = ""
 $observedRun = $false
 $minimumRunId = 0
+$baselineDeathTick = $null
+$runDisappearedAt = $null
+$disappearedDuringEmergency = $false
 
 function Invoke-GenericClientRpc {
     param(
@@ -48,6 +51,9 @@ if ($StartScript) {
     if ($RunId -eq 0) {
         $minimumRunId = [int]$beforeStart.lua.run_id + 1
     }
+    if ($null -ne $beforeStart.death_forensics.last_death_tick) {
+        $baselineDeathTick = [long]$beforeStart.death_forensics.last_death_tick
+    }
     $inputs = $InputsJson | ConvertFrom-Json
     $started = Invoke-GenericClientRpc "scripts.run" ([pscustomobject]@{
         id = $ScriptId
@@ -67,8 +73,20 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
         $activeScript = [string]$status.lua.active_script
         $activeRunId = [int]$status.lua.run_id
         $scriptStatus = [string]$status.lua.script_status
+        $resultStatus = [string]$active.result.status
+		$safetyLastEvent = [string]$status.safety.last_event
+		$safetyRecovering = [bool]$status.safety.recovering
         $randomEvent = $status.random_event
         $randomAttention = $null -ne $randomEvent -and [bool]$randomEvent.attention_required
+        $currentHitpoints = $status.player.current_hitpoints
+        $currentDeathTick = if ($null -eq $status.death_forensics.last_death_tick) {
+            -1
+        } else {
+            [long]$status.death_forensics.last_death_tick
+        }
+        if ($null -eq $baselineDeathTick) {
+            $baselineDeathTick = $currentDeathTick
+        }
         $breakRemainingMillis = [long]$status.behavior.break_remaining_millis
         $breakRemainingMinutes = if ($breakRemainingMillis -le 0) {
             0
@@ -111,8 +129,9 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
             random_npc = [string]$randomEvent.npc_name
             random_npc_id = $randomEvent.npc_id
             random_solver = [string]$randomEvent.solver_script
+            death_tick = $currentDeathTick
             last = [string]$status.last_status
-            result_status = [string]$active.result.status
+            result_status = $resultStatus
             result_phase = [string]$active.result.phase
         }
         $signature = $state | ConvertTo-Json -Compress
@@ -126,6 +145,23 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
             $lastLine = $signature
         }
 
+        $deathDetected = $observedRun -and (
+            ($null -ne $currentHitpoints -and [int]$currentHitpoints -le 0) -or
+            ($currentDeathTick -gt $baselineDeathTick)
+        )
+        if ($deathDetected) {
+            Write-Output ([ordered]@{
+                at = [DateTimeOffset]::Now.ToString("o")
+                fatal = "death_detected"
+                script = $ScriptId
+                run_id = $activeRunId
+                hp = $currentHitpoints
+                death_tick = $currentDeathTick
+                report = [string]$status.death_forensics.report
+            } | ConvertTo-Json -Compress)
+            exit 6
+        }
+
         if ($randomAttention) {
             exit 3
         }
@@ -135,11 +171,47 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
             $runMatches
         $requestedRunDisappeared = $observedRun -and
             $scriptStatus -eq "IDLE" -and $activeScript -eq "none"
-        if (($observedRun -and $requestedRunStillVisible -and
-            $scriptStatus -in @("COMPLETED", "FAULTED", "IDLE")) -or
-            $requestedRunDisappeared) {
+		if ($requestedRunDisappeared -and $null -eq $runDisappearedAt) {
+			$runDisappearedAt = [DateTimeOffset]::UtcNow
+			$disappearedDuringEmergency = $safetyRecovering -or
+				$safetyLastEvent -in @("triggered", "escaping")
+		}
+        $resultFailed = $resultStatus -match
+            "(^|_)(failed|failure|faulted|rejected|timeout|timed_out|blocked|required|unavailable|incomplete)$"
+        if ($observedRun -and $requestedRunStillVisible -and
+            $scriptStatus -eq "COMPLETED" -and $resultFailed) {
+            Write-Output ([ordered]@{
+                at = [DateTimeOffset]::Now.ToString("o")
+                fatal = "script_result_failed"
+                script = $activeScript
+                run_id = $activeRunId
+                result_status = $resultStatus
+                result = $active.result
+            } | ConvertTo-Json -Depth 20 -Compress)
+            exit 4
+        }
+        if ($observedRun -and $requestedRunStillVisible -and
+            $scriptStatus -eq "COMPLETED" -and $resultStatus -eq "stopped") {
+            exit 5
+        }
+        if ($observedRun -and $requestedRunStillVisible -and
+            $scriptStatus -eq "COMPLETED") {
             exit 0
         }
+        if ($observedRun -and $requestedRunStillVisible -and
+            $scriptStatus -eq "FAULTED") {
+            exit 4
+        }
+		$emergencyStillInFlight = $safetyRecovering -or
+			$safetyLastEvent -in @("triggered", "escaping")
+		$emergencyGraceComplete = $null -ne $runDisappearedAt -and
+			([DateTimeOffset]::UtcNow - $runDisappearedAt).TotalSeconds -ge 10.0
+		$waitingForEmergency = $requestedRunDisappeared -and $disappearedDuringEmergency -and
+			($emergencyStillInFlight -or -not $emergencyGraceComplete)
+		if (($requestedRunDisappeared -and -not $waitingForEmergency) -or
+			($observedRun -and $requestedRunStillVisible -and $scriptStatus -eq "IDLE")) {
+			exit 5
+		}
     }
     catch {
         $signature = "rpc_error:" + $_.Exception.Message
@@ -155,5 +227,5 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds $PollMilliseconds
 }
 
-Write-Error "Timed out waiting for GenericClient script state."
+Write-Error "Timed out waiting for GenericClient script state." -ErrorAction Continue
 exit 2

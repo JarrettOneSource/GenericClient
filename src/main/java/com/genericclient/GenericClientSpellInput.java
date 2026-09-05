@@ -1,5 +1,7 @@
 package com.genericclient;
 
+import static com.genericclient.GenericClientWidgets.matchesWidget;
+
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.util.ArrayList;
@@ -12,7 +14,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
-import net.runelite.api.MenuEntry;
+import net.runelite.api.Player;
+import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.SpriteID;
 import net.runelite.api.widgets.Widget;
@@ -22,6 +25,8 @@ final class GenericClientSpellInput
 {
 	private static final long SELECTION_POLL_MILLIS = 50L;
 	private static final int SELECTION_POLL_ATTEMPTS = 10;
+	private static final long HOME_TELEPORT_POLL_MILLIS = 250L;
+	private static final int HOME_TELEPORT_POLL_ATTEMPTS = 120;
 	private static final int[] MAGIC_TABS =
 	{
 		InterfaceID.Toplevel.STONE6,
@@ -34,19 +39,165 @@ final class GenericClientSpellInput
 	private final ScheduledExecutorService executor;
 	private final GenericClientMenuInput menuInput;
 	private final GenericClientNpcInput npcInput;
+	private final GenericClientInventoryInput inventoryInput;
 
 	GenericClientSpellInput(
 		Client client,
 		ClientThread clientThread,
 		ScheduledExecutorService executor,
 		GenericClientMenuInput menuInput,
-		GenericClientNpcInput npcInput)
+		GenericClientNpcInput npcInput,
+		GenericClientInventoryInput inventoryInput)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
 		this.executor = executor;
 		this.menuInput = menuInput;
 		this.npcInput = npcInput;
+		this.inventoryInput = inventoryInput;
+	}
+
+	CompletableFuture<Map<String, Object>> homeTeleport(
+		GenericClientActivityContext activityContext)
+	{
+		CompletableFuture<WorldPoint> currentWorld = new CompletableFuture<>();
+		clientThread.invoke(() ->
+		{
+			Player player = client.getLocalPlayer();
+			currentWorld.complete(player == null ? null : player.getWorldLocation());
+		});
+		return currentWorld.thenCompose(world ->
+		{
+			List<Map<String, Object>> steps = new ArrayList<>();
+			if (isLumbridge(world))
+			{
+				return CompletableFuture.completedFuture(
+					travelReceipt("complete", "already_at_lumbridge", steps));
+			}
+			return ensureHomeTeleportVisible(activityContext, steps).thenCompose(visible ->
+			{
+				if (!visible)
+				{
+					return CompletableFuture.completedFuture(travelReceipt(
+						"rejected", "lumbridge_home_teleport_unavailable", steps));
+				}
+				return menuInput.interact(this::resolveHomeTeleport, activityContext)
+					.thenCompose(clicked ->
+					{
+						steps.add(clicked);
+						if (!wasDispatched(clicked))
+						{
+							return CompletableFuture.completedFuture(travelReceipt(
+								"rejected", "lumbridge_home_teleport_click_failed", steps));
+						}
+						return waitForLumbridge().thenApply(arrived -> travelReceipt(
+							arrived ? "complete" : "rejected",
+							arrived
+								? "lumbridge_home_teleport_complete"
+								: "lumbridge_home_teleport_arrival_unverified",
+							steps));
+					});
+			});
+		});
+	}
+
+	private CompletableFuture<Boolean> ensureHomeTeleportVisible(
+		GenericClientActivityContext activityContext,
+		List<Map<String, Object>> steps)
+	{
+		CompletableFuture<Boolean> visible = new CompletableFuture<>();
+		clientThread.invoke(() -> visible.complete(homeTeleportVisible()));
+		return visible.thenCompose(alreadyVisible ->
+		{
+			if (alreadyVisible)
+			{
+				return CompletableFuture.completedFuture(true);
+			}
+			return menuInput.interact(this::resolveMagicTab, activityContext).thenCompose(tabReceipt ->
+			{
+				steps.add(tabReceipt);
+				if (!wasDispatched(tabReceipt))
+				{
+					return CompletableFuture.completedFuture(false);
+				}
+				CompletableFuture<Boolean> opened = new CompletableFuture<>();
+				executor.schedule(() -> clientThread.invoke(() ->
+					opened.complete(homeTeleportVisible())), 300L, TimeUnit.MILLISECONDS);
+				return opened;
+			});
+		});
+	}
+
+	private boolean homeTeleportVisible()
+	{
+		return visibleWidget(InterfaceID.MagicSpellbook.UNIVERSE) != null &&
+			visibleWidget(InterfaceID.MagicSpellbook.TELEPORT_HOME_STANDARD) != null;
+	}
+
+	private GenericClientMenuInput.Resolution resolveHomeTeleport()
+	{
+		if (client.getGameState() != GameState.LOGGED_IN)
+		{
+			return GenericClientMenuInput.Resolution.rejected("client_not_logged_in");
+		}
+		Widget widget = visibleWidget(InterfaceID.MagicSpellbook.TELEPORT_HOME_STANDARD);
+		if (widget == null)
+		{
+			return GenericClientMenuInput.Resolution.rejected(
+				"lumbridge_home_teleport_not_visible");
+		}
+		Point point = GenericClientMenuInput.randomPointInside(
+			widget.getBounds(), client.getCanvasWidth(), client.getCanvasHeight());
+		if (point == null)
+		{
+			return GenericClientMenuInput.Resolution.rejected(
+				"lumbridge_home_teleport_not_clickable");
+		}
+		Map<String, Object> target = new LinkedHashMap<>();
+		target.put("kind", "travel");
+		target.put("name", "Lumbridge Home Teleport");
+		target.put("widget_id", (long) widget.getId());
+		return GenericClientMenuInput.Resolution.resolved(new GenericClientMenuInput.Target(
+			point,
+			"Cast",
+			"travel:lumbridge_home_teleport",
+			target,
+			entry -> "Cast".equalsIgnoreCase(entry.getOption()) && matchesWidget(entry, widget)));
+	}
+
+	private CompletableFuture<Boolean> waitForLumbridge()
+	{
+		CompletableFuture<Boolean> result = new CompletableFuture<>();
+		pollLumbridge(0, result);
+		return result;
+	}
+
+	private void pollLumbridge(int attempt, CompletableFuture<Boolean> result)
+	{
+		executor.schedule(() -> clientThread.invoke(() ->
+		{
+			Player player = client.getLocalPlayer();
+			WorldPoint world = player == null ? null : player.getWorldLocation();
+			if (client.getGameState() == GameState.LOGGED_IN && isLumbridge(world))
+			{
+				result.complete(true);
+			}
+			else if (attempt + 1 >= HOME_TELEPORT_POLL_ATTEMPTS)
+			{
+				result.complete(false);
+			}
+			else
+			{
+				pollLumbridge(attempt + 1, result);
+			}
+		}), HOME_TELEPORT_POLL_MILLIS, TimeUnit.MILLISECONDS);
+	}
+
+	static boolean isLumbridge(WorldPoint world)
+	{
+		return world != null && world.getPlane() == 0 &&
+			world.getX() >= 3200 && world.getX() <= 3245 &&
+			world.getY() >= 3190 && world.getY() <= 3245;
 	}
 
 	CompletableFuture<Map<String, Object>> castOnNpc(
@@ -70,21 +221,153 @@ final class GenericClientSpellInput
 			throw new IllegalArgumentException("combat.cast within must be between 1 and 32");
 		}
 		String cleanNpcName = npcName == null || npcName.trim().isEmpty() ? null : npcName.trim();
+		return castOnNpc(spell, npcId, cleanNpcName, within, activityContext);
+	}
+
+	private CompletableFuture<Map<String, Object>> castOnNpc(
+		Spell spell,
+		Integer npcId,
+		String npcName,
+		int within,
+		GenericClientActivityContext activityContext)
+	{
 		CompletableFuture<SpellbookState> spellbook = new CompletableFuture<>();
 		clientThread.invoke(() -> spellbook.complete(new SpellbookState(
 			spellbookVisible(spell), spellSelected(spell))));
 		return spellbook.thenCompose(state ->
 		{
-			if (!state.visible)
+			List<Map<String, Object>> steps = new ArrayList<>();
+			SpellbookPath path = spellbookPath(state.visible, state.selected);
+			if (path == SpellbookPath.TARGET_SELECTED)
+			{
+				return castSelectedSpell(
+					spell, npcId, npcName, within, activityContext, steps);
+			}
+			if (path == SpellbookPath.OPEN)
 			{
 				return openSpellbookAndCast(
-					spell, npcId, cleanNpcName, within, activityContext);
+					spell, npcId, npcName, within, activityContext);
+			}
+			return selectAndCast(
+				spell, npcId, npcName, within, activityContext, steps);
+		});
+	}
+
+	CompletableFuture<Map<String, Object>> castOnItem(
+		String spellName,
+		int itemId,
+		Integer requestedSlot,
+		GenericClientActivityContext activityContext)
+	{
+		Spell spell = Spell.fromName(spellName);
+		if (itemId < 0)
+		{
+			throw new IllegalArgumentException("spell.cast_on_item item_id cannot be negative");
+		}
+		if (requestedSlot != null && (requestedSlot < 0 || requestedSlot >= 28))
+		{
+			throw new IllegalArgumentException(
+				"spell.cast_on_item slot must be between 0 and 27");
+		}
+		return castOnItem(spell, itemId, requestedSlot, activityContext);
+	}
+
+	private CompletableFuture<Map<String, Object>> castOnItem(
+		Spell spell,
+		int itemId,
+		Integer requestedSlot,
+		GenericClientActivityContext activityContext)
+	{
+		CompletableFuture<SpellbookState> spellbook = new CompletableFuture<>();
+		clientThread.invoke(() -> spellbook.complete(new SpellbookState(
+			spellbookVisible(spell), spellSelected(spell))));
+		return spellbook.thenCompose(state ->
+		{
+			List<Map<String, Object>> steps = new ArrayList<>();
+			SpellbookPath path = spellbookPath(state.visible, state.selected);
+			if (path == SpellbookPath.TARGET_SELECTED)
+			{
+				return castSelectedSpellOnItem(
+					spell, itemId, requestedSlot, activityContext, steps);
+			}
+			if (path == SpellbookPath.OPEN)
+			{
+				return openSpellbookAndCastOnItem(
+					spell, itemId, requestedSlot, activityContext);
+			}
+			return selectAndCastOnItem(
+				spell, itemId, requestedSlot, activityContext, steps);
+		});
+	}
+
+	private CompletableFuture<Map<String, Object>> openSpellbookAndCastOnItem(
+		Spell spell,
+		int itemId,
+		Integer requestedSlot,
+		GenericClientActivityContext activityContext)
+	{
+		return menuInput.interact(this::resolveMagicTab, activityContext).thenCompose(tabReceipt ->
+		{
+			if (!wasDispatched(tabReceipt))
+			{
+				return CompletableFuture.completedFuture(tabReceipt);
 			}
 			List<Map<String, Object>> steps = new ArrayList<>();
-			return state.selected
-				? castSelectedSpell(spell, npcId, cleanNpcName, within, activityContext, steps)
-				: selectAndCast(spell, npcId, cleanNpcName, within, activityContext, steps);
+			steps.add(tabReceipt);
+			return waitForSpellbook(spell).thenCompose(visible -> visible
+				? selectAndCastOnItem(
+					spell, itemId, requestedSlot, activityContext, steps)
+				: CompletableFuture.completedFuture(
+					rejected("spellbook_did_not_open", steps)));
 		});
+	}
+
+	private CompletableFuture<Map<String, Object>> selectAndCastOnItem(
+		Spell spell,
+		int itemId,
+		Integer requestedSlot,
+		GenericClientActivityContext activityContext,
+		List<Map<String, Object>> steps)
+	{
+		return menuInput.interact(() -> resolveSpell(spell), activityContext).thenCompose(selection ->
+		{
+			steps.add(selection);
+			if (!wasDispatched(selection))
+			{
+				return CompletableFuture.completedFuture(compositeReceipt(
+					"spell_selection_failed", steps, selection));
+			}
+			return waitForSpellSelection(spell).thenCompose(selected ->
+			{
+				if (!selected)
+				{
+					return CompletableFuture.completedFuture(
+						rejected("spell_selection_not_applied", steps));
+				}
+				return castSelectedSpellOnItem(
+					spell, itemId, requestedSlot, activityContext, steps);
+			});
+		});
+	}
+
+	private CompletableFuture<Map<String, Object>> castSelectedSpellOnItem(
+		Spell spell,
+		int itemId,
+		Integer requestedSlot,
+		GenericClientActivityContext activityContext,
+		List<Map<String, Object>> steps)
+	{
+		return inventoryInput.castSelectedSpellOnItem(
+			itemId,
+			requestedSlot,
+			spell.widgetId,
+			spell.name,
+			activityContext).thenCompose(cast ->
+			{
+				steps.add(cast);
+				return finishSelectedSpellAction(
+					"spell_cast_on_item", spell, steps, cast);
+			});
 	}
 
 	private CompletableFuture<Map<String, Object>> openSpellbookAndCast(
@@ -165,11 +448,59 @@ final class GenericClientSpellInput
 			within,
 			spell.widgetId,
 			spell.name,
-			activityContext).thenApply(cast ->
+			activityContext).thenCompose(cast ->
+			{
+				steps.add(cast);
+				return finishSelectedSpellAction(
+					"spell_cast_on_npc", spell, steps, cast);
+			});
+	}
+
+	private CompletableFuture<Map<String, Object>> finishSelectedSpellAction(
+		String result,
+		Spell spell,
+		List<Map<String, Object>> steps,
+		Map<String, Object> target)
+	{
+		Map<String, Object> receipt = compositeReceipt(result, steps, target);
+		if (wasDispatched(target))
 		{
-			steps.add(cast);
-			return compositeReceipt("spell_cast_on_npc", steps, cast);
+			return CompletableFuture.completedFuture(receipt);
+		}
+		return clearSelectedSpell(spell).thenApply(cleanup ->
+		{
+			receipt.put("selection_cleanup", cleanup);
+			return receipt;
 		});
+	}
+
+	private CompletableFuture<Map<String, Object>> clearSelectedSpell(Spell spell)
+	{
+		CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
+		clientThread.invoke(() ->
+		{
+			Map<String, Object> receipt = new LinkedHashMap<>();
+			Widget selected = client.getSelectedWidget();
+			boolean owned = client.isWidgetSelected() && selected != null &&
+				selected.getId() == spell.widgetId;
+			if (!owned)
+			{
+				receipt.put("status", "unchanged");
+				receipt.put("result", "requested_spell_selection_already_clear");
+			}
+			else
+			{
+				client.setWidgetSelected(false);
+				receipt.put("status", client.isWidgetSelected() ? "rejected" : "complete");
+				receipt.put("result", client.isWidgetSelected()
+					? "requested_spell_selection_clear_failed"
+					: "requested_spell_selection_cleared");
+			}
+			receipt.put("spell", spell.name);
+			receipt.put("click_count", 0L);
+			result.complete(receipt);
+		});
+		return result;
 	}
 
 	private CompletableFuture<Boolean> waitForSpellSelection(Spell spell)
@@ -205,6 +536,15 @@ final class GenericClientSpellInput
 	{
 		Widget selected = client.getSelectedWidget();
 		return client.isWidgetSelected() && selected != null && selected.getId() == spell.widgetId;
+	}
+
+	static SpellbookPath spellbookPath(boolean visible, boolean selected)
+	{
+		if (selected)
+		{
+			return SpellbookPath.TARGET_SELECTED;
+		}
+		return visible ? SpellbookPath.SELECT : SpellbookPath.OPEN;
 	}
 
 	private GenericClientMenuInput.Resolution resolveMagicTab()
@@ -286,17 +626,6 @@ final class GenericClientSpellInput
 		return null;
 	}
 
-	private static boolean matchesWidget(MenuEntry entry, Widget target)
-	{
-		Widget widget = entry.getWidget();
-		if (widget != null)
-		{
-			return widget.getId() == target.getId() && widget.getIndex() == target.getIndex();
-		}
-		return entry.getParam1() == target.getId() &&
-			(target.getIndex() < 0 || entry.getParam0() == target.getIndex());
-	}
-
 	private static boolean wasDispatched(Map<String, Object> receipt)
 	{
 		return receipt != null && "dispatched".equals(receipt.get("status"));
@@ -312,6 +641,28 @@ final class GenericClientSpellInput
 		receipt.put("result", result);
 		receipt.put("steps", steps);
 		long clicks = 0;
+		for (Map<String, Object> step : steps)
+		{
+			Object value = step.get("click_count");
+			if (value instanceof Number)
+			{
+				clicks += ((Number) value).longValue();
+			}
+		}
+		receipt.put("click_count", clicks);
+		return receipt;
+	}
+
+	private static Map<String, Object> travelReceipt(
+		String status,
+		String result,
+		List<Map<String, Object>> steps)
+	{
+		Map<String, Object> receipt = new LinkedHashMap<>();
+		receipt.put("status", status);
+		receipt.put("result", result);
+		receipt.put("steps", new ArrayList<>(steps));
+		long clicks = 0L;
 		for (Map<String, Object> step : steps)
 		{
 			Object value = step.get("click_count");
@@ -345,6 +696,13 @@ final class GenericClientSpellInput
 		return receipt;
 	}
 
+	enum SpellbookPath
+	{
+		TARGET_SELECTED,
+		OPEN,
+		SELECT
+	}
+
 	enum Spell
 	{
 		WIND_STRIKE(
@@ -370,7 +728,13 @@ final class GenericClientSpellInput
 			SpriteID.Magicon.EARTH_BOLT, true),
 		FIRE_BOLT(
 			"fire_bolt", "Fire Bolt", InterfaceID.MagicSpellbook.FIRE_BOLT,
-			SpriteID.Magicon.FIRE_BOLT, true);
+			SpriteID.Magicon.FIRE_BOLT, true),
+		LOW_ALCHEMY(
+			"low_alchemy", "Low Level Alchemy", InterfaceID.MagicSpellbook.LOW_ALCHEMY,
+			SpriteID.Magicon.LOW_LEVEL_ALCHEMY, false),
+		SUPERHEAT_ITEM(
+			"superheat_item", "Superheat Item", InterfaceID.MagicSpellbook.SUPERHEAT,
+			SpriteID.Magicon.SUPERHEAT_ITEM, false);
 
 		private final String name;
 		private final String label;

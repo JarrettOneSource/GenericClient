@@ -78,23 +78,23 @@ final class GenericClientSyntheticKeyboard implements AutoCloseable
 
 	CompletableFuture<String> typeAndEnter(String text)
 	{
-		return type(text, true, 0L);
+		return type(text, true, 0L, GenericClientActivityContext.none());
 	}
 
 	CompletableFuture<String> typeAndEnter(String text, long initialDelayMillis)
 	{
-		return type(text, true, initialDelayMillis);
+		return type(text, true, initialDelayMillis, GenericClientActivityContext.none());
 	}
 
 	CompletableFuture<String> type(String text)
 	{
-		return type(text, false, 0L);
+		return type(text, false, 0L, GenericClientActivityContext.none());
 	}
 
-	private CompletableFuture<String> type(
+	CompletableFuture<String> type(
 		String text,
 		boolean submit,
-		long initialDelayMillis)
+		long initialDelayMillis, GenericClientActivityContext context)
 	{
 		if (text == null || text.isEmpty())
 		{
@@ -115,27 +115,8 @@ final class GenericClientSyntheticKeyboard implements AutoCloseable
 			characters.add(character);
 		}
 
-		CompletableFuture<String> result = new CompletableFuture<>();
-		synchronized (this)
-		{
-			if (closed)
-			{
-				result.completeExceptionally(new IllegalStateException("Synthetic keyboard is closed"));
-				return result;
-			}
-			if (typing)
-			{
-				result.completeExceptionally(new IllegalStateException("Synthetic keyboard is already typing"));
-				return result;
-			}
-			if (canvas == null || !canvas.isShowing())
-			{
-				result.completeExceptionally(new IllegalStateException("Client canvas is unavailable"));
-				return result;
-			}
-			typing = true;
-			activeResult = result;
-		}
+		CompletableFuture<String> result = beginInput(context);
+		if (result.isDone()) return result;
 		int wpm = Math.max(
 			GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MIN,
 			Math.min(GenericClientBehaviorProfile.TYPING_WORDS_PER_MINUTE_MAX,
@@ -151,16 +132,31 @@ final class GenericClientSyntheticKeyboard implements AutoCloseable
 		for (int index = 0; index < characters.size(); index++)
 		{
 			char character = characters.get(index);
-			schedule(() -> dispatchCharacter(character), nextDelay);
+			schedule(() -> dispatchCharacter(character), nextDelay, result, context);
 			nextDelay += jitteredInterval(intervalMillis);
 		}
 		if (submit)
 		{
-			schedule(this::dispatchEnter, nextDelay);
+			schedule(this::dispatchEnter, nextDelay, result, context);
 			nextDelay += jitteredInterval(intervalMillis);
 		}
-		schedule(() -> finish(result, text, submit), nextDelay);
+		schedule(() -> finish(result,
+			(submit ? "SYNTHETIC_TEXT_SUBMITTED" : "SYNTHETIC_TEXT_TYPED") + " characters=" + text.length()),
+			nextDelay, result, context);
 		return result;
+	}
+
+	private synchronized CompletableFuture<String> beginInput(GenericClientActivityContext context)
+	{
+		if (closed || !context.isInputAllowed())
+			return CompletableFuture.failedFuture(new IllegalStateException(closed ? "Synthetic keyboard is closed" : "action_cancelled"));
+		if (typing)
+			return CompletableFuture.failedFuture(new IllegalStateException("Synthetic keyboard is already typing"));
+		if (canvas == null || !canvas.isShowing())
+			return CompletableFuture.failedFuture(new IllegalStateException("Client canvas is unavailable"));
+		typing = true;
+		activeResult = new CompletableFuture<>();
+		return activeResult;
 	}
 
 	static long keyIntervalMillis(int wordsPerMinute)
@@ -180,27 +176,57 @@ final class GenericClientSyntheticKeyboard implements AutoCloseable
 
 	CompletableFuture<String> pressEscape()
 	{
-		CompletableFuture<String> result = new CompletableFuture<>();
-		synchronized (this)
+		return pressEscape(GenericClientActivityContext.none());
+	}
+
+	CompletableFuture<String> pressEscape(GenericClientActivityContext context)
+	{
+		CompletableFuture<String> result = beginInput(context);
+		if (result.isDone()) return result;
+		dispatch(result, context, () -> dispatchKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, false));
+		finish(result, "SYNTHETIC_ESCAPE");
+		return result;
+	}
+
+	CompletableFuture<String> pressSpace(long initialDelayMillis)
+	{
+		return pressSpace(initialDelayMillis, GenericClientActivityContext.none());
+	}
+
+	CompletableFuture<String> pressSpace(long initialDelayMillis, GenericClientActivityContext context)
+	{
+		return pressKey(KeyEvent.VK_SPACE, "SPACE", initialDelayMillis, context);
+	}
+
+	CompletableFuture<String> pressDigit(int digit, long initialDelayMillis)
+	{
+		return pressDigit(digit, initialDelayMillis, GenericClientActivityContext.none());
+	}
+
+	CompletableFuture<String> pressDigit(int digit, long initialDelayMillis, GenericClientActivityContext context)
+	{
+		if (digit < 1 || digit > 9)
 		{
-			if (closed)
-			{
-				result.completeExceptionally(new IllegalStateException("Synthetic keyboard is closed"));
-				return result;
-			}
-			if (typing)
-			{
-				result.completeExceptionally(new IllegalStateException("Synthetic keyboard is already typing"));
-				return result;
-			}
-			if (canvas == null || !canvas.isShowing())
-			{
-				result.completeExceptionally(new IllegalStateException("Client canvas is unavailable"));
-				return result;
-			}
+			throw new IllegalArgumentException("Dialogue option key must be between 1 and 9");
 		}
-		runOnEdt(() -> dispatchKey(KeyEvent.VK_ESCAPE, KeyEvent.CHAR_UNDEFINED, false));
-		result.complete("SYNTHETIC_ESCAPE");
+		return pressKey(KeyEvent.VK_0 + digit, Integer.toString(digit), initialDelayMillis, context);
+	}
+
+	private CompletableFuture<String> pressKey(
+		int keyCode,
+		String label,
+		long initialDelayMillis, GenericClientActivityContext context)
+	{
+		if (initialDelayMillis < 0L || initialDelayMillis > 10_000L)
+		{
+			throw new IllegalArgumentException("Synthetic keyboard delay must be between 0 and 10000ms");
+		}
+		CompletableFuture<String> result = beginInput(context);
+		if (result.isDone()) return result;
+		reporter.accept("SYNTHETIC_KEY_STARTED key=" + label +
+			" initialDelayMs=" + initialDelayMillis);
+		schedule(() -> dispatchKey(keyCode, KeyEvent.CHAR_UNDEFINED, false), initialDelayMillis, result, context);
+		schedule(() -> finish(result, "SYNTHETIC_KEY_PRESSED key=" + label), initialDelayMillis + 25L, result, context);
 		return result;
 	}
 
@@ -209,26 +235,26 @@ final class GenericClientSyntheticKeyboard implements AutoCloseable
 		return typing;
 	}
 
-	synchronized void cancel(String reason)
+	void cancel(String reason)
 	{
-		if (!typing)
+		CompletableFuture<String> result;
+		synchronized (this)
 		{
-			return;
+			if (!typing) return;
+			result = detachTyping();
 		}
+		if (result != null) result.completeExceptionally(new IllegalStateException("Synthetic keyboard cancelled: " + reason));
+		reporter.accept("SYNTHETIC_KEYBOARD_CANCELLED reason=" + reason);
+	}
+
+	private CompletableFuture<String> detachTyping()
+	{
 		typing = false;
-		for (ScheduledFuture<?> future : pending)
-		{
-			future.cancel(false);
-		}
+		for (ScheduledFuture<?> future : pending) future.cancel(false);
 		pending.clear();
 		CompletableFuture<String> result = activeResult;
 		activeResult = null;
-		if (result != null)
-		{
-			result.completeExceptionally(
-				new IllegalStateException("Synthetic keyboard cancelled: " + reason));
-		}
-		reporter.accept("SYNTHETIC_KEYBOARD_CANCELLED reason=" + reason);
+		return result;
 	}
 
 	private void dispatchCharacter(char character)
@@ -245,76 +271,65 @@ final class GenericClientSyntheticKeyboard implements AutoCloseable
 	private void dispatchKey(int keyCode, char character, boolean typed)
 	{
 		long when = System.currentTimeMillis();
-		eventDispatcher.accept(new KeyEvent(
+		eventDispatcher.accept(new GenericClientSyntheticKeyEvent(
 			canvas, KeyEvent.KEY_PRESSED, when, 0, keyCode, character));
 		if (typed)
 		{
-			eventDispatcher.accept(new KeyEvent(
+			eventDispatcher.accept(new GenericClientSyntheticKeyEvent(
 				canvas, KeyEvent.KEY_TYPED, when, 0, KeyEvent.VK_UNDEFINED, character));
 		}
-		eventDispatcher.accept(new KeyEvent(
+		eventDispatcher.accept(new GenericClientSyntheticKeyEvent(
 			canvas, KeyEvent.KEY_RELEASED, when, 0, keyCode, character));
 	}
 
-	private void schedule(Runnable runnable, long delayMillis)
+	private void schedule(Runnable runnable, long delayMillis, CompletableFuture<String> owner,
+		GenericClientActivityContext context)
 	{
-		ScheduledFuture<?> future = executor.schedule(() ->
+		pending.add(executor.schedule(() -> dispatch(owner, context, runnable),
+			Math.max(0L, delayMillis), TimeUnit.MILLISECONDS));
+	}
+
+	private void dispatch(CompletableFuture<String> owner, GenericClientActivityContext context, Runnable action)
+	{
+		try
 		{
-			synchronized (GenericClientSyntheticKeyboard.this)
+			runOnEdt(() ->
 			{
-				if (closed || !typing)
+				synchronized (this)
 				{
+					if (closed || !typing || activeResult != owner) return;
+				}
+				if (!context.isInputAllowed())
+				{
+					fail(owner, new IllegalStateException("action_cancelled"));
 					return;
 				}
-			}
-			try
-			{
-				runnable.run();
-			}
-			catch (RuntimeException exception)
-			{
-				fail(exception);
-			}
-		}, Math.max(0L, delayMillis), TimeUnit.MILLISECONDS);
-		pending.add(future);
+				action.run();
+			});
+		}
+		catch (RuntimeException exception) { fail(owner, exception); }
 	}
 
-	private synchronized void fail(RuntimeException exception)
+	private void fail(CompletableFuture<String> owner, RuntimeException exception)
 	{
-		if (!typing)
+		CompletableFuture<String> result;
+		synchronized (this)
 		{
-			return;
+			if (!typing || activeResult != owner) return;
+			result = detachTyping();
 		}
-		typing = false;
-		for (ScheduledFuture<?> future : pending)
-		{
-			future.cancel(false);
-		}
-		pending.clear();
-		CompletableFuture<String> result = activeResult;
-		activeResult = null;
-		if (result != null)
-		{
-			result.completeExceptionally(exception);
-		}
+		if (result != null) result.completeExceptionally(exception);
 	}
 
-	private void finish(CompletableFuture<String> result, String text, boolean submitted)
+	private void finish(CompletableFuture<String> owner, String receipt)
 	{
 		synchronized (this)
 		{
-			if (activeResult != result)
-			{
-				return;
-			}
-			typing = false;
-			activeResult = null;
-			pending.removeIf(ScheduledFuture::isDone);
+			if (activeResult != owner) return;
+			detachTyping();
 		}
-		result.complete((submitted ? "SYNTHETIC_TEXT_SUBMITTED" : "SYNTHETIC_TEXT_TYPED") +
-			" characters=" + text.length());
-		reporter.accept((submitted ? "SYNTHETIC_TEXT_SUBMITTED" : "SYNTHETIC_TEXT_TYPED") +
-			" characters=" + text.length());
+		owner.complete(receipt);
+		reporter.accept(receipt);
 	}
 
 	private static void runOnEdt(Runnable runnable)
@@ -335,20 +350,14 @@ final class GenericClientSyntheticKeyboard implements AutoCloseable
 	}
 
 	@Override
-	public synchronized void close()
+	public void close()
 	{
-		closed = true;
-		for (ScheduledFuture<?> future : pending)
+		CompletableFuture<String> result;
+		synchronized (this)
 		{
-			future.cancel(false);
+			closed = true;
+			result = detachTyping();
 		}
-		pending.clear();
-		typing = false;
-		CompletableFuture<String> result = activeResult;
-		activeResult = null;
-		if (result != null)
-		{
-			result.completeExceptionally(new IllegalStateException("Synthetic keyboard is closed"));
-		}
+		if (result != null) result.completeExceptionally(new IllegalStateException("Synthetic keyboard is closed"));
 	}
 }

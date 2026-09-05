@@ -36,7 +36,7 @@ codex mcp add genericclient -- \
 
 When Codex and RuneLite run on the same operating system, use that system's
 `node` command and local path instead. `GENERICCLIENT_URL` optionally overrides
-the default `http://127.0.0.1:17343` bridge address.
+the default `http://localhost:17343` bridge address.
 
 Confirm the saved entry:
 
@@ -76,6 +76,8 @@ there is never a silent global active client.
 | --- | --- |
 | `client_status` | Read player position, game state, Lua/scripts, random-event state, mouse profile, and recent logs. |
 | `client_screenshot` | Return the next fully rendered RuneLite game canvas as a PNG image. |
+| `scene_highlight` | Replace the MCP-owned scene markers for tiles, NPCs, objects, ground items, players, or the mouse tile. |
+| `scene_clear` | Clear MCP-owned scene markers without touching script markers or the mouse-tile setting. |
 | `account_snapshot` | Read one pinned frame of skills, items, bank state, quests, GE offers, and known cash. |
 | `account_note_get` | Read the Notes text stored in the bound RuneLite profile. |
 | `account_note_set` | Replace that note with an updated goal and verified progress ledger. |
@@ -111,6 +113,66 @@ system messages, and a completed script's structured return value remains on
 `client_screenshot` whenever those structures do not fully explain visible
 world, camera, widget, dialogue, or menu state. If the bank state is `unknown`,
 open the bank once before treating the cash or supply inventory as complete.
+
+Use `scene_highlight` before `client_screenshot` when the target is hard to see.
+Each call replaces the previous MCP-owned marker set, so one screenshot can show
+several related targets without leaving stale highlights behind:
+
+```json
+{
+  "markers": [
+    { "tile": { "x": 2746, "y": 2799, "plane": 0 }, "label": "Safe passage" },
+    { "npc_id": 5270, "label": "Monkey's Aunt", "color": "#ff5c7a" },
+    { "object_id": 4749, "label": "Banana tree" }
+  ]
+}
+```
+
+Call `scene_clear` when the screenshot investigation is finished. The Settings
+page's **Show mouse tile** option is independent and persists through RuneLite's
+GenericClient configuration. Mouse-tile markers are hidden while the synthetic
+mouse is moving so automation does not obscure the tile under the physical cursor;
+all other scene markers remain visible.
+
+`client_status.death_forensics` reports the latest automatic death capture.
+GenericClient retains the final 20 game ticks and writes a JSON timeline plus
+a rendered PNG under `~/.runelite/genericclient/forensics/` when HP reaches
+zero. The report includes HP and position history, poison value, nearby NPC IDs,
+combat levels and interaction targets, script/global state, safety/break state,
+and recent chat. `probable_attackers` lists NPCs observed interacting with the
+player before death.
+
+`client_status.combat_guard` reports observed attackers, damage classification,
+protection prayer and its owner. The policy resolver keeps the declared activity
+and exposes `declared_policy`, `effective_policy` and `policy_reasons`. A threat
+or the bounded damage grace suppresses discretionary behavior when the declared
+policy does not expect damage. Supported poison/venom evidence does not refresh
+that grace; an unavailable or ambiguous frame does not establish safe state.
+
+Use `gc.activity("combat", { breaks = true })` for repeatable combat that should
+permit ordinary breaks while retaining fast mouse input, expected damage and
+guard prayer ownership. `hazardous_travel` adds short walk-click refresh through
+arrival. `skilling` assigns prayer ownership to the script. A script can also
+set `prayer_owner = "script"` or disable `combat_prayer` through
+`client.behaviors.configure` when it owns protection itself.
+
+Expected damage changes discretionary policy only. Forced healing and emergency
+escape retain their own thresholds. Guard-owned prayer/potion actions are
+serialized, revoked on ownership changes and checked again before their late
+callbacks can change state. See [behavior-system.md](behavior-system.md) for
+preset fields, time-based pressure, cursor behavior and ownership precedence.
+
+Emergency food has priority over prayer, potion, and ordinary script input. The
+Lua action and walker stay paused until a game tick confirms an HP increase or
+inventory decrease. Prayer changes are serialized and stale queued changes are
+cancelled when emergency food starts. Prayer switching resumes on the first tick
+after food is confirmed. An emergency escape rechecks current HP immediately
+before it executes and is skipped when the emergency has already cleared.
+
+Random events detected during `hazardous_travel` are recorded but do not cancel
+movement or take input ownership. The record closes automatically when that NPC
+despawns; normal random-event interruption remains unchanged outside hazardous
+travel.
 
 `client_status.random_event` is GenericClient's own latched event state. When
 `attention_required` is true, inspect it with `random_event_status`, use the REPL
@@ -174,8 +236,13 @@ running are documented in
 
 ## Lua REPL
 
-`lua_eval` accepts the body of a Lua function. Use `return` to send a value back
-to MCP:
+`lua_eval` accepts the body of a Lua function. Its actions and phases are plain
+by default, including when `gc.activity` is declared. Set `humanize = true` on
+an await or phase to opt into discretionary behavior. A manually started
+standalone script continues to use its own declared policy.
+
+The current scripting interface reports `gc.read("runtime").api_version == 3`
+when a runtime frame is available. Use `return` to send a value back to MCP:
 
 ```lua
 return gc.read("player")
@@ -205,7 +272,6 @@ ID or one of its dynamic children through the shared synthetic input path:
 ```lua
 return gc.await {
   action = { type = "ui.click", widget_id = 1703941 },
-  breaks = false,
 }
 ```
 
@@ -216,7 +282,6 @@ return gc.await {
     widget_id = 20054020,
     widget_index = 12,
   },
-  breaks = true,
 }
 ```
 
@@ -225,9 +290,11 @@ Numbered game menus can be selected without moving the operating-system cursor:
 ```lua
 return gc.await {
   action = { type = "ui.key", key = "2" },
-  breaks = true,
 }
 ```
+
+Use `key = "SPACE"` for a keyboard Continue prompt whose message-box widget is
+not retained in the next game-tick snapshot.
 
 The standard 5x5 sliding-puzzle adapter returns the normalized board, blank
 position, dynamic widget ID, and a legal move sequence:
@@ -255,8 +322,7 @@ return gc.read("npcs", {
 
 Recent messages are tick-stamped and newest-first. The bounded local buffer
 includes game feedback, level-ups, unlocks, NPC/random-event speech, public and
-private chat, friends chat, clan chat, broadcasts, and notifications. Examine
-spam and RuneLite console messages are excluded:
+private chat, friends chat, clan chat, broadcasts, and notifications. Examine, console and unknown message types are excluded:
 
 ```lua
 local before = gc.read("runtime").game_tick
@@ -278,11 +344,11 @@ return gc.read("scene", {
 })
 ```
 
-The core walker uses this same frame as the local authority for external
-global map. It may execute an accessible same-plane traversal object on the
-exact oriented edge, then verifies the edge or object changed before resuming.
-Explicit locked-door feedback or an unchanged obstacle returns an `unreachable`
-walk receipt.
+The core walker uses this frame as local authority over the bundled global map.
+It matches a blocked edge against observed traversal objects, verifies the
+crossing, and records failed edges in account memory before replanning. A locked
+or exhausted door can lead to another route. Selected directed transports use
+separate observed landing and conversation postconditions.
 
 `instance` maps a canonical template tile into the current dynamic scene. A
 quest can keep one authored safespot while the server assigns a different live
@@ -336,6 +402,10 @@ local result = gc.await {
     destination = { x = 3210, y = 3424, plane = 0 },
     within = 3,
     run = true,
+    interrupt_on = { dialogue = true },
+    avoid_tiles = {
+      { x = 3208, y = 3423, plane = 0 },
+    },
   },
   timeout = { game_ticks = 600 },
 }
@@ -343,10 +413,63 @@ local result = gc.await {
 return result
 ```
 
+When an awaited action exhausts its game-tick timeout, GenericClient cancels
+the active client interaction before returning the `timed_out` receipt. A
+timed-out walk, menu action, bank operation, or other input cannot continue in
+the background and interfere with the next Lua action.
+
 `walk.to` enables run by default once at least 10% energy is available. Use
 `run = false` only for a route or phase that explicitly needs to conserve it.
 The core toggles and verifies the visible run orb without repeatedly clicking
-an unchanged state.
+an unchanged state. `avoid_tiles` accepts up to 512 WorldPoints on any valid plane. The
+pathfinder will not enter those tiles, including during replans; a player who
+starts on one may still leave it. Scripts supply this list for walkable quest
+hazards because collision alone cannot identify damaging floor tiles.
+
+Use `interrupt_on = { dialogue = true }` when Lua owns dialogue handling during
+a route. Interrupts precede arrival and new input. A dialogue match returns
+`status = "interrupted", reason = "dialogue"`, the triggering `dialogue` frame,
+and a single-use `continuation`. Selected transport conversations consume only
+their own expected pages; foreign dialogue returns to Lua. The retired alias
+is rejected.
+
+`via` supplies required corridor points in order. `arrival_tiles` supplies
+alternative allowed final tiles within the destination radius. An interrupted
+journey can pass its token as `resume`, preserving observed via and transport
+progress while Lua refreshes avoids and interrupt conditions. Tokens bind the
+account and original destination/radius/via/arrival constraints. See
+[walker-design.md](walker-design.md) for all predicates, limits and receipts.
+
+`walk.click` is the lower-level single native click operation. Its receipt does
+not establish arrival; Lua must observe the intended result when using it:
+
+```lua
+local click = gc.await {
+  action = {
+    type = "walk.click",
+    destination = { x = 2746, y = 2799, plane = 0 },
+  },
+}
+```
+
+This dispatches exactly one projected tile click and returns its input receipt.
+It does not verify arrival or click again; scripts should observe subsequent
+game ticks and fail safely if the destination is not reached.
+
+Cross-region preparation can use the standard-spellbook home teleport without
+exposing tab or spell widget IDs:
+
+```lua
+return gc.await {
+  action = { type = "travel.home_teleport" },
+  timeout = { game_ticks = 80 },
+}
+```
+
+The action returns `complete` only after observing the player in Lumbridge. If
+the spell is unavailable or on cooldown, callers receive a rejected receipt
+and should stop with `safe_transport_required`; they must not replace it with
+an unarmed cross-region walk.
 
 NPC actions require a name or numeric ID plus the exact menu option. Supplying
 both makes the ID authoritative and uses the name as an additional check. The
@@ -363,7 +486,6 @@ return gc.await {
     action = "Attack",
     within = 12,
   },
-  breaks = false,
 }
 ```
 
@@ -382,6 +504,25 @@ local result = gc.await {
 }
 ```
 
+Utility spells that target inventory items use the same selected-widget seam.
+The client opens the inventory after selecting the named spell and verifies the
+exact item ID and optional slot before dispatching the cast:
+
+```lua
+local result = gc.await {
+  action = {
+    type = "spell.cast_on_item",
+    spell = "superheat_item",
+    item_id = 440,
+  },
+}
+```
+
+Opening the tabs, selecting the spell and clicking the item share one semantic
+action boundary. Native substeps do not roll breaks. The receipt carries
+`behavior_before` and `behavior_after` at the action boundary; the obsolete
+`action_bundle` envelope has been removed.
+
 Equipped items use the same semantic menu seam. For example, Waterfall removes
 Glarial's amulet before using it on the statue without encoding the equipment
 tab or amulet-slot coordinates:
@@ -389,7 +530,6 @@ tab or amulet-slot coordinates:
 ```lua
 return gc.await {
   action = { type = "equipment.interact", id = 295, action = "Remove" },
-  breaks = false,
 }
 ```
 
@@ -401,7 +541,6 @@ instead of silently changing the training method:
 ```lua
 local autocast = gc.await {
   action = { type = "combat.set_autocast", spell = "water_strike" },
-  breaks = false,
 }
 ```
 
@@ -414,29 +553,106 @@ local protection = gc.await {
     prayer = "protect_from_missiles",
     enabled = true,
   },
-  breaks = false,
 }
 ```
+
+Inventory crafting uses exact item IDs and verifies both selection steps:
+
+```lua
+local strung = gc.await {
+  action = {
+    type = "item.use_on_item",
+    item_id = 1759,
+    target_item_id = 4022,
+  },
+}
+```
+
+Selected-item actions keep selection and target clicks inside one semantic
+boundary, including `item.use_on_object` and `item.use_on_npc`. The host may
+evaluate behavior after the operation's verified completion.
 
 The initial surface supports Protect from Magic, Missiles, and Melee. It rejects
 insufficient real Prayer levels or depleted current Prayer points instead of
 clicking a disabled widget.
 
 `dialogue.continue` and `dialogue.choose` accept `reading = false` for an exact
-time-critical prompt. Ordinary dialogue remains paced by the account profile.
+time-critical prompt. Set `keyboard = true` on `dialogue.choose` to select the
+matching visible option with its number key even when the account profile uses
+mouse dialogue. Ordinary dialogue remains paced by the account profile.
+
+At the login screen, select an exact loaded world before `session_login`:
+
+```lua
+return gc.await {
+  action = { type = "world.select", world = 302, members = true },
+}
+```
+
+When RuneLite's world list is loaded, the action verifies the membership type.
+At a fresh login screen it constructs the exact official world endpoint from
+the requested ID and membership classification. Callers should still verify the
+logged-in world from the resulting account state. The action never depends on
+the optional RuneLite World Hopper plugin.
 
 Composite workflows return their individual click receipts. `bank.loadout`
 verifies an exact inventory allowlist; `ge.buy` preserves unrelated offers and
 rejects any maximum spend that would cross the configured cash reserve. A
-same-item zero-fill buy with stale quantity or price is canceled, collected,
-and replaced with the requested JIT offer; partial fills and conflicting
-completed offers remain diagnostic stops.
+new buy starts at the displayed guide price. If it does not fill immediately,
+the zero-fill offer is canceled and collected, then retried once with the
+visible `+5%` price control. That offer waits for up to one minute. If it remains
+completely unfilled, one final offer is placed at no more than 25% above the
+guide price per item. `maximum_unit_price` remains a hard ceiling rather than
+the initial offer price. Partial fills and conflicting completed offers remain
+diagnostic stops; the final offer is never repriced again.
 
 Large unstackable purchases can set `collect_mode` to `bank`; `notes` and the
 default `items` mode are also supported. Bank collection verifies that the
 requested item left the offer panel, then collects any coin refund and requires
 the offer slot to clear. Resuming an already-funded matching offer does not
 require enough loose coins to fund it a second time.
+
+Every standalone run starts with GenericClient's automatic emergency
+consumables, emergency escape, unexpected-combat prayer, and auto-retaliate
+enabled. A Lua script that owns one or more of those decisions can disable them
+for its own run:
+
+```lua
+gc.await {
+  action = {
+    type = "client.behaviors.configure",
+    emergency_consumables = false,
+    emergency_escape = false,
+    combat_prayer = false,
+    auto_retaliate = false,
+  },
+}
+```
+
+Omitted fields use their enabled defaults. The policy is reset before another
+standalone script starts and immediately when the current script completes or
+stops, so one script cannot leak disabled framework behavior into the next. If
+a script directly enables a protection prayer, GenericClient releases that
+specific prayer on exit; a prayer that was already active remains untouched.
+Disabling emergency behavior does not clear its configured item policy; a
+script may re-enable the behavior later in the same run with another configure
+action.
+
+Lua scripts do not need to identify potion doses to cure poison. The generic
+consumable action checks the live poison varp, finds a carried standard or super
+antipoison dose, drinks it only when poison is active, and waits for the poison
+state to clear:
+
+```lua
+local cure = gc.await {
+  action = { type = "consumable.cure_poison" },
+}
+```
+
+It returns `unchanged` when the player is healthy or already protected,
+`rejected` when poison is active but no supported antipoison is carried, and
+`complete` only after the poison varp becomes non-positive. This action is
+explicitly invoked by Lua; it is not an automatic background behavior.
 
 Combat scripts can arm the framework's tick-priority emergency guard while
 keeping item policy in Lua:
@@ -452,13 +668,15 @@ gc.await {
     continue_after_consumable = true,
     escape = { x = 3225, y = 3218, plane = 0, within = 3 },
   },
-  breaks = false,
 }
 ```
 
 Remote areas that cannot be escaped by walking can use an exact carried item
 and its dialogue destination. Emergency dialogue choices bypass ordinary
-reading pace and all discretionary behavior:
+reading pace and all discretionary behavior, then press the matching option's
+number key immediately even when the behavior profile normally uses the mouse.
+If stock OSRS leaves that choice open, GenericClient invokes the same exact
+visible widget 25 milliseconds later without moving the cursor:
 
 ```lua
 gc.await {
@@ -481,17 +699,24 @@ gc.await {
       within = 10,
     },
   },
-  breaks = false,
 }
 ```
 
 Each approved consumable declares its exact heal amount. By default,
 GenericClient ends any active break and eats as soon as a food's complete heal
 fits, without stopping the script. Below 30% max HP it forces a food even when
-that low-max-HP case must overheal. If no approved food can be used at that
-forced-heal point or the hard HP floor, it stops the script and uses the
-optional escape. A configured escape now starts on any failed approved-food
-dispatch, before sustained damage can carry the player down to the hard floor.
+that low-max-HP case must overheal. After dispatching food, the guard waits for
+an observed HP increase or inventory decrease before it can dispatch another;
+an unchanged tick frame cannot consume the loadout repeatedly. If no approved
+food can be used at that forced-heal point or the hard HP floor, it stops the
+script and uses the optional escape. A configured escape starts on any failed
+approved-food dispatch, before sustained damage can carry the player down to
+the hard floor, and a verified arrival disarms that guard.
+Emergency takeover cancels the current synthetic mouse or keyboard path before
+dispatching food, so a canceled walk cannot leave the cursor busy and force an
+unnecessary slower escape. The Lua host also suspends the current action receipt:
+an input canceled for food cannot resume the coroutine and start another mouse
+action. Once food is observed, that interrupted semantic action is retried.
 Set `continue_after_consumable=false` for an encounter that
 must stop after a threshold heal. `allow_overheal=true` remains available for
 an encounter-specific hard floor above the automatic 30% rule. Use
@@ -503,53 +728,73 @@ stable idle edge without rolling another break:
 ```lua
 return gc.await {
   action = { type = "mouse.offscreen" },
-  breaks = false,
 }
 ```
 
-Each composite client interaction captures the coroutine's activity. Semantic
-actions automatically classify travel, dialogue, combat, banking, and trading;
-scripts can describe a wider state explicitly:
+Each await captures the coroutine's activity and independent policy. If no
+activity was declared, its action type selects a preset. A declaration remains
+in force until the script changes it:
 
 ```lua
-gc.activity("skilling")
+gc.activity("combat", { breaks = true })
 ```
 
-For a one-action override, put the activity on the await envelope:
-
-```lua
-gc.await {
-  activity = "banking",
-  action = { type = "object.interact", id = 4483, action = "Use" },
-}
-```
-
-Travel and skilling allow independent break and cursor-release rolls. Combat,
-banking, trading, and dialogue allow neither. A time-sensitive task can bypass
-all discretionary behavior for an interaction:
+For a one-action override, put activity and policy on the await envelope:
 
 ```lua
 return gc.await {
+  activity = "travel",
+  policy = { breaks = false, cursor_release = "none", fidget = "none" },
   action = { type = "walk.random" },
-  breaks = false,
 }
 ```
 
-Major state transitions can request the profile's heavier evaluation:
+Fields are independent. The former per-await `breaks` flag is rejected. Ordinary
+micro pressure accrues with owned active time and is consumed at an eligible
+completed action or phase, so more click boundaries do not generate more
+per-click random trials. Long breaks also begin at completed actions or phases.
+Entry checks can wait for an existing break but do not start a new one.
+
+A registered script declaring `shared_equipment` can group a short gear change:
 
 ```lua
-return gc.phase("banking.complete")
+local equipment = gc.require("shared_equipment")
+return gc.intent("gear.equip", function()
+  local staff = equipment.equip(1387, "Wield")
+  if staff.status ~= "complete" and staff.status ~= "unchanged" then return staff end
+  return equipment.equip(1059, "Wear")
+end)
 ```
 
-An activity transition can be atomic with the phase:
+Nested scopes share the outer boundary. Await receipts retain its `intent` name,
+errors unwind it, and safety/takeover input remains independent. Keep long
+approaches and training loops outside scopes.
+
+Major state transitions can evaluate a phase, optionally changing the activity
+first:
 
 ```lua
 return gc.phase("route.start", { activity = "travel" })
 ```
 
+The declared activity and script state stay separate. The resolver reports its
+effective field overrides and reasons without changing the script's activity
+label. Detailed presets and timing rules are in
+[behavior-system.md](behavior-system.md).
+
+When no standalone script or REPL is running, global state is idle, no combat,
+random event, emergency, or client input is active, and the cursor is inside the
+canvas for two stable ticks, GenericClient parks it at the profile's configured
+off-screen edge. That idle park is preemptible: a newly started client action
+cancels it and takes the cursor immediately.
+
 `gc.read("behavior")` returns the same structured state exposed by
 `behavior_status`, including the account-seeded or manually overridden typing
-speed in words per minute.
+speed in words per minute. `dialogue_input_mode` is independently seeded per
+account as `keyboard` or `mouse` and can be overridden in Settings. Keyboard
+mode emits hotkey presses without typed characters, so dialogue digits cannot
+leak into chat. Mouse mode preserves the cursor's horizontal lane across stacked
+options and moves primarily up or down with only slight X deviation.
 
 ## Standalone scripts
 
@@ -610,20 +855,29 @@ return {
 }
 ```
 
-Every file returns one descriptor table with a `run(input)` function. Inside
+Every entry file returns one descriptor table with a `run(input)` function. Inside
 that function, scripts use only:
 
 ```lua
 gc.read(subject, query)
 gc.await(request)
 gc.log(level, event, fields)
-gc.activity(name) -- omit name to read the current descriptor
+gc.activity(name, policy) -- omit name to read the declared activity
 gc.state(name) -- task-specific script state; omit name to read it
 gc.phase(name, options)
-gc.overlay(rows)
+gc.intent(name, fn) -- one boundary around a short sequence
+gc.walk.to(options) -- destination journey with constraints and continuation
+gc.overlay(rows, markers)
 gc.next_action()
 gc.require(name) -- only modules declared by this manifest entry
+gc.checkpoint(key) -- read an account-and-script-scoped integer or nil
+gc.checkpoint(key, value) -- atomically persist a non-negative integer
+gc.clear_checkpoint(key)
 ```
+
+Checkpoints live under `~/.runelite/genericclient/checkpoints/` and survive a
+manual Stop, manifest reload, and client restart. They do not replace observed
+game state: a script owns when a checkpoint is valid and when to clear it.
 
 A script can declare a dropdown without adding Java UI code:
 
@@ -670,8 +924,14 @@ with its display name and wall-clock runtime. `gc.overlay` may add up to four
 label/value rows. Passing `nil` clears those rows, and the whole overlay hides
 when the script stops or completes.
 
-The easiest programmatic path is `script_save`, which writes both the Lua file
-and manifest entry. Its optional `random_events` integer array registers that
+The optional second `gc.overlay` argument uses the same scene-marker format as
+`scene_highlight`: `tile`, `npc_id`, `object_id`, `ground_item_id`,
+`player_name`, or `mouse_tile=true`, plus optional `label` and `color` fields.
+
+`script_save` writes the entry source and manifest metadata. Updating an
+existing script preserves its filename and declared module bindings. A new ID
+cannot overwrite another registered script's source file. The current catalog
+and client use scripting API 3. Its optional `random_events` integer array registers that
 script as the unique solver for those supported event NPC IDs. For manual
 editing, add the file and manifest row, then
 press **Reload list** in Automations or call `script_reload_manifest`.
@@ -684,10 +944,19 @@ standalone script is waiting on ticks.
 ## Developer checks
 
 ```bash
-./gradlew test
+xvfb-run -a ./gradlew --offline qualityReport scriptCatalogAudit routeAudit pmdRouteAudit
 cd mcp
 npm test
 ```
 
-The Java tests cover the manifest, persistent REPL, and loopback RPC. The Node
-tests cover bridge errors and MCP tool registration/forwarding.
+For local client runs, `mcp/scripts/wait-client.ps1` exits `0` only for a
+verified successful `COMPLETED` run. Exit `3` is random-event attention, `4` is
+a Lua fault or an explicit failure result, `5` is a vanished/stopped run, `6` is HP zero or a new death-forensics
+tick, and `2` is timeout. A death receipt includes the forensic report path.
+
+The native catalog audit loads every registered descriptor and module through
+the real Lua VM without gameplay actions. The catalog also runs
+`python3 tools/validate.py` for syntax, policy lint and Lua behavior scenarios.
+Native tests cover ownership, cancellation, registry reload and API contracts;
+MCP tests preserve nested journey and intent receipts. Packaging, installation
+and fresh live acceptance remain separate gates.

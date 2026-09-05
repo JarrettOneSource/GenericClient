@@ -7,10 +7,8 @@ import com.google.gson.annotations.SerializedName;
 import java.io.IOException;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -122,13 +120,19 @@ final class GenericClientScriptRegistry
 			throw new IllegalArgumentException("Script source cannot be empty");
 		}
 
-		String file = id + ".lua";
+		Script previous = state.byId.get(id);
+		String file = previous == null ? id + ".lua" : previous.file;
+		for (Script registered : state.scripts)
+		{
+			if (registered.file.equals(file) && !registered.id.equals(id))
+				throw new IllegalArgumentException("Script file " + file + " is already used by " + registered.id);
+		}
 		Script saved = new Script(
 			id,
 			cleanName,
 			cleanDescription,
 			file,
-			Collections.emptyMap(),
+			previous == null ? Collections.emptyMap() : previous.modules,
 			validateRandomEvents(randomEvents));
 		for (int npcId : saved.randomEvents)
 		{
@@ -139,7 +143,7 @@ final class GenericClientScriptRegistry
 					"Random-event NPC " + npcId + " is already handled by script " + existing.id);
 			}
 		}
-		writeAtomically(directory.resolve(file), source);
+		GenericClientAtomicFile.write(directory.resolve(file), source);
 
 		List<Script> scripts = new ArrayList<>(state.scripts);
 		scripts.removeIf(existing -> existing.id.equals(id));
@@ -278,7 +282,7 @@ final class GenericClientScriptRegistry
 			manifest.scripts.add(entry);
 		}
 		String json = new GsonBuilder().setPrettyPrinting().create().toJson(manifest) + System.lineSeparator();
-		writeAtomically(directory.resolve(MANIFEST_FILE), json);
+		GenericClientAtomicFile.write(directory.resolve(MANIFEST_FILE), json);
 	}
 
 	private Path sourcePath(Script script)
@@ -305,21 +309,6 @@ final class GenericClientScriptRegistry
 			Collections.unmodifiableMap(randomEventSolvers));
 	}
 
-	private static void writeAtomically(Path path, String value) throws IOException
-	{
-		Path temporary = path.resolveSibling(path.getFileName() + ".tmp");
-		Files.writeString(temporary, value, StandardCharsets.UTF_8);
-		try
-		{
-			Files.move(temporary, path,
-				StandardCopyOption.ATOMIC_MOVE,
-				StandardCopyOption.REPLACE_EXISTING);
-		}
-		catch (AtomicMoveNotSupportedException exception)
-		{
-			Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
-		}
-	}
 
 	private static void validateId(String id)
 	{

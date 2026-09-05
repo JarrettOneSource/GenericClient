@@ -41,11 +41,15 @@ Click the GenericClient toolbar icon to open the resizable dashboard popout:
 - **Schedules** shows named time windows, rule decisions, the active rule lease,
   and Enable/Pause/Reload controls.
 - **Console** contains the Lua REPL plus manual status and walk checks.
-- **Settings** contains mouse movement/trail options and the behavior profile.
+- **Settings** contains mouse movement/trail options, a persistent **Show mouse
+  tile** switch with world coordinates, and the behavior profile.
 
 Settings can save account-specific behavior overrides or restore the original
 seeded profile. The dashboard intentionally omits low-value runtime counters;
 complete diagnostics remain available through the Console and MCP.
+The profile also chooses keyboard-only or mouse-only dialogue interaction.
+Mouse dialogue choices retain their horizontal lane across stacked options;
+keyboard choices use non-text hotkeys so they cannot type into chat.
 During a long break, a compact **Break** banner appears above the connection
 status in the dashboard sidebar. Its × button ends that break immediately and
 restores a logged-out session before script execution resumes.
@@ -83,164 +87,42 @@ for the web contract.
 
 ## Lua scripts
 
-GenericClient creates an empty external script registry at:
+The current scripting interface is API 3, reported by
+`gc.read("runtime").api_version`. Install the matching
+[GenericClientScripts catalog](https://github.com/Pernasua/GenericClientScripts)
+with the client. Scripts live under `~/.runelite/genericclient/scripts/`;
+startup creates an empty manifest only when one is absent.
 
-```text
-~/.runelite/genericclient/scripts/
-```
+`manifest.json` registers entry files, optional named modules and random-event
+solver IDs. Modules load through `gc.require` and remain inside the script's
+sandbox. `script_get` exposes their sources; `script_save` preserves an existing
+filename and module bindings. External edits take effect after manifest reload
+and a new start/restart. The client does not update the external catalog by
+itself.
 
-Install the maintained script catalog from
-[GenericClientScripts](https://github.com/Pernasua/GenericClientScripts), or
-create scripts through the dashboard or MCP. `manifest.json` registers the
-scripts shown in Automations. Press **Reload manifest** after editing files
-manually.
+| Interface | Purpose |
+| --- | --- |
+| `gc.read(subject, query)` | Read copied world/account/UI state from one pinned frame |
+| `gc.await(request)` | Wait for ticks or a semantic action receipt |
+| `gc.activity(name, policy)` | Declare independent behavior and safety policy |
+| `gc.state(name)`, `gc.phase(name, options)` | Report script state and evaluate major transitions |
+| `gc.intent(name, fn)` | Share one behavior boundary across a short sequence |
+| `gc.walk.to(options)` | Plan and execute a constrained destination journey |
+| `gc.log`, `gc.overlay` | Publish diagnostics and up to four overlay rows/scene markers |
+| `gc.next_action()` | Cooperatively consume a declared script button |
+| `gc.require(name)` | Load a manifest-declared module |
+| `gc.checkpoint`, `gc.clear_checkpoint` | Persist or clear an account/script integer checkpoint |
 
-An optional `random_events` array registers a standalone script as the solver
-for those random-event NPC IDs. GenericClient detects owned events internally,
-interrupts normal automation, and never requires RuneLite's Random Events plugin.
-Solver implementations live in GenericClientScripts.
-The lifecycle and solver template are in
-[`docs/random-events.md`](docs/random-events.md).
+An entry file returns a descriptor with `run(input)`, optional choice inputs
+and optional action buttons. The dashboard and MCP validate the same input
+metadata. A complete destination script can use:
 
-Large scripts may declare named modules in that same manifest entry. Modules
-stay inside the script sandbox and are loaded with `gc.require`:
-
-```json
-"modules": {
-  "config": "my-script/config.lua",
-  "actions": "my-script/actions.lua"
+```lua
+local destinations = {
+  varrock = { x = 3210, y = 3424, plane = 0 },
+  grand_exchange = { x = 3164, y = 3487, plane = 0 },
 }
-```
 
-```lua
-local config = gc.require("config")
-```
-
-Each module returns one Lua value, normally a small table of data and functions.
-GenericClient reads only the declared files; Lua still has no unrestricted
-filesystem or `package` access.
-
-The catalog README documents its included automations and script-specific
-validation state.
-
-The current scripting interface intentionally contains only:
-
-```lua
-gc.read(subject, query)
-gc.await(request)
-gc.log(level, event, fields)
-gc.activity(name)
-gc.state(name)
-gc.phase(name, options)
-gc.overlay(rows)
-gc.next_action()
-gc.require(name) -- only for modules declared by this script
-```
-
-Implemented reads are `runtime`, `player`, `random_event`, `npcs`, `messages`,
-`objects`, `ground_items`, `dialogue`, `vars`, `scene`, `instance`, `widgets`,
-`behavior`, `skills`, `inventory`, `equipment`, `bank`,
-`quests`, `grand_exchange`, `cash`, and the
-combined `account` frame. `combat` reports the current attack-style index and
-auto-retaliate state. A bank read explicitly reports `unknown`, `open`, or
-`cached`; it never treats an unseen bank as empty. NPC rows distinguish scene
-presence, canvas clickability, and line of sight. `messages` exposes a bounded
-history of client messages, including public chat. Implemented waits are game
-ticks, tick counts, `walk.random`, `walk.to`, and `mouse.offscreen`. New semantic
-actions are added when an automation actually needs them. Object, inventory,
-equipment, item-on-entity, dialogue, bank-loadout, GE-buy, UI-close, and combat-cast
-actions use the same receipt model. Lua can arm or clear the framework's
-tick-priority emergency guard with `safety.configure` and `safety.clear`.
-`npc.interact`
-selects the nearest matching NPC, faces it once when needed, resolves the requested menu option, and uses
-the same template-generated synthetic cursor for either a left-click or
-context-menu interaction.
-
-```lua
-local result = gc.await {
-  action = {
-    type = "npc.interact",
-    name = "Banker",
-    action = "Bank",
-    within = 8,
-  },
-  breaks = false,
-}
-```
-
-Combat settings use semantic client interactions too:
-
-```lua
-local result = gc.await {
-  action = { type = "combat.set_style", style = 0 },
-  breaks = false,
-}
-```
-
-```lua
-local result = gc.await {
-  action = { type = "combat.set_auto_retaliate", enabled = false },
-  breaks = false,
-}
-```
-
-`walk.to` uses the pinned global collision map outside the loaded scene and the
-current RuneLite collision frame inside it. Closed live edges are routeable
-only when the exact wall orientation contains an approved traversal object.
-For each ordinary leg it turns the client camera, selects the farthest currently
-projectable route tile, and follows it with a template-generated synthetic
-canvas, context-menu, or minimap click without moving the operating-system
-cursor:
-
-```lua
-local result = gc.await {
-  action = {
-    type = "walk.to",
-    destination = { x = 3210, y = 3424, plane = 0 },
-    within = 3,
-    run = true,
-  },
-  timeout = { game_ticks = 600 },
-}
-```
-
-Walking enables run by default when at least 10% energy is available, verifies
-the orb state, and may enable it again after energy drains and recovers. A
-script phase that must conserve energy sets `run = false` on that `walk.to`.
-
-Every composite mouse-movement-and-click interaction captures an immutable
-activity context. Travel and skilling independently roll for a break and cursor
-release after every route click; combat, banking, trading, and dialogue suppress
-both. `gc.activity("questing")` describes the broad workflow while semantic
-actions select their safe leaf activity. A time-sensitive sequence can bypass
-all discretionary behavior for its interactions:
-
-```lua
-local result = gc.await {
-  action = { type = "walk.random" },
-  breaks = false,
-}
-```
-
-Major completed states can request a heavier profile-shaped evaluation:
-
-```lua
-gc.phase("banking.complete")
-```
-
-This slice supports one-tile, same-plane, non-instanced ground movement and
-bounded same-plane traversal actions such as opening an accessible door. It
-verifies the live edge or object state before resuming. Explicit locked-door
-feedback returns an immediate unreachable receipt; stairs, ships, teleports, and other plane or interface
-transitions remain explicit future handlers. Exact design, map provenance,
-diagnostics, and live receipts are in
-[`docs/walker-design.md`](docs/walker-design.md).
-
-Each Lua file returns a descriptor. The optional `inputs` and `actions` arrays
-tell the dashboard what controls to render; `run(input)` receives the selected
-values. The first concrete input type is `choice`:
-
-```lua
 return {
   inputs = {
     {
@@ -254,45 +136,56 @@ return {
       },
     },
   },
-  actions = {
-    { id = "refresh", label = "Refresh" },
-  },
   run = function(input)
-    gc.await { event = "game.tick" }
-    gc.overlay {
-      { label = "Destination", value = input.destination },
-      { label = "State", value = "Waiting" },
+    gc.activity("travel")
+    local journey = gc.walk.to {
+      destination = destinations[input.destination],
+      within = 3,
+      ticks = 600,
+      interrupt_on = { dialogue = true },
     }
-    local action = gc.next_action()
-    gc.log("info", "selected", { destination = input.destination })
+    if journey.status ~= "arrived" then return journey end
+    gc.phase("route.arrived")
+    gc.await { action = { type = "mouse.offscreen" } }
+    return journey
   end,
 }
 ```
 
-The dashboard and `script_run` validate supplied values against that descriptor.
-Active Script buttons enqueue their declared ID; Lua consumes one queued ID at
-a safe point with `gc.next_action()`. Stop and Restart remain immediate host
-actions. `gc.overlay` accepts at most three label/value rows. While a script is
-running, RuneLite renders those rows beneath a compact automatic name/runtime
-header; the overlay disappears when the script stops or completes.
-The destination names and coordinates in Walker stay in Lua; collision loading,
-pathfinding, camera projection, and synthetic clicking stay in the Java plugin.
-After its route and arrival phase finish, Walker uses `mouse.offscreen` to park
-the synthetic cursor at the active behavior profile's stable idle edge. The
-next action randomizes a different coordinate along that same side before
-generating its return path.
+Journeys combine bundled global terrain with current scene collision and
+eligible directed transports. `via` preserves required corridors,
+`avoid_tiles` excludes quest hazards, `arrival_tiles` restricts allowed final
+tiles, and `resume` carries observed progress after an interruption. Native
+input verifies the selected object, widget or conversation and observes the
+transport landing. Door failures are remembered per account and trigger
+replanning. The [walker contract](docs/walker-design.md) defines limits,
+interrupt priority, cancellation and receipt fields.
 
-GenericClient never refreshes or replaces external scripts. When no manifest is
-present it creates an empty one; installing or updating a script catalog is an
-explicit operation.
+Semantic actions own their native substeps and one completion boundary. Micro
+pressure accrues with owned active time; completed actions and phases provide
+places to take a due break. Intents suppress discretionary behavior between
+related steps, while long approaches and training loops stay outside them.
+Use `gc.activity("combat", { breaks = true })` for repeatable combat that should
+retain combat's damage and prayer policy while allowing breaks. Expected damage
+does not disable forced healing or emergency escape.
 
-The active design is documented in
-[`docs/lua-scripting-design.md`](docs/lua-scripting-design.md). The packet-driven
-headless design is saved separately and remains deferred.
+Operator REPL calls are plain unless an await or phase explicitly sets
+`humanize = true`. Standalone scripts keep their declared policy. One-off
+urgent behavior belongs in a `policy` table; the per-await `breaks` field and
+`interrupt_on_dialogue` alias are rejected.
 
-The seeded profile, active-time hazard, persistence, phase weighting,
-off-canvas idle, logout/re-login flow, and numeric envelopes are documented in
-[`docs/behavior-system.md`](docs/behavior-system.md).
+Snapshots include player, skills, inventory, equipment, bank cache, quests,
+offers, cash, scene entities, widgets and dialogue. Unknown or stale data cannot
+stand in for a fresh account frame. A dispatched action is not automatically a
+quest postcondition; the script observes the expected state before advancing.
+
+The detailed interfaces are documented in
+[Lua runtime](docs/lua-scripting-design.md),
+[behavior system](docs/behavior-system.md), and
+[MCP/Lua control](docs/mcp-lua-control.md).
+Random-event ownership and solver registration are described in
+[random-events.md](docs/random-events.md). Source tests, a loaded artifact and
+fresh live receipts remain separate acceptance steps.
 
 ## Scheduled rules
 
@@ -345,9 +238,10 @@ limit are documented in
 
 ## MCP control
 
-The included stdio MCP server lets Codex read live, behavior, and scheduling state, capture
-the fully rendered game canvas as a PNG, execute Lua snippets, save and run
-scripts, and control the Jagex-backed game session.
+The included stdio MCP server lets Codex read live, behavior, and scheduling
+state, highlight scene tiles/entities for inspection, capture the fully rendered
+game canvas as a PNG, execute Lua snippets, save and run scripts, and control the
+Jagex-backed game session.
 GenericClient exposes its control bridge only on `127.0.0.1`; the default port
 is `17343`.
 
@@ -380,6 +274,15 @@ live in:
 
 The active behavior profile supplies the account's mouse movement duration;
 Settings can save a manual duration as part of that account-specific profile.
+
+Physical mouse movement, dragging, canvas entry/exit, or a press immediately
+preempts synthetic input and pauses the current Lua action. After 1.5 seconds
+without another physical mouse event, GenericClient resumes the same script,
+retaining verified input or retrying a canceled attempt from fresh state. A physical Escape keypress is the manual stop:
+it cancels client input, stops Lua, and keeps Idle from moving the cursor until
+another standalone automation starts. Synthetic mouse and key events never
+trigger either boundary. Emergency food or escape already in progress retains
+input ownership; Escape remains the explicit way to stop it.
 
 Select, reload, and record profiles from the dashboard's Settings page. The
 matcher, profile schema, recording flow, effects, and source data hashes are documented in

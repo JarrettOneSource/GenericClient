@@ -1,31 +1,26 @@
 package com.genericclient;
 
-import java.awt.Point;
-import java.awt.Rectangle;
-import java.awt.Shape;
+import static com.genericclient.GenericClientWorldSnapshot.worldMap;
+
+import com.genericclient.GenericClientWorldSnapshot.PlayerSnapshot;
+import com.genericclient.GenericClientWorldSnapshot.NpcSnapshot;
+
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
-import net.runelite.api.NPC;
-import net.runelite.api.NPCComposition;
 import net.runelite.api.Player;
-import net.runelite.api.Skill;
-import net.runelite.api.WorldView;
-import net.runelite.api.coords.LocalPoint;
+import net.runelite.api.Tile;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.api.gameval.VarPlayerID;
 
 final class GenericClientSnapshot
 {
+	private static final java.util.regex.Pattern LOCKED_WORD =
+		java.util.regex.Pattern.compile("\\blocked\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
 	private static final int MAX_QUERY_RESULTS = 100;
 	private static final Set<String> QUEST_SUBJECTS = Set.of(
 		"vars", "objects", "ground_items", "dialogue");
@@ -47,13 +42,12 @@ final class GenericClientSnapshot
 	private final long gameTick;
 	private final String gameState;
 	private final int gameRevision;
-	private final PlayerSnapshot player;
-	private final List<NpcSnapshot> npcs;
+	private final GenericClientWorldSnapshot world;
 	private final GenericClientAccountSnapshot account;
 	private final GenericClientQuestSnapshot quest;
 	private final List<GenericClientGameMessageBuffer.Message> messages;
-	private final GenericClientSceneCollision sceneCollision;
 	private final GenericClientWidgetSnapshot widgets;
+	private final WorldPoint mouseTile;
 
 	GenericClientSnapshot(
 		long gameTick,
@@ -148,16 +142,52 @@ final class GenericClientSnapshot
 		GenericClientSceneCollision sceneCollision,
 		GenericClientWidgetSnapshot widgets)
 	{
+		this(gameTick, gameState, gameRevision, player, npcs, account, quest, messages,
+			sceneCollision, widgets, null);
+	}
+
+	GenericClientSnapshot(
+		long gameTick,
+		String gameState,
+		int gameRevision,
+		PlayerSnapshot player,
+		List<NpcSnapshot> npcs,
+		GenericClientAccountSnapshot account,
+		GenericClientQuestSnapshot quest,
+		List<GenericClientGameMessageBuffer.Message> messages,
+		GenericClientSceneCollision sceneCollision,
+		GenericClientWidgetSnapshot widgets,
+		WorldPoint mouseTile)
+	{
+		this(gameTick, gameState, gameRevision, new GenericClientWorldSnapshot(player, npcs, sceneCollision),
+			account, quest, messages, widgets, mouseTile);
+	}
+
+	private GenericClientSnapshot(
+		long gameTick,
+		String gameState,
+		int gameRevision,
+		GenericClientWorldSnapshot world,
+		GenericClientAccountSnapshot account,
+		GenericClientQuestSnapshot quest,
+		List<GenericClientGameMessageBuffer.Message> messages,
+		GenericClientWidgetSnapshot widgets,
+		WorldPoint mouseTile)
+	{
 		this.gameTick = gameTick;
 		this.gameState = gameState;
 		this.gameRevision = gameRevision;
-		this.player = player;
-		this.npcs = Collections.unmodifiableList(new ArrayList<>(npcs));
+		this.world = world;
 		this.account = account;
 		this.quest = quest;
 		this.messages = Collections.unmodifiableList(new ArrayList<>(messages));
-		this.sceneCollision = sceneCollision;
 		this.widgets = widgets;
+		this.mouseTile = mouseTile;
+	}
+
+	String questStateKey()
+	{
+		return account.questStateKey();
 	}
 
 	static GenericClientSnapshot capture(Client client, long gameTick)
@@ -182,109 +212,21 @@ final class GenericClientSnapshot
 		List<GenericClientGameMessageBuffer.Message> messages)
 	{
 		Player localPlayer = client.getLocalPlayer();
-		WorldCapture world = captureWorld(client, localPlayer);
+		GenericClientWorldSnapshot world = GenericClientWorldSnapshot.capture(client, localPlayer);
 
+		Tile selectedTile = localPlayer == null
+			? null
+			: localPlayer.getWorldView().getSelectedSceneTile();
 		return new GenericClientSnapshot(
 			gameTick,
 			client.getGameState().name(),
 			client.getRevision(),
-			world.player,
-			world.npcs,
+			world,
 			GenericClientAccountSnapshot.capture(client, bankCache, questCache, gameTick),
 			GenericClientQuestSnapshot.capture(client, localPlayer),
 			messages,
-			world.collision,
-			GenericClientWidgetSnapshot.capture(client));
-	}
-
-	private static WorldCapture captureWorld(Client client, Player localPlayer)
-	{
-		if (localPlayer == null || localPlayer.getWorldLocation() == null)
-		{
-			return WorldCapture.empty();
-		}
-		WorldPoint playerPoint = localPlayer.getWorldLocation();
-		WorldView worldView = localPlayer.getWorldView();
-		GenericClientSceneCollision collision =
-			GenericClientSceneCollision.capture(worldView, playerPoint.getPlane());
-		LocalPoint localDestination = client.getLocalDestinationLocation();
-		WorldPoint worldDestination = localDestination == null
-			? null
-			: WorldPoint.fromLocal(
-				worldView,
-				localDestination.getX(),
-				localDestination.getY(),
-				playerPoint.getPlane());
-		PlayerSnapshot player = new PlayerSnapshot(
-			Objects.toString(localPlayer.getName(), ""),
-			playerPoint.getX(),
-			playerPoint.getY(),
-			playerPoint.getPlane(),
-			worldView.getId(),
-			localPlayer.getAnimation(),
-			localPlayer.getInteracting() == null ? null : localPlayer.getInteracting().getName(),
-			client.getBoostedSkillLevel(Skill.HITPOINTS),
-			client.getRealSkillLevel(Skill.HITPOINTS),
-			client.getEnergy(),
-			client.getVarpValue(VarPlayerID.OPTION_RUN) == 1,
-			worldDestination);
-
-		Rectangle viewport = GenericClientMenuInput.viewportBounds(client);
-		List<NpcSnapshot> npcs = new ArrayList<>();
-		for (NPC npc : worldView.npcs())
-		{
-			NpcSnapshot snapshot = captureNpc(localPlayer, playerPoint, worldView, viewport, npc);
-			if (snapshot != null)
-			{
-				npcs.add(snapshot);
-			}
-		}
-		npcs.sort(Comparator
-			.comparingInt(NpcSnapshot::getDistance)
-			.thenComparingInt(NpcSnapshot::getIndex));
-		return new WorldCapture(player, npcs, collision);
-	}
-
-	private static NpcSnapshot captureNpc(
-		Player player,
-		WorldPoint playerPoint,
-		WorldView worldView,
-		Rectangle viewport,
-		NPC npc)
-	{
-		if (npc == null || npc.getWorldLocation() == null)
-		{
-			return null;
-		}
-		WorldPoint location = npc.getWorldLocation();
-		NPCComposition composition = getComposition(npc);
-		Shape clickShape = npc.getConvexHull();
-		if (clickShape == null)
-		{
-			clickShape = npc.getCanvasTilePoly();
-		}
-		Point canvasPoint = GenericClientMenuInput.firstPointInside(clickShape, viewport);
-		return new NpcSnapshot(
-			npc.getIndex(),
-			npc.getId(),
-			Objects.toString(npc.getName(), "<unnamed>"),
-			location.getX(),
-			location.getY(),
-			location.getPlane(),
-			playerPoint.distanceTo(location),
-			npc.getCombatLevel(),
-			npc.getAnimation(),
-			npc.getInteracting() == null ? null : npc.getInteracting().getName(),
-			composition == null ? 1 : composition.getSize(),
-			getActions(composition),
-			npc.getLocalLocation() != null && worldView.contains(npc.getLocalLocation()),
-			canvasPoint != null,
-			GenericClientNpcInput.hasLineOfSight(player, npc),
-			npc.isDead(),
-			npc.getHealthRatio(),
-			npc.getHealthScale(),
-			canvasPoint,
-			visibleBounds(clickShape, viewport));
+			GenericClientWidgetSnapshot.capture(client),
+			selectedTile == null ? null : selectedTile.getWorldLocation());
 	}
 
 	Object read(String subject, Map<?, ?> query)
@@ -302,19 +244,23 @@ final class GenericClientSnapshot
 			case "runtime":
 				return runtimeMap();
 			case "player":
-				return player == null ? null : player.toMap(gameState);
+				return world.player == null ? null : world.player.toMap(gameState);
 			case "account":
 				return accountMap();
 			case "npcs":
 				return queryNpcs(query);
 			case "messages":
 				return queryMessages(query);
+			case "mouse_tile":
+				return mouseTile == null
+					? null
+					: worldMap(mouseTile.getX(), mouseTile.getY(), mouseTile.getPlane());
 			case "scene":
-				return sceneCollision.inspect(
+				return world.collision.inspect(
 					worldPoint(query == null ? null : query.get("from"), getPlayerWorldPoint()),
 					worldPoint(query == null ? null : query.get("to"), null));
 			case "instance":
-				return sceneCollision.inspectInstance(
+				return world.collision.inspectInstance(
 					worldPoint(query == null ? null : query.get("template"), null));
 			case "widgets":
 				return widgets.read(query);
@@ -325,39 +271,71 @@ final class GenericClientSnapshot
 		}
 	}
 
+	PlayerSnapshot getPlayer()
+	{
+		return world.player;
+	}
+
+	List<NpcSnapshot> getNpcs()
+	{
+		return world.npcs;
+	}
+
+	List<GenericClientQuestSnapshot.ObjectSnapshot> getObjects() { return quest.getObjects(); }
+	String questState(String key) { return account.questState(key); }
+
 	long getGameTick()
 	{
 		return gameTick;
 	}
 
+	boolean isLoggedIn() { return GameState.LOGGED_IN.name().equals(gameState); }
+
 	WorldPoint getPlayerWorldPoint()
 	{
-		return player == null ? null : new WorldPoint(player.x, player.y, player.plane);
+		return world.player == null ? null : new WorldPoint(world.player.x, world.player.y, world.player.plane);
 	}
 
 	int getCurrentHitpoints()
 	{
-		return player == null ? -1 : player.currentHitpoints;
+		return world.player == null ? -1 : world.player.currentHitpoints;
 	}
 
 	int getMaximumHitpoints()
 	{
-		return player == null ? -1 : player.maxHitpoints;
+		return world.player == null ? -1 : world.player.maxHitpoints;
 	}
+
+	long getInventoryQuantity(int itemId)
+	{
+		return account.inventoryQuantity(itemId);
+	}
+
+	Boolean inventoryContainsPrefix(String prefix) { return account.inventoryContainsPrefix(prefix); }
+	GenericClientWidgetSnapshot getWidgets() { return widgets; }
+	GenericClientQuestSnapshot.DialogueSnapshot getDialogue() { return quest.getDialogue(); }
+	Integer boostedSkill(String skill) { return account.boostedSkill(skill); }
+	Integer varp(int id) { return quest.varp(id); }
+	Integer varbit(int id) { return quest.varbit(id); }
 
 	int getRunEnergy()
 	{
-		return player == null ? 0 : player.runEnergy;
+		return world.player == null ? 0 : world.player.runEnergy;
 	}
 
 	boolean isRunEnabled()
 	{
-		return player != null && player.runEnabled;
+		return world.player != null && world.player.runEnabled;
+	}
+
+	boolean isDialogueOpen()
+	{
+		return quest.isDialogueOpen();
 	}
 
 	boolean hasLiveSceneCollision()
 	{
-		return sceneCollision.isAvailable();
+		return world.collision.isAvailable();
 	}
 
 	RouteBlock findRouteBlock(
@@ -375,7 +353,7 @@ final class GenericClientSnapshot
 		{
 			WorldPoint from = path.get(index - 1);
 			WorldPoint to = path.get(index);
-			if (!Boolean.FALSE.equals(sceneCollision.canMove(from, to)))
+			if (!Boolean.FALSE.equals(world.collision.canMove(from, to)))
 			{
 				continue;
 			}
@@ -401,7 +379,7 @@ final class GenericClientSnapshot
 	{
 		WorldPoint from = new WorldPoint(x, y, plane);
 		WorldPoint to = new WorldPoint(x + dx, y + dy, plane);
-		Boolean liveAllowed = sceneCollision.canMove(from, to);
+		Boolean liveAllowed = world.collision.canMove(from, to);
 		if (liveAllowed == null)
 		{
 			return staticAllowed;
@@ -415,7 +393,7 @@ final class GenericClientSnapshot
 		{
 			return true;
 		}
-		Boolean liveMovement = sceneCollision.canMove(block.from, block.to);
+		Boolean liveMovement = world.collision.canMove(block.from, block.to);
 		if (Boolean.TRUE.equals(liveMovement))
 		{
 			return true;
@@ -444,8 +422,8 @@ final class GenericClientSnapshot
 			{
 				break;
 			}
-			String lower = message.getText().toLowerCase(java.util.Locale.ROOT);
-			if (lower.contains("locked") && !lower.contains("unlocked"))
+			if (!"gamemessage".equals(message.getType()) && !"spam".equals(message.getType())) continue;
+			if (LOCKED_WORD.matcher(message.getText()).find())
 			{
 				return message.getText();
 			}
@@ -469,13 +447,42 @@ final class GenericClientSnapshot
 			int edgeDistance = Math.min(
 				distance(object.getWorldPoint(), from),
 				distance(object.getWorldPoint(), to));
-			if (spansEdge(object, from, to) && edgeDistance < bestDistance)
+			if ((spansEdge(object, from, to) || adjacentPairedGate(object, action, from, to)) &&
+				edgeDistance < bestDistance)
 			{
 				best = object;
 				bestDistance = edgeDistance;
 			}
 		}
 		return best;
+	}
+
+	private static boolean adjacentPairedGate(
+		GenericClientQuestSnapshot.ObjectSnapshot object,
+		String action,
+		WorldPoint from,
+		WorldPoint to)
+	{
+		if (!"wall".equals(object.getKind()) || !"Open".equalsIgnoreCase(action) ||
+			!object.getName().toLowerCase(java.util.Locale.ROOT).contains("gate") ||
+			(object.getOrientationA() | object.getOrientationB()) == 0 ||
+			Math.abs(from.getX() - to.getX()) + Math.abs(from.getY() - to.getY()) != 1)
+		{
+			return false;
+		}
+		// The other leaf lies one tile along the wall, with the same crossing direction.
+		int offsetX = from.getX() == to.getX() ? 1 : 0;
+		int offsetY = offsetX == 0 ? 1 : 0;
+		for (int sign : new int[]{-1, 1})
+		{
+			if (spansEdge(object,
+				new WorldPoint(from.getX() + sign * offsetX, from.getY() + sign * offsetY, from.getPlane()),
+				new WorldPoint(to.getX() + sign * offsetX, to.getY() + sign * offsetY, to.getPlane())))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static boolean isTraversalObject(
@@ -503,6 +510,11 @@ final class GenericClientSnapshot
 		WorldPoint from,
 		WorldPoint to)
 	{
+		if ("game".equals(object.getKind()))
+		{
+			return Math.abs(from.getX() - to.getX()) + Math.abs(from.getY() - to.getY()) == 1 &&
+				(object.occupies(from) || object.occupies(to));
+		}
 		int orientations = object.getOrientationA() | object.getOrientationB();
 		WorldPoint anchor = object.getWorldPoint();
 		if (orientations == 0)
@@ -532,7 +544,7 @@ final class GenericClientSnapshot
 	private Map<String, Object> runtimeMap()
 	{
 		Map<String, Object> runtime = new LinkedHashMap<>();
-		runtime.put("api_version", 2L);
+		runtime.put("api_version", 3L);
 		runtime.put("game_tick", gameTick);
 		runtime.put("game_state", gameState);
 		runtime.put("game_revision", (long) gameRevision);
@@ -543,7 +555,7 @@ final class GenericClientSnapshot
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
 		value.put("runtime", runtimeMap());
-		value.put("player", player == null ? null : player.toMap(gameState));
+		value.put("player", world.player == null ? null : world.player.toMap(gameState));
 		value.putAll(account.toMap());
 		return value;
 	}
@@ -557,7 +569,7 @@ final class GenericClientSnapshot
 		}
 
 		List<Map<String, Object>> result = new ArrayList<>();
-		for (NpcSnapshot npc : npcs)
+		for (NpcSnapshot npc : world.npcs)
 		{
 			if (!criteria.matches(npc))
 			{
@@ -688,60 +700,6 @@ final class GenericClientSnapshot
 			Math.abs(first.getY() - second.getY()));
 	}
 
-	private static NPCComposition getComposition(NPC npc)
-	{
-		NPCComposition composition = npc.getTransformedComposition();
-		if (composition == null)
-		{
-			composition = npc.getComposition();
-		}
-		return composition;
-	}
-
-	private static List<String> getActions(NPCComposition composition)
-	{
-		if (composition == null || composition.getActions() == null)
-		{
-			return Collections.emptyList();
-		}
-		return Arrays.stream(composition.getActions())
-			.filter(Objects::nonNull)
-			.collect(Collectors.toList());
-	}
-
-	private static Rectangle visibleBounds(Shape shape, Rectangle clipBounds)
-	{
-		if (shape == null || clipBounds == null || clipBounds.isEmpty())
-		{
-			return null;
-		}
-		Rectangle bounds = shape.getBounds().intersection(clipBounds);
-		return bounds.isEmpty() ? null : bounds;
-	}
-
-	private static final class WorldCapture
-	{
-		private final PlayerSnapshot player;
-		private final List<NpcSnapshot> npcs;
-		private final GenericClientSceneCollision collision;
-
-		private WorldCapture(
-			PlayerSnapshot player,
-			List<NpcSnapshot> npcs,
-			GenericClientSceneCollision collision)
-		{
-			this.player = player;
-			this.npcs = npcs;
-			this.collision = collision;
-		}
-
-		private static WorldCapture empty()
-		{
-			return new WorldCapture(
-				null, Collections.emptyList(), GenericClientSceneCollision.empty());
-		}
-	}
-
 	private static final class NpcQuery
 	{
 		private final int within;
@@ -813,282 +771,6 @@ final class GenericClientSnapshot
 		}
 	}
 
-	static final class PlayerSnapshot
-	{
-		private final String name;
-		private final int x;
-		private final int y;
-		private final int plane;
-		private final int worldViewId;
-		private final int animation;
-		private final String interacting;
-		private final int currentHitpoints;
-		private final int maxHitpoints;
-		private final int runEnergy;
-		private final boolean runEnabled;
-		private final WorldPoint destination;
-
-		PlayerSnapshot(String name, int x, int y, int plane, int worldViewId)
-		{
-			this(name, x, y, plane, worldViewId, -1, null, 0, 0, 0, false, null);
-		}
-
-		PlayerSnapshot(
-			String name,
-			int x,
-			int y,
-			int plane,
-			int worldViewId,
-			int animation,
-			String interacting)
-		{
-			this(
-				name,
-				x,
-				y,
-				plane,
-				worldViewId,
-				animation,
-				interacting,
-				0,
-				0,
-				0,
-				false,
-				null);
-		}
-
-		PlayerSnapshot(
-			String name,
-			int x,
-			int y,
-			int plane,
-			int worldViewId,
-			int animation,
-			String interacting,
-			int currentHitpoints,
-			int maxHitpoints,
-			int runEnergy,
-			boolean runEnabled,
-			WorldPoint destination)
-		{
-			this.name = name;
-			this.x = x;
-			this.y = y;
-			this.plane = plane;
-			this.worldViewId = worldViewId;
-			this.animation = animation;
-			this.interacting = interacting;
-			this.currentHitpoints = currentHitpoints;
-			this.maxHitpoints = maxHitpoints;
-			this.runEnergy = runEnergy;
-			this.runEnabled = runEnabled;
-			this.destination = destination;
-		}
-
-		Map<String, Object> toMap(String gameState)
-		{
-			Map<String, Object> value = new LinkedHashMap<>();
-			value.put("logged_in", GameState.LOGGED_IN.name().equals(gameState));
-			value.put("name", name);
-			value.put("world", worldMap(x, y, plane));
-			value.put("world_view", (long) worldViewId);
-			value.put("animation", (long) animation);
-			value.put("interacting", interacting);
-			value.put("current_hitpoints", (long) currentHitpoints);
-			value.put("max_hitpoints", (long) maxHitpoints);
-			value.put("run_energy", (long) runEnergy);
-			value.put("run_enabled", runEnabled);
-			value.put("destination", destination == null
-				? null
-				: worldMap(destination.getX(), destination.getY(), destination.getPlane()));
-			return value;
-		}
-
-		String worldPoint()
-		{
-			return x + "," + y + "," + plane;
-		}
-	}
-
-	static final class NpcSnapshot
-	{
-		private final int index;
-		private final int id;
-		private final String name;
-		private final int x;
-		private final int y;
-		private final int plane;
-		private final int distance;
-		private final int combatLevel;
-		private final int animation;
-		private final String interacting;
-		private final int size;
-		private final List<String> actions;
-		private final boolean inScene;
-		private final boolean clickable;
-		private final boolean lineOfSight;
-		private final boolean dead;
-		private final int healthRatio;
-		private final int healthScale;
-		private final Point canvasPoint;
-		private final Rectangle canvasBounds;
-
-		NpcSnapshot(
-			int index,
-			int id,
-			String name,
-			int x,
-			int y,
-			int plane,
-			int distance,
-			int combatLevel,
-			int animation,
-			String interacting,
-			List<String> actions)
-		{
-			this(
-				index,
-				id,
-				name,
-				x,
-				y,
-				plane,
-				distance,
-				combatLevel,
-				animation,
-				interacting,
-				1,
-				actions,
-				false,
-				false,
-				false,
-				false,
-				-1,
-				-1,
-				null,
-				null);
-		}
-
-		NpcSnapshot(
-			int index,
-			int id,
-			String name,
-			int x,
-			int y,
-			int plane,
-			int distance,
-			int combatLevel,
-			int animation,
-			String interacting,
-			int size,
-			List<String> actions)
-	{
-		this(
-			index,
-			id,
-			name,
-			x,
-			y,
-			plane,
-			distance,
-			combatLevel,
-			animation,
-			interacting,
-			size,
-			actions,
-			false,
-			false,
-			false,
-			false,
-			-1,
-			-1,
-			null,
-			null);
-	}
-
-		NpcSnapshot(
-			int index,
-			int id,
-			String name,
-			int x,
-			int y,
-			int plane,
-			int distance,
-			int combatLevel,
-			int animation,
-			String interacting,
-			int size,
-			List<String> actions,
-			boolean inScene,
-			boolean clickable,
-			boolean lineOfSight,
-			boolean dead,
-			int healthRatio,
-			int healthScale,
-			Point canvasPoint,
-			Rectangle canvasBounds)
-		{
-			this.index = index;
-			this.id = id;
-			this.name = name;
-			this.x = x;
-			this.y = y;
-			this.plane = plane;
-			this.distance = distance;
-			this.combatLevel = combatLevel;
-			this.animation = animation;
-			this.interacting = interacting;
-			this.size = size;
-			this.actions = Collections.unmodifiableList(new ArrayList<>(actions));
-			this.inScene = inScene;
-			this.clickable = clickable;
-			this.lineOfSight = lineOfSight;
-			this.dead = dead;
-			this.healthRatio = healthRatio;
-			this.healthScale = healthScale;
-			this.canvasPoint = canvasPoint == null ? null : new Point(canvasPoint);
-			this.canvasBounds = canvasBounds == null ? null : new Rectangle(canvasBounds);
-		}
-
-		int getIndex()
-		{
-			return index;
-		}
-
-		int getDistance()
-		{
-			return distance;
-		}
-
-		Map<String, Object> toMap()
-		{
-			Map<String, Object> value = new LinkedHashMap<>();
-			value.put("index", (long) index);
-			value.put("id", (long) id);
-			value.put("name", name);
-			value.put("world", worldMap(x, y, plane));
-			value.put("distance", (long) distance);
-			value.put("combat_level", (long) combatLevel);
-			value.put("animation", (long) animation);
-			value.put("interacting", interacting);
-			value.put("size", (long) size);
-			value.put("actions", actions);
-			value.put("in_scene", inScene);
-			value.put("clickable", clickable);
-			value.put("line_of_sight", lineOfSight);
-			value.put("dead", dead);
-			value.put("health_ratio", (long) healthRatio);
-			value.put("health_scale", (long) healthScale);
-			value.put("canvas", canvasMap(canvasPoint, canvasBounds));
-			return value;
-		}
-
-		String worldPoint()
-		{
-			return x + "," + y + "," + plane;
-		}
-	}
-
 	static final class RouteBlock
 	{
 		private final int pathIndex;
@@ -1156,42 +838,4 @@ final class GenericClientSnapshot
 		}
 	}
 
-	private static Map<String, Object> canvasMap(Point point, Rectangle bounds)
-	{
-		Map<String, Object> canvas = new LinkedHashMap<>();
-		if (point == null)
-		{
-			canvas.put("point", null);
-		}
-		else
-		{
-			Map<String, Object> canvasPoint = new LinkedHashMap<>();
-			canvasPoint.put("x", (long) point.x);
-			canvasPoint.put("y", (long) point.y);
-			canvas.put("point", canvasPoint);
-		}
-		if (bounds == null)
-		{
-			canvas.put("bounds", null);
-		}
-		else
-		{
-			Map<String, Object> canvasBounds = new LinkedHashMap<>();
-			canvasBounds.put("x", (long) bounds.x);
-			canvasBounds.put("y", (long) bounds.y);
-			canvasBounds.put("width", (long) bounds.width);
-			canvasBounds.put("height", (long) bounds.height);
-			canvas.put("bounds", canvasBounds);
-		}
-		return canvas;
-	}
-
-	private static Map<String, Object> worldMap(int x, int y, int plane)
-	{
-		Map<String, Object> world = new LinkedHashMap<>();
-		world.put("x", (long) x);
-		world.put("y", (long) y);
-		world.put("plane", (long) plane);
-		return world;
-	}
 }

@@ -2,6 +2,7 @@ package com.genericclient;
 
 import static com.genericclient.GenericClientInteractionReceipts.clickCount;
 import static com.genericclient.GenericClientInteractionReceipts.composite;
+import static com.genericclient.GenericClientInteractionReceipts.rejected;
 import static com.genericclient.GenericClientInteractionReceipts.wasDispatched;
 
 import java.util.ArrayList;
@@ -25,7 +26,12 @@ final class GenericClientQuestActions
 	private final GenericClientAutocastInput autocastInput;
 	private final GenericClientPrayerInput prayerInput;
 	private final GenericClientUiInput uiInput;
+	private final GenericClientWorldInput worldInput;
+	private final GenericClientPoisonInput poisonInput;
+	private final GenericClientCombatInput combatInput;
 	private final GenericClientEmergencyController emergencyController;
+	private final GenericClientCombatGuard combatGuard;
+	private String scriptOwnedPrayer = "none";
 
 	GenericClientQuestActions(
 		GenericClientObjectInput objectInput,
@@ -40,7 +46,11 @@ final class GenericClientQuestActions
 		GenericClientAutocastInput autocastInput,
 		GenericClientPrayerInput prayerInput,
 		GenericClientUiInput uiInput,
-		GenericClientEmergencyController emergencyController)
+		GenericClientWorldInput worldInput,
+		GenericClientPoisonInput poisonInput,
+		GenericClientCombatInput combatInput,
+		GenericClientEmergencyController emergencyController,
+		GenericClientCombatGuard combatGuard)
 	{
 		this.objectInput = objectInput;
 		this.inventoryInput = inventoryInput;
@@ -54,7 +64,11 @@ final class GenericClientQuestActions
 		this.autocastInput = autocastInput;
 		this.prayerInput = prayerInput;
 		this.uiInput = uiInput;
+		this.worldInput = worldInput;
+		this.poisonInput = poisonInput;
+		this.combatInput = combatInput;
 		this.emergencyController = emergencyController;
+		this.combatGuard = combatGuard;
 	}
 
 	CompletableFuture<Map<String, Object>> execute(
@@ -86,6 +100,8 @@ final class GenericClientQuestActions
 				return useItemOnObject(action, activityContext);
 			case "item.use_on_npc":
 				return useItemOnNpc(action, activityContext);
+			case "item.use_on_item":
+				return useItemOnItem(action, activityContext);
 			case "ground_item.take":
 				return groundItemInput.take(
 					requiredInt(action, "id", type),
@@ -97,10 +113,11 @@ final class GenericClientQuestActions
 					activityContext,
 					optionalBoolean(action, "reading", true, type));
 			case "dialogue.choose":
-				return dialogueInput.choose(
-					requiredText(action, "text", type),
-					activityContext,
-					optionalBoolean(action, "reading", true, type));
+				String choice = requiredText(action, "text", type);
+				boolean reading = optionalBoolean(action, "reading", true, type);
+				return optionalBoolean(action, "keyboard", false, type)
+					? dialogueInput.chooseKeyboard(choice, activityContext, reading)
+					: dialogueInput.choose(choice, activityContext, reading);
 			case "bank.loadout":
 				return bankInput.loadout(
 					bankRequirements(action),
@@ -116,23 +133,9 @@ final class GenericClientQuestActions
 					longValue(
 						action,
 						"minimum_cash_reserve",
-						GenericClientGrandExchangeInput.HARD_MINIMUM_CASH_RESERVE,
+						GenericClientGrandExchangePolicy.HARD_MINIMUM_CASH_RESERVE,
 						type),
 					optionalText(action.get("collect_mode")),
-					activityContext);
-			case "combat.cast":
-				return spellInput.castOnNpc(
-					requiredText(action, "spell", type),
-					optionalInt(action, "npc_id", type),
-					optionalText(action.get("npc_name")),
-					within(action, type),
-					activityContext);
-			case "combat.set_autocast":
-				return autocastInput.set(requiredText(action, "spell", type), activityContext);
-			case "prayer.set":
-				return prayerInput.set(
-					requiredText(action, "prayer", type),
-					optionalBoolean(action, "enabled", true, type),
 					activityContext);
 			case "ui.close":
 				return uiInput.closeTopLevel(activityContext);
@@ -143,6 +146,43 @@ final class GenericClientQuestActions
 					activityContext);
 			case "ui.key":
 				return uiInput.key(requiredText(action, "key", type), activityContext);
+			case "world.select":
+				return worldInput.select(
+					requiredInt(action, "world", type),
+					optionalBoolean(action, "members", false, type), activityContext);
+			case "consumable.cure_poison":
+				return poisonInput.cure(activityContext);
+			default:
+				return executeProtectionAndSpells(type, action, activityContext);
+		}
+	}
+
+	private CompletableFuture<Map<String, Object>> executeProtectionAndSpells(String type, Map<String, Object> action,
+		GenericClientActivityContext activityContext)
+	{
+		switch (type)
+		{
+			case "combat.cast":
+				return spellInput.castOnNpc(
+					requiredText(action, "spell", type),
+					optionalInt(action, "npc_id", type),
+					optionalText(action.get("npc_name")),
+					within(action, type),
+					activityContext);
+			case "spell.cast_on_item":
+				return spellInput.castOnItem(
+					requiredText(action, "spell", type),
+					requiredInt(action, "item_id", type),
+					optionalSlot(action, type),
+					activityContext);
+			case "travel.home_teleport":
+				return spellInput.homeTeleport(activityContext);
+			case "combat.set_autocast":
+				return autocastInput.set(requiredText(action, "spell", type), activityContext);
+			case "prayer.set":
+				return setPrayer(action, type, activityContext);
+			case "client.behaviors.configure":
+				return configureClientBehaviors(action, type, activityContext);
 			case "safety.configure":
 				return emergencyController.configure(
 					requiredPositiveInt(action, "minimum_hitpoints", type),
@@ -152,12 +192,123 @@ final class GenericClientQuestActions
 					optionalBoolean(action, "allow_overheal", false, type));
 			case "safety.clear":
 				return emergencyController.clear();
+			case "safety.recover":
+				return emergencyController.recoverNow();
+			case "safety.escape":
+				return emergencyController.forceEscapeNow();
 			default:
 				throw new IllegalArgumentException("Unsupported quest action: " + type);
 		}
 	}
 
-	static GenericClientEmergencyController.Escape emergencyEscape(
+	private CompletableFuture<Map<String, Object>> setPrayer(
+		Map<String, Object> action,
+		String type,
+		GenericClientActivityContext activityContext)
+	{
+		String prayer = requiredText(action, "prayer", type);
+		boolean enabled = optionalBoolean(action, "enabled", true, type);
+		return prayerInput.set(prayer, enabled, activityContext).thenApply(receipt ->
+		{
+			boolean applied = activityContext.applyIfCurrent(() ->
+			{
+				synchronized (this)
+				{
+					scriptOwnedPrayer = updateOwnedPrayer(scriptOwnedPrayer, receipt, enabled);
+				}
+			});
+			return applied ? receipt : rejected("action_cancelled");
+		});
+	}
+
+	synchronized CompletableFuture<Map<String, Object>> releaseScriptPrayer()
+	{
+		if ("none".equals(scriptOwnedPrayer))
+		{
+			Map<String, Object> receipt = new LinkedHashMap<>();
+			receipt.put("status", "unchanged");
+			receipt.put("result", "no_script_owned_prayer");
+			receipt.put("click_count", 0L);
+			return CompletableFuture.completedFuture(receipt);
+		}
+		String prayer = scriptOwnedPrayer;
+		return prayerInput.set(prayer, false, GenericClientActivityContext.none())
+			.thenApply(receipt ->
+			{
+				synchronized (this)
+				{
+					scriptOwnedPrayer = updateOwnedPrayer(
+						scriptOwnedPrayer, receipt, false);
+				}
+				return receipt;
+			});
+	}
+
+	static String updateOwnedPrayer(
+		String current,
+		Map<String, Object> receipt,
+		boolean enabled)
+	{
+		String status = String.valueOf(receipt.get("status"));
+		String prayer = String.valueOf(receipt.get("prayer"));
+		if (enabled && "set".equals(status))
+		{
+			return prayer;
+		}
+		if (!enabled && ("set".equals(status) || "unchanged".equals(status)) &&
+			prayer.equals(current))
+		{
+			return "none";
+		}
+		return current;
+	}
+
+	private CompletableFuture<Map<String, Object>> configureClientBehaviors(
+		Map<String, Object> action,
+		String type,
+		GenericClientActivityContext activityContext)
+	{
+		boolean emergencyConsumables = optionalBoolean(
+			action, "emergency_consumables", true, type);
+		boolean emergencyEscape = optionalBoolean(
+			action, "emergency_escape", true, type);
+		boolean combatPrayer = optionalBoolean(
+			action, "combat_prayer", true, type);
+		boolean autoRetaliate = optionalBoolean(
+			action, "auto_retaliate", true, type);
+		return combatInput.setAutoRetaliate(autoRetaliate, activityContext)
+			.thenApply(retaliation ->
+			{
+				String retaliationStatus = String.valueOf(retaliation.get("status"));
+				if (!("set".equals(retaliationStatus) || "unchanged".equals(retaliationStatus)))
+				{
+					Map<String, Object> rejected = new LinkedHashMap<>();
+					rejected.put("status", "rejected");
+					rejected.put("result", "client_behavior_auto_retaliate_failed");
+					rejected.put("auto_retaliate", autoRetaliate);
+					rejected.put("retaliation", retaliation);
+					return rejected;
+				}
+				boolean applied = activityContext.applyIfCurrent(() ->
+				{
+					emergencyController.configureScriptBehavior(emergencyConsumables, emergencyEscape);
+					combatGuard.configureScriptBehavior(combatPrayer);
+				});
+				if (!applied) return rejected("action_cancelled");
+				Map<String, Object> receipt = new LinkedHashMap<>();
+				receipt.put("status", "complete");
+				receipt.put("result", "client_behaviors_configured");
+				receipt.put("click_count", retaliation.getOrDefault("click_count", 0L));
+				receipt.put("emergency_consumables", emergencyConsumables);
+				receipt.put("emergency_escape", emergencyEscape);
+				receipt.put("combat_prayer", combatPrayer);
+				receipt.put("auto_retaliate", autoRetaliate);
+				receipt.put("retaliation", retaliation);
+				return receipt;
+			});
+	}
+
+	static GenericClientEmergencyEscape emergencyEscape(
 		Map<String, Object> action)
 	{
 		Object raw = action.get("escape");
@@ -187,18 +338,42 @@ final class GenericClientQuestActions
 		WorldPoint destination = new WorldPoint(x, y, plane);
 		if (type == null || "walk".equalsIgnoreCase(type))
 		{
-			return new GenericClientEmergencyController.Escape(destination, within);
+			return new GenericClientEmergencyEscape(destination, within);
 		}
 		if ("inventory_dialogue".equalsIgnoreCase(type))
 		{
-			return GenericClientEmergencyController.Escape.inventoryDialogue(
-				requiredInt(value, "item_id", "safety.configure escape"),
+			return GenericClientEmergencyEscape.inventoryDialogue(
+				escapeItemIds(value),
 				requiredText(value, "action", "safety.configure escape"),
 				requiredText(value, "choice", "safety.configure escape"),
 				destination,
 				within);
 		}
 		throw new IllegalArgumentException("Unsupported safety escape type: " + type);
+	}
+
+	private static List<Integer> escapeItemIds(Map<?, ?> value)
+	{
+		List<Integer> itemIds = new ArrayList<>();
+		itemIds.add(requiredInt(value, "item_id", "safety.configure escape"));
+		Object rawAlternatives = value.get("alternative_item_ids");
+		if (rawAlternatives != null)
+		{
+			if (!(rawAlternatives instanceof List))
+			{
+				throw new IllegalArgumentException(
+					"safety.configure escape alternative_item_ids must be an array");
+			}
+			for (Object rawItemId : (List<?>) rawAlternatives)
+			{
+				if (!(rawItemId instanceof Number))
+				{
+					throw new IllegalArgumentException(
+						"safety.configure escape alternative_item_ids must be numeric");
+				}
+				itemIds.add(((Number) rawItemId).intValue());
+			}
+		}		return itemIds;
 	}
 
 	private static List<GenericClientEmergencyController.Consumable> emergencyConsumables(
@@ -355,7 +530,7 @@ final class GenericClientQuestActions
 				return objectInput.useSelectedItemOnObject(
 					objectId, world, within, itemId, null, activityContext)
 					.thenCompose(target -> finishSelectedItemAction(
-						"item_used_on_object", itemId, slot, selection, target));
+						"item_used_on_object", itemId, slot, selection, target, activityContext));
 			});
 		});
 	}
@@ -385,7 +560,46 @@ final class GenericClientQuestActions
 				return npcInput.useSelectedItemOnNpc(
 					npcId, npcName, within, itemId, null, activityContext)
 					.thenCompose(target -> finishSelectedItemAction(
-						"item_used_on_npc", itemId, slot, selection, target));
+						"item_used_on_npc", itemId, slot, selection, target, activityContext));
+			});
+		});
+	}
+
+	private CompletableFuture<Map<String, Object>> useItemOnItem(
+		Map<String, Object> action,
+		GenericClientActivityContext activityContext)
+	{
+		int itemId = requiredInt(action, "item_id", "item.use_on_item");
+		int targetItemId = requiredInt(action, "target_item_id", "item.use_on_item");
+		Integer slot = optionalSlot(action, "item.use_on_item");
+		Integer targetSlot = optionalInt(action, "target_slot", "item.use_on_item");
+		if (targetSlot != null && (targetSlot < 0 || targetSlot >= 28))
+		{
+			throw new IllegalArgumentException(
+				"item.use_on_item target_slot must be between 0 and 27");
+		}
+		if (itemId == targetItemId && slot == null && targetSlot == null)
+		{
+			throw new IllegalArgumentException(
+				"item.use_on_item requires slots when both item ids match");
+		}
+		return inventoryInput.interact(itemId, slot, "Use", activityContext).thenCompose(selection ->
+		{
+			if (!wasDispatched(selection))
+			{
+				return CompletableFuture.completedFuture(selection);
+			}
+			return inventoryInput.waitForSelectedItem(itemId).thenCompose(selected ->
+			{
+				if (!selected)
+				{
+					return CompletableFuture.completedFuture(composite(
+						"item_used_on_item", selection, rejected("requested_item_not_selected")));
+				}
+				return inventoryInput.interact(
+					targetItemId, targetSlot, "Use", activityContext)
+					.thenCompose(target -> finishSelectedItemAction(
+						"item_used_on_item", itemId, slot, selection, target, activityContext));
 			});
 		});
 	}
@@ -395,28 +609,19 @@ final class GenericClientQuestActions
 		int itemId,
 		Integer slot,
 		Map<String, Object> selection,
-		Map<String, Object> target)
+		Map<String, Object> target, GenericClientActivityContext activityContext)
 	{
 		Map<String, Object> receipt = composite(result, selection, target);
 		if (wasDispatched(target))
 		{
 			return CompletableFuture.completedFuture(receipt);
 		}
-		return inventoryInput.clearSelectedItem(itemId, slot).thenApply(cleanup ->
+		return inventoryInput.clearSelectedItem(itemId, slot, activityContext).thenApply(cleanup ->
 		{
 			receipt.put("selection_cleanup", cleanup);
 			receipt.put("click_count", clickCount(receipt) + clickCount(cleanup));
 			return receipt;
 		});
-	}
-
-	private static Map<String, Object> rejected(String result)
-	{
-		Map<String, Object> receipt = new LinkedHashMap<>();
-		receipt.put("status", "rejected");
-		receipt.put("result", result);
-		receipt.put("click_count", 0L);
-		return receipt;
 	}
 
 	private static int within(Map<String, Object> action, String type)

@@ -135,14 +135,16 @@ final class GenericClientDashboard implements AutoCloseable
 		List<String> profiles,
 		GenericClientMouseEffect effect,
 		boolean recording,
-		int recordedTemplates)
+		int recordedTemplates,
+		boolean showMouseTile)
 	{
 		runOnEdt(() -> settings.updateMouse(
 			currentProfile,
 			profiles,
-			effect,
-			recording,
-			recordedTemplates));
+				effect,
+				recording,
+				recordedTemplates,
+				showMouseTile));
 	}
 
 	void updateBehaviorState(Map<String, Object> behavior)

@@ -17,24 +17,130 @@ import org.junit.rules.TemporaryFolder;
 
 public class GenericClientBehaviorControllerTest
 {
-	private static final GenericClientActivityContext TRAVEL = GenericClientActivityContext.of(
-		GenericClientActivityContext.Activity.TRAVEL, true);
-	private static final GenericClientActivityContext COMBAT = GenericClientActivityContext.of(
-		GenericClientActivityContext.Activity.COMBAT, true);
+	private static final GenericClientActivityContext TRAVEL = GenericClientActivityContext.preset(GenericClientActivityContext.Activity.TRAVEL);
+	private static final GenericClientActivityContext COMBAT = GenericClientActivityContext.preset(GenericClientActivityContext.Activity.COMBAT);
+	private static final GenericClientActivityContext SKILLING = GenericClientActivityContext.preset(GenericClientActivityContext.Activity.SKILLING);
 	private static final GenericClientActivityContext NONE = GenericClientActivityContext.none();
 
 	@Rule
 	public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
 	@Test
-	public void independentRollsCanReleaseTheCursorAndStartAMicroBreak() throws Exception
+	public void invalidNewAccountStateCannotKeepThePreviousAccountOrPreventRetry() throws Exception
+	{
+		Path directory = temporaryFolder.newFolder("invalid-account-state").toPath();
+		String nextId = GenericClientBehaviorProfile.fromAccountHash(99).getId();
+		java.nio.file.Files.writeString(directory.resolve("state-" + nextId + ".json"),
+			"{\"schema\":\"genericclient_behavior_state.v3\",\"profileId\":\"" + nextId + "\",\"longHazardBudget\":1}");
+		try (GenericClientBehaviorController controller = controller(directory))
+		{
+			controller.activateAccount(42);
+			org.junit.Assert.assertThrows(java.io.IOException.class, () -> controller.activateAccount(99));
+			assertEquals(false, controller.status().get("available"));
+			GenericClientBehaviorStore store = new GenericClientBehaviorStore(directory);
+			store.save(new GenericClientBehaviorState(nextId, 1.0, 2.0), 1_000_000);
+			controller.activateAccount(99);
+			assertEquals(nextId, controller.currentProfile().getId());
+			assertEquals(2.0, (Double) controller.status().get("micro_budget"), 0.0);
+		}
+	}
+
+	@Test
+	public void repeatedBoundariesWithoutActiveTimeCannotStartMicroBreaks() throws Exception
+	{
+		Fixture fixture = fixture(0.5, 0.0, 0.0);
+		try
+		{
+			fixture.controller.activateAccount(findHash(profile -> profile.getMicroBreakProbability() >= 0.85));
+			fixture.controller.setLoggedIn(true);
+			for (int i = 0; i < 100; i++)
+			{
+				CompletableFuture<Map<String, Object>> result = fixture.controller.afterAction(TRAVEL);
+				assertTrue("Boundaries cannot manufacture active time", result.isDone());
+				assertEquals("no_break", result.get().get("status"));
+			}
+			assertEquals(0, fixture.effects.offscreenEdges.size());
+			assertEquals(0L, fixture.controller.status().get("micro_break_count"));
+		}
+		finally { fixture.controller.close(); }
+	}
+
+	@Test
+	public void denseAndSparseBoundariesWaitForTheSameSampledActiveTime() throws Exception
+	{
+		long account = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
+		Fixture dense = fixture(0.5, 0.5);
+		Fixture sparse = fixture(0.5, 0.5);
+		try
+		{
+			dense.controller.activateAccount(account);
+			sparse.controller.activateAccount(account);
+			dense.controller.setLoggedIn(true);
+			sparse.controller.setLoggedIn(true);
+			double dueMillis = -Math.log(0.5) * 60_000 /
+				GenericClientBehaviorProfile.fromAccountHash(account).microPressurePerMinute(TRAVEL.getActivity());
+			for (int elapsed = 5_000; elapsed <= 200_000; elapsed += 5_000)
+			{
+				advanceActive(dense, 5_000);
+				CompletableFuture<Map<String, Object>> boundary = dense.controller.afterAction(TRAVEL);
+				if (elapsed < dueMillis) assertTrue("No threshold resampling at dense boundaries", boundary.isDone());
+				if (!boundary.isDone()) dense.timer.runNext();
+			}
+			advanceActive(sparse, 200_000);
+			assertFalse(sparse.controller.afterAction(TRAVEL).isDone());
+			sparse.timer.runNext();
+			assertEquals(1L, dense.controller.status().get("micro_break_count"));
+			assertEquals(dense.controller.status().get("micro_break_count"), sparse.controller.status().get("micro_break_count"));
+			assertEquals(dense.controller.status().get("total_active_millis"), sparse.controller.status().get("total_active_millis"));
+			assertEquals(dense.controller.status().get("micro_budget"), sparse.controller.status().get("micro_budget"));
+		}
+		finally { dense.controller.close(); sparse.controller.close(); }
+	}
+
+	@Test
+	public void ownedClockUsesActivityRatesAndIgnoresManualAndUnownedTime() throws Exception
+	{
+		Map<GenericClientActivityContext.Activity, Double> rates = Map.of(
+			GenericClientActivityContext.Activity.GENERAL, 0.8,
+			GenericClientActivityContext.Activity.QUESTING, 1.0,
+			GenericClientActivityContext.Activity.SKILLING, 1.0,
+			GenericClientActivityContext.Activity.TRAVEL, 0.6,
+			GenericClientActivityContext.Activity.COMBAT, 1.0,
+			GenericClientActivityContext.Activity.MANUAL, 0.0);
+		for (Map.Entry<GenericClientActivityContext.Activity, Double> entry : rates.entrySet())
+		{
+			Fixture fixture = fixture(0.5, 0.5);
+			try
+			{
+				fixture.controller.activateAccount(42);
+				fixture.controller.setLoggedIn(true);
+				GenericClientActivityContext context = GenericClientActivityContext.preset(entry.getKey());
+				for (int i = 0; i < 12; i++)
+				{
+					fixture.clock.advance(5_000);
+					fixture.controller.publishActiveTick(true, context);
+				}
+				double expected = GenericClientBehaviorProfile.fromAccountHash(42).getMicroBreakProbability() * 0.6 * entry.getValue();
+				assertEquals(expected, (Double) fixture.controller.status().get("micro_pressure"), 1e-12);
+				fixture.clock.advance(5_000);
+				fixture.controller.publishActiveTick(false, context);
+				fixture.controller.enterPhase("operator.phase", context);
+				assertEquals(expected, (Double) fixture.controller.status().get("micro_pressure"), 1e-12);
+			}
+			finally { fixture.controller.close(); }
+		}
+	}
+
+	@Test
+	public void microPressureCanStartABreakWithCursorRelease() throws Exception
 	{
 		long accountHash = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
-		Fixture fixture = fixture(0.5, 0.0, 0.0, 0.99);
+		Fixture fixture = fixture(0.5, 0.1, 0.5, 0.99, 0.0);
 		try
 		{
 			fixture.controller.activateAccount(accountHash);
 			fixture.controller.setLoggedIn(true);
+			advanceActive(fixture, 60_000L);
 			CompletableFuture<Map<String, Object>> pause = fixture.controller.afterAction(TRAVEL);
 
 			assertFalse(pause.isDone());
@@ -58,7 +164,7 @@ public class GenericClientBehaviorControllerTest
 
 	@Test
 	@SuppressWarnings("unchecked")
-	public void cursorCanReleaseWithoutStartingABreak() throws Exception
+	public void actionBoundariesCannotReleaseTheCursorWithoutABreak() throws Exception
 	{
 		long accountHash = findHash(profile ->
 			profile.getCursorReleaseProbability() >= 0.50 && profile.getMicroBreakProbability() < 0.50);
@@ -69,8 +175,8 @@ public class GenericClientBehaviorControllerTest
 			Map<String, Object> result = fixture.controller.afterAction(TRAVEL).get();
 
 			assertEquals("no_break", result.get("status"));
-			assertEquals("moved", ((Map<String, Object>) result.get("cursor_release")).get("status"));
-			assertEquals(1, fixture.effects.offscreenEdges.size());
+			assertFalse(result.containsKey("cursor_release"));
+			assertEquals(0, fixture.effects.offscreenEdges.size());
 			assertEquals(0, fixture.timer.activeSize());
 		}
 		finally
@@ -83,10 +189,12 @@ public class GenericClientBehaviorControllerTest
 	public void microBreakCanStartWithoutReleasingTheCursor() throws Exception
 	{
 		long accountHash = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
-		Fixture fixture = fixture(0.5, 0.99, 0.0, 0.99);
+		Fixture fixture = fixture(0.5, 0.1, 0.5, 0.99, 0.99);
 		try
 		{
 			fixture.controller.activateAccount(accountHash);
+			fixture.controller.setLoggedIn(true);
+			advanceActive(fixture, 60_000L);
 			CompletableFuture<Map<String, Object>> result = fixture.controller.afterAction(TRAVEL);
 
 			assertFalse(result.isDone());
@@ -94,6 +202,58 @@ public class GenericClientBehaviorControllerTest
 			assertEquals(0, fixture.effects.offscreenEdges.size());
 			fixture.timer.runNext();
 			assertEquals("completed", result.get().get("status"));
+		}
+		finally
+		{
+			fixture.controller.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void skillingDoesNotReleaseTheCursorWithoutAMicroBreak() throws Exception
+	{
+		Fixture fixture = fixture(0.5, 0.99);
+		try
+		{
+			fixture.controller.activateAccount(42L);
+			Map<String, Object> result = fixture.controller.afterAction(SKILLING).get();
+
+			assertEquals("no_break", result.get("status"));
+			assertFalse(result.containsKey("cursor_release"));
+			assertEquals(0, fixture.effects.offscreenEdges.size());
+			assertEquals(0, fixture.timer.activeSize());
+		}
+		finally
+		{
+			fixture.controller.close();
+		}
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	public void skillingConsidersCursorReleaseOnlyAfterAMicroBreakStarts() throws Exception
+	{
+		long accountHash = findHash(profile ->
+			profile.getMicroBreakProbability() >= 0.85 &&
+			profile.getCursorReleaseProbability() >= 0.50);
+		Fixture fixture = fixture(0.5, 0.1, 0.5, 0.99, 0.0);
+		try
+		{
+			fixture.controller.activateAccount(accountHash);
+			fixture.controller.setLoggedIn(true);
+			advanceActive(fixture, 60_000L);
+			CompletableFuture<Map<String, Object>> action =
+				fixture.controller.afterAction(SKILLING);
+
+			assertFalse(action.isDone());
+			assertEquals("micro_break", fixture.controller.status().get("state"));
+			assertEquals(1, fixture.effects.offscreenEdges.size());
+			fixture.timer.runNext();
+			Map<String, Object> result = action.get();
+			assertEquals("completed", result.get("status"));
+			assertEquals("moved",
+				((Map<String, Object>) result.get("cursor_release")).get("status"));
 		}
 		finally
 		{
@@ -122,6 +282,31 @@ public class GenericClientBehaviorControllerTest
 	}
 
 	@Test
+	@SuppressWarnings("unchecked")
+	public void resolvedDamageGraceBypassesBoundariesUntilItExpires() throws Exception
+	{
+		Fixture fixture = fixture(0.0, 0.0, 0.0);
+		try
+		{
+			fixture.controller.activateAccount(42L);
+			fixture.signals.set(new GenericClientPolicyResolver.Signals(true, 10, 110,
+				false, false, false, false, true));
+			GenericClientActivityContext context = TRAVEL.withResolver(fixture.controller.policies);
+			assertEquals("bypassed", fixture.controller.beforeAction(context).get().get("status"));
+			Map<String, Object> after = fixture.controller.afterAction(context).get();
+			assertEquals("bypassed", after.get("status"));
+			assertEquals("none", ((Map<String, Object>) after.get("policy")).get("cursor_release"));
+			assertEquals(List.of("activity:travel", "damage_grace"), fixture.controller.status().get("policy_reasons"));
+			assertEquals(0, fixture.effects.offscreenEdges.size());
+			fixture.signals.set(new GenericClientPolicyResolver.Signals(true, 110, 110,
+				false, false, false, false, true));
+			assertEquals("ready", fixture.controller.beforeAction(context).get().get("status"));
+			assertEquals(List.of("activity:travel"), fixture.controller.status().get("policy_reasons"));
+		}
+		finally { fixture.controller.close(); }
+	}
+
+	@Test
 	public void breaksFalseBypassesBothSidesOfAnAction() throws Exception
 	{
 		Fixture fixture = fixture(0.5, 0.0, 0.0);
@@ -143,7 +328,7 @@ public class GenericClientBehaviorControllerTest
 	public void microBreakDoesNotResetLongPressure() throws Exception
 	{
 		long accountHash = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
-		Fixture fixture = fixture(0.75, 0.99, 0.0, 0.99);
+		Fixture fixture = fixture(0.75, 0.1, 0.5, 0.99, 0.99);
 		try
 		{
 			fixture.controller.activateAccount(accountHash);
@@ -217,8 +402,9 @@ public class GenericClientBehaviorControllerTest
 
 			assertEquals("long_break", fixture.controller.status().get("state"));
 			assertEquals("ended", fixture.controller.endLongBreak().get().get("status"));
-			assertEquals("completed", action.get().get("status"));
-			assertEquals("ready", fixture.controller.status().get("state"));
+			assertEquals("deferred", action.get().get("status"));
+			assertEquals("long_break_deferred", fixture.controller.status().get("state"));
+			assertEquals(25 * 60_000L, fixture.controller.status().get("active_millis_since_long_break"));
 			assertEquals(1, fixture.effects.ensureLoginCalls);
 			assertEquals(0, fixture.timer.activeSize());
 		}
@@ -232,11 +418,12 @@ public class GenericClientBehaviorControllerTest
 	public void manualEndDoesNotDismissAMicroBreak() throws Exception
 	{
 		long accountHash = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
-		Fixture fixture = fixture(0.5, 0.99, 0.0, 0.99);
+		Fixture fixture = fixture(0.5, 0.1, 0.5, 0.99, 0.99);
 		try
 		{
 			fixture.controller.activateAccount(accountHash);
 			fixture.controller.setLoggedIn(true);
+			advanceActive(fixture, 60_000L);
 			CompletableFuture<Map<String, Object>> action = fixture.controller.afterAction(TRAVEL);
 
 			assertEquals("not_active", fixture.controller.endLongBreak().get().get("status"));
@@ -255,11 +442,12 @@ public class GenericClientBehaviorControllerTest
 	public void activeBreakEndDismissesAMicroBreak() throws Exception
 	{
 		long accountHash = findHash(profile -> profile.getMicroBreakProbability() >= 0.85);
-		Fixture fixture = fixture(0.5, 0.99, 0.0, 0.99);
+		Fixture fixture = fixture(0.5, 0.1, 0.5, 0.99, 0.99);
 		try
 		{
 			fixture.controller.activateAccount(accountHash);
 			fixture.controller.setLoggedIn(true);
+			advanceActive(fixture, 60_000L);
 			CompletableFuture<Map<String, Object>> action = fixture.controller.afterAction(TRAVEL);
 
 			assertEquals("micro_break", fixture.controller.status().get("state"));
@@ -282,14 +470,17 @@ public class GenericClientBehaviorControllerTest
 		ManualClock clock = new ManualClock();
 		ManualTimer timer = new ManualTimer();
 		DelayedLogoutEffects effects = new DelayedLogoutEffects();
+		java.util.concurrent.atomic.AtomicReference<GenericClientPolicyResolver.Signals> signals =
+			new java.util.concurrent.atomic.AtomicReference<>(GenericClientPolicyResolver.Signals.CLEAR);
 		GenericClientBehaviorController controller = new GenericClientBehaviorController(
 			new GenericClientBehaviorStore(temporaryFolder.newFolder("delayed-logout").toPath()),
 			effects,
 			timer,
 			clock,
 			new SequenceRandom(0.000000000001, 0.99, 0.5),
+			signals::get,
 			message -> { });
-		Fixture fixture = new Fixture(controller, clock, timer, effects);
+		Fixture fixture = new Fixture(controller, clock, timer, effects, signals);
 		try
 		{
 			controller.activateAccount(accountHash);
@@ -303,7 +494,7 @@ public class GenericClientBehaviorControllerTest
 			effects.logout.complete("logged_out");
 			assertEquals("ended", ended.get().get("status"));
 			assertEquals(1, effects.ensureLoginCalls);
-			assertEquals("ready", controller.status().get("state"));
+			assertEquals("long_break_deferred", controller.status().get("state"));
 		}
 		finally
 		{
@@ -312,15 +503,16 @@ public class GenericClientBehaviorControllerTest
 	}
 
 	@Test
-	public void phaseRollsHeavilyThenHonorsGlobalAndNamedCooldowns() throws Exception
+	public void phaseAddsPressureThenHonorsGlobalAndNamedCooldowns() throws Exception
 	{
 		long accountHash = findHash(profile ->
 			profile.getMicroBreakProbability() >= 0.30 && profile.getPhaseShortChances() >= 2.0);
-		Fixture fixture = fixture(0.9, 0.0, 0.99);
+		Fixture fixture = fixture(0.9, 0.1, 0.5, 0.99);
 		try
 		{
 			fixture.controller.activateAccount(accountHash);
 			fixture.controller.setLoggedIn(true);
+			fixture.controller.publishActiveTick(true, TRAVEL);
 			CompletableFuture<Map<String, Object>> first =
 				fixture.controller.enterPhase("banking.complete", TRAVEL);
 			assertFalse(first.isDone());
@@ -351,9 +543,13 @@ public class GenericClientBehaviorControllerTest
 			firstEffects,
 			firstTimer,
 			clock,
-			new SequenceRandom(0.5, 0.99, 0.0, 0.99),
+			new SequenceRandom(0.5, 0.0001, 0.5, 0.99),
+			() -> GenericClientPolicyResolver.Signals.CLEAR,
 			message -> { });
 		first.activateAccount(accountHash);
+		first.setLoggedIn(true);
+		clock.advance(5_000L);
+		first.publishActiveTick(true, TRAVEL);
 		first.afterAction(TRAVEL);
 		assertEquals("micro_break", first.status().get("state"));
 		first.close();
@@ -365,6 +561,7 @@ public class GenericClientBehaviorControllerTest
 			secondTimer,
 			clock,
 			new SequenceRandom(0.5),
+			() -> GenericClientPolicyResolver.Signals.CLEAR,
 			message -> { });
 		try
 		{
@@ -402,7 +599,8 @@ public class GenericClientBehaviorControllerTest
 				GenericClientBehaviorProfile.Edge.TOP,
 				650,
 				85,
-				85));
+				85,
+				GenericClientBehaviorProfile.DialogueInputMode.MOUSE));
 
 			Map<String, Object> custom = (Map<String, Object>) fixture.controller.status().get("profile");
 			assertTrue((Boolean) custom.get("customized"));
@@ -443,7 +641,8 @@ public class GenericClientBehaviorControllerTest
 			GenericClientBehaviorProfile.Edge.RIGHT,
 			375,
 			75,
-			75);
+			75,
+			GenericClientBehaviorProfile.DialogueInputMode.KEYBOARD);
 		GenericClientBehaviorController first = controller(directory);
 		first.activateAccount(8080L);
 		first.saveOverrides(overrides);
@@ -466,6 +665,99 @@ public class GenericClientBehaviorControllerTest
 		}
 	}
 
+	@Test
+	public void plainExecutionDoesNotRequireAnAccountBehaviorProfile() throws Exception
+	{
+		Fixture fixture = fixture(0.5);
+		try
+		{
+			assertEquals("bypassed", fixture.controller.beforeAction(NONE).get().get("status"));
+			assertEquals("bypassed", fixture.controller.afterAction(NONE).get().get("status"));
+		}
+		finally { fixture.controller.close(); }
+	}
+
+	@Test
+	public void loggedInIdleTimeDoesNotAccrueLongPressure() throws Exception
+	{
+		Fixture fixture = fixture(0.5);
+		try
+		{
+			fixture.controller.activateAccount(42L);
+			fixture.controller.setLoggedIn(true);
+			for (int i = 0; i < 720; i++)
+			{
+				fixture.clock.advance(5_000L);
+				fixture.controller.publishActiveTick(false, TRAVEL);
+			}
+			assertEquals(0L, fixture.controller.status().get("active_millis_since_long_break"));
+			advanceActive(fixture, 5_000L);
+			assertEquals(5_000L, fixture.controller.status().get("active_millis_since_long_break"));
+		}
+		finally { fixture.controller.close(); }
+	}
+
+	@Test
+	public void newSessionDefersDuePressureUntilGraceOrAnExplicitPhase() throws Exception
+	{
+		Fixture fixture = fixture(0.000000000001, 0.999999999999, 0.999);
+		try
+		{
+			fixture.controller.activateAccount(findHash(profile -> profile.getLongCadenceMinutes() < 55.0));
+			fixture.controller.setLoggedIn(true);
+			advanceActive(fixture, 25 * 60_000L);
+			fixture.controller.beginSession();
+			assertEquals("ready", fixture.controller.beforeAction(TRAVEL).get().get("status"));
+			assertEquals("no_break", fixture.controller.afterAction(TRAVEL).get().get("status"));
+			assertEquals(0L, fixture.controller.status().get("long_break_count"));
+			CompletableFuture<Map<String, Object>> phase = fixture.controller.enterPhase("safe.bank", TRAVEL);
+			assertFalse(phase.isDone());
+			assertEquals("long_break", fixture.controller.status().get("state"));
+			fixture.timer.runNext();
+			assertEquals("completed", phase.get().get("status"));
+		}
+		finally { fixture.controller.close(); }
+	}
+
+	@Test
+	public void interruptedLongBreakKeepsDebtAndRetriesOnlyAtAPhaseAfterRefractory() throws Exception
+	{
+		double[] rolls = new double[40];
+		java.util.Arrays.fill(rolls, 0.999999999999);
+		rolls[0] = 0.000000000001;
+		Fixture fixture = fixture(rolls);
+		long accountHash = findHash(profile -> profile.getLongCadenceMinutes() < 55 && profile.getMicroBreakProbability() < 0.75);
+		try
+		{
+			fixture.controller.activateAccount(accountHash);
+			fixture.controller.setLoggedIn(true);
+			advanceActive(fixture, 25 * 60_000L);
+			CompletableFuture<Map<String, Object>> first = fixture.controller.afterAction(TRAVEL);
+			assertFalse(first.isDone());
+			fixture.clock.advance(25_000L);
+			Map<String, Object> ended = fixture.controller.endLongBreak().get();
+			assertEquals(25_000L, ended.get("elapsed_millis"));
+			assertEquals("manual", ended.get("end_reason"));
+			assertEquals("deferred", first.get().get("status"));
+			long debt = ((Number) fixture.controller.status().get("active_millis_since_long_break")).longValue();
+			assertEquals(25 * 60_000L, debt);
+			assertTrue(fixture.controller.enterPhase("too.soon", TRAVEL).isDone());
+			assertEquals(1L, fixture.controller.status().get("long_break_count"));
+			long refractory = (long) Math.ceil(GenericClientBehaviorProfile.fromAccountHash(accountHash)
+				.getLongRefractoryMinutes() * 60_000.0);
+			advanceActive(fixture, refractory + 1);
+			assertTrue(fixture.controller.afterAction(TRAVEL).isDone());
+			assertEquals(1L, fixture.controller.status().get("long_break_count"));
+			CompletableFuture<Map<String, Object>> retry = fixture.controller.enterPhase("safe.bank", TRAVEL);
+			assertFalse(retry.isDone());
+			fixture.timer.runNext();
+			assertEquals("completed", retry.get().get("status"));
+			assertEquals(0L, fixture.controller.status().get("active_millis_since_long_break"));
+			assertEquals(false, fixture.controller.status().get("long_break_deferred"));
+		}
+		finally { fixture.controller.close(); }
+	}
+
 	private GenericClientBehaviorController controller(Path directory) throws Exception
 	{
 		return new GenericClientBehaviorController(
@@ -474,6 +766,7 @@ public class GenericClientBehaviorControllerTest
 			new ManualTimer(),
 			new ManualClock(),
 			new SequenceRandom(0.5),
+			() -> GenericClientPolicyResolver.Signals.CLEAR,
 			message -> { });
 	}
 
@@ -482,25 +775,28 @@ public class GenericClientBehaviorControllerTest
 		ManualClock clock = new ManualClock();
 		ManualTimer timer = new ManualTimer();
 		FakeEffects effects = new FakeEffects();
+		java.util.concurrent.atomic.AtomicReference<GenericClientPolicyResolver.Signals> signals =
+			new java.util.concurrent.atomic.AtomicReference<>(GenericClientPolicyResolver.Signals.CLEAR);
 		GenericClientBehaviorController controller = new GenericClientBehaviorController(
-			new GenericClientBehaviorStore(temporaryFolder.newFolder("controller").toPath()),
+			new GenericClientBehaviorStore(temporaryFolder.newFolder().toPath()),
 			effects,
 			timer,
 			clock,
 			new SequenceRandom(randomValues),
+			signals::get,
 			message -> { });
-		return new Fixture(controller, clock, timer, effects);
+		return new Fixture(controller, clock, timer, effects, signals);
 	}
 
 	private static void advanceActive(Fixture fixture, long millis)
 	{
-		fixture.controller.publishActiveTick();
+		fixture.controller.publishActiveTick(true, TRAVEL);
 		long remaining = millis;
 		while (remaining > 0L)
 		{
 			long step = Math.min(5_000L, remaining);
 			fixture.clock.advance(step);
-			fixture.controller.publishActiveTick();
+			fixture.controller.publishActiveTick(true, TRAVEL);
 			remaining -= step;
 		}
 	}
@@ -523,17 +819,20 @@ public class GenericClientBehaviorControllerTest
 		private final ManualClock clock;
 		private final ManualTimer timer;
 		private final FakeEffects effects;
+		private final java.util.concurrent.atomic.AtomicReference<GenericClientPolicyResolver.Signals> signals;
 
 		private Fixture(
 			GenericClientBehaviorController controller,
 			ManualClock clock,
 			ManualTimer timer,
-			FakeEffects effects)
+			FakeEffects effects,
+			java.util.concurrent.atomic.AtomicReference<GenericClientPolicyResolver.Signals> signals)
 		{
 			this.controller = controller;
 			this.clock = clock;
 			this.timer = timer;
 			this.effects = effects;
+			this.signals = signals;
 		}
 	}
 
@@ -638,7 +937,7 @@ public class GenericClientBehaviorControllerTest
 		protected int ensureLoginCalls;
 
 		@Override
-		public CompletableFuture<String> moveOffscreen(GenericClientBehaviorProfile.Edge edge)
+		public CompletableFuture<String> moveOffscreen(GenericClientBehaviorProfile.Edge edge, GenericClientActivityContext context)
 		{
 			offscreenEdges.add(edge);
 			return CompletableFuture.completedFuture("offscreen");
@@ -671,7 +970,7 @@ public class GenericClientBehaviorControllerTest
 		}
 	}
 
-	private static final class SequenceRandom implements GenericClientBehaviorController.RandomSource
+	private static final class SequenceRandom extends java.util.Random
 	{
 		private final ArrayDeque<Double> values = new ArrayDeque<>();
 

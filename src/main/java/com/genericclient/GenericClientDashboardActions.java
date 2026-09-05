@@ -12,6 +12,8 @@ interface GenericClientDashboardActions
 
 	void setMouseEffect(GenericClientMouseEffect effect);
 
+	void setShowMouseTile(boolean enabled);
+
 	void reloadMouseProfile();
 
 	void startMouseRecording();

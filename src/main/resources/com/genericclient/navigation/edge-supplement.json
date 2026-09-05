@@ -1,0 +1,52 @@
+[
+  {
+    "from": [2461, 3382],
+    "to": [2461, 3383],
+    "plane": 0,
+    "object": "Gate",
+    "object_id": 190,
+    "action": "Open",
+    "note": "South approach through the gate footprint, both rows omitted by the static dump. Live revision 240 client_2026-09-03.0.log 11:36:08-11:36:10 records the planned crossing from (2461,3382) through (2461,3383) to (2461,3384).",
+    "added": "2026-09-04"
+  },
+  {
+    "from": [2461, 3383],
+    "to": [2461, 3384],
+    "plane": 0,
+    "object": "Gate",
+    "object_id": 190,
+    "action": "Open",
+    "note": "Tree Gnome Stronghold south gate. Live game revision 240: client_2026-09-03.0.log 11:36:08 records this exact edge and Gate 190; 11:36:10 records the player crossing to (2461,3384). Fresh live acceptance is tracked separately.",
+    "added": "2026-09-04"
+  },
+  {
+    "from": [2461, 3384],
+    "to": [2461, 3385],
+    "plane": 0,
+    "object": "Gate",
+    "object_id": 190,
+    "action": "Open",
+    "note": "North exit from the omitted gate footprint. Live revision 240 client_2026-09-03.0.log 11:36:10 and 11:36:11 records consecutive player route positions (2461,3384) and (2461,3385).",
+    "added": "2026-09-04"
+  },
+  {
+    "from": [2465, 3491],
+    "to": [2465, 3492],
+    "plane": 0,
+    "object": "Tree door",
+    "object_id": 1967,
+    "action": "Open",
+    "note": "Grand Tree entrance. Live revision 240 client_2026-09-03.0.log 09:09:54-09:09:55 records Open on object 1967 at (2464,3492), then consecutive player positions (2465,3491), (2465,3492), (2465,3493). Only this observed passage is restored; fresh live acceptance is separate.",
+    "added": "2026-09-05"
+  },
+  {
+    "from": [2465, 3492],
+    "to": [2465, 3493],
+    "plane": 0,
+    "object": "Tree door",
+    "object_id": 1967,
+    "action": "Open",
+    "note": "Grand Tree entrance. Live revision 240 client_2026-09-03.0.log 09:09:54-09:09:55 records Open on object 1967 at (2464,3492), then consecutive player positions (2465,3491), (2465,3492), (2465,3493). Only this observed passage is restored; fresh live acceptance is separate.",
+    "added": "2026-09-05"
+  }
+]

@@ -42,6 +42,17 @@ public interface GenericClientConfig extends Config
 		return GenericClientMouseEffect.TRAIL;
 	}
 
+	@ConfigItem(
+		keyName = "showMouseTile",
+		name = "Show mouse tile",
+		description = "Outline the scene tile under the mouse and show its world coordinates",
+		hidden = true
+	)
+	default boolean showMouseTile()
+	{
+		return false;
+	}
+
 	@Range(min = 1024, max = 65535)
 	@ConfigItem(
 		keyName = "controlPort",

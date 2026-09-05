@@ -19,9 +19,29 @@ final class GenericClientMouseMatcher
 	private static final double APPROACH_PENALTY = 0.6;
 	private static final double MAX_BACKTRACK_NORM = 0.12;
 	private static final double MIN_NORMALIZED_TIME_STEP = 0.000001;
+	private static final GenericClientMouseProfile.Template REST_TEMPLATE = restTemplate();
 
 	private GenericClientMouseMatcher()
 	{
+	}
+
+	static List<PathPoint> generateRest(Point start, Point target, int durationMillis)
+	{
+		return toScreenPath(REST_TEMPLATE.path, REST_TEMPLATE.timeNorm, start, target, durationMillis);
+	}
+
+	private static GenericClientMouseProfile.Template restTemplate()
+	{
+		// Rest movement has no click approach. A smooth template also covers profiles whose recordings lack rest labels.
+		double[] path = new double[VECTOR_SIZE];
+		double[] time = new double[SAMPLE_COUNT];
+		for (int i = 0; i < SAMPLE_COUNT; i++)
+		{
+			double t = i / (double) (SAMPLE_COUNT - 1);
+			time[i] = t;
+			path[2 * i] = t * t * t * (10 + t * (-15 + 6 * t));
+		}
+		return new GenericClientMouseProfile.Template(100, 250, 0, path, time, 0.5, 0.5, 0.6, 0.5, false);
 	}
 
 	static List<PathPoint> generate(

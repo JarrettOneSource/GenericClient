@@ -1,14 +1,15 @@
 package com.genericclient;
 
 import java.io.IOException;
-import java.security.SecureRandom;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 final class GenericClientBehaviorController implements AutoCloseable
 {
@@ -16,14 +17,14 @@ final class GenericClientBehaviorController implements AutoCloseable
 	private static final long MAX_ACTIVE_TICK_MILLIS = 5_000L;
 	private static final long GLOBAL_PHASE_COOLDOWN_MILLIS = TimeUnit.MINUTES.toMillis(2);
 	private static final long NAMED_PHASE_COOLDOWN_MILLIS = TimeUnit.MINUTES.toMillis(5);
-	private static final double SHORT_TAIL_MIN_SECONDS = 12.0;
 
 	private final GenericClientBehaviorStore store;
 	private final BreakEffects effects;
 	private final Timer timer;
 	private final Clock clock;
-	private final RandomSource random;
+	private final Random random;
 	private final Consumer<String> reporter;
+	final GenericClientPolicyResolver policies;
 
 	private GenericClientBehaviorProfile profile;
 	private GenericClientBehaviorProfile generatedProfile;
@@ -34,6 +35,10 @@ final class GenericClientBehaviorController implements AutoCloseable
 	private long lastTickNanos;
 	private long activeMillisAtLastSave;
 	private boolean loggedIn;
+	private boolean inputOwned;
+	private long sessionStartedActiveMillis;
+	private long lastBoundaryActiveMillis = -1L;
+	private final java.util.ArrayDeque<Long> boundaryGaps = new java.util.ArrayDeque<>();
 	private boolean closed;
 
 	GenericClientBehaviorController(
@@ -41,7 +46,8 @@ final class GenericClientBehaviorController implements AutoCloseable
 		BreakEffects effects,
 		Timer timer,
 		Clock clock,
-		RandomSource random,
+		Random random,
+		Supplier<GenericClientPolicyResolver.Signals> policySignals,
 		Consumer<String> reporter)
 	{
 		this.store = store;
@@ -50,6 +56,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 		this.clock = clock;
 		this.random = random;
 		this.reporter = reporter;
+		this.policies = new GenericClientPolicyResolver(policySignals, reporter);
 	}
 
 	static Timer scheduledTimer(ScheduledExecutorService executor)
@@ -82,25 +89,6 @@ final class GenericClientBehaviorController implements AutoCloseable
 		};
 	}
 
-	static RandomSource secureRandom()
-	{
-		SecureRandom source = new SecureRandom();
-		return new RandomSource()
-		{
-			@Override
-			public double nextDouble()
-			{
-				return source.nextDouble();
-			}
-
-			@Override
-			public double nextGaussian()
-			{
-				return source.nextGaussian();
-			}
-		};
-	}
-
 	synchronized void activateAccount(long accountHash) throws IOException
 	{
 		ensureOpen();
@@ -114,16 +102,25 @@ final class GenericClientBehaviorController implements AutoCloseable
 			saveStateQuietly();
 		}
 		cancelCurrentBreak("account_changed");
-		generatedProfile = nextProfile;
+		generatedProfile = null;
+		profile = null;
+		state = null;
+		inputOwned = false;
 		GenericClientBehaviorOverrides overrides = store.loadOverrides(nextProfile.getId());
-		profile = overrides == null ? nextProfile : nextProfile.withOverrides(overrides);
-		state = store.load(profile.getId());
-		if (state == null)
+		GenericClientBehaviorProfile loadedProfile = overrides == null ? nextProfile : nextProfile.withOverrides(overrides);
+		GenericClientBehaviorState loadedState = store.load(loadedProfile.getId(),
+			() -> GenericClientBehaviorProfile.sampleExponentialBudget(random));
+		if (loadedState == null)
 		{
-			state = new GenericClientBehaviorState(profile.getId(), nextExponentialBudget());
-			saveState();
+			loadedState = new GenericClientBehaviorState(loadedProfile.getId(), GenericClientBehaviorProfile.sampleExponentialBudget(random),
+				GenericClientBehaviorProfile.sampleExponentialBudget(random));
 		}
+		store.save(loadedState, clock.epochMillis());
+		generatedProfile = nextProfile;
+		profile = loadedProfile;
+		state = loadedState;
 		activeMillisAtLastSave = state.getTotalActiveMillis();
+		beginSession();
 		lastTickNanos = clock.nanoTime();
 		reporter.accept("BEHAVIOR_PROFILE_ACTIVATED id=" + profile.getId() +
 			" title=" + profile.getTitle() + " edge=" + profile.getIdleEdge());
@@ -168,7 +165,16 @@ final class GenericClientBehaviorController implements AutoCloseable
 		return profile == null ? 50 : profile.getDialogueReadingPercent();
 	}
 
-	CompletableFuture<String> moveMouseOffscreen()
+	synchronized GenericClientBehaviorProfile.DialogueInputMode dialogueInputMode()
+	{
+		return profile == null
+			? GenericClientBehaviorProfile.DialogueInputMode.MOUSE
+			: profile.getDialogueInputMode();
+	}
+
+	synchronized GenericClientBehaviorProfile currentProfile() { return profile; }
+
+	CompletableFuture<String> moveMouseOffscreen(GenericClientActivityContext context)
 	{
 		final GenericClientBehaviorProfile.Edge edge;
 		synchronized (this)
@@ -176,7 +182,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 			ensureProfile();
 			edge = profile.getIdleEdge();
 		}
-		return effects.moveOffscreen(edge);
+		return effects.moveOffscreen(edge, context);
 	}
 
 	synchronized void setLoggedIn(boolean loggedIn)
@@ -185,8 +191,29 @@ final class GenericClientBehaviorController implements AutoCloseable
 		lastTickNanos = clock.nanoTime();
 	}
 
-	synchronized void publishActiveTick()
+	synchronized long totalActiveMillis() { return state == null ? 0L : state.getTotalActiveMillis(); }
+
+	synchronized int nextWalkClickDelayTicks()
 	{
+		return profile == null ? 6 : profile.sampleWalkClickDelayTicks(random);
+	}
+
+	synchronized double nextWalkReachFraction()
+	{
+		return profile == null ? 1.0 : profile.sampleWalkReachFraction(random);
+	}
+
+	synchronized void beginSession()
+	{
+		sessionStartedActiveMillis = state == null ? 0L : state.getTotalActiveMillis();
+		lastBoundaryActiveMillis = -1L;
+		boundaryGaps.clear();
+	}
+
+	synchronized void publishActiveTick(boolean automationInputOwned, GenericClientActivityContext context)
+	{
+		inputOwned = automationInputOwned && context.getActivity() != GenericClientActivityContext.Activity.MANUAL &&
+			context.isInputAllowed();
 		if (closed)
 		{
 			return;
@@ -199,11 +226,13 @@ final class GenericClientBehaviorController implements AutoCloseable
 		}
 		long elapsedMillis = Math.max(0L, TimeUnit.NANOSECONDS.toMillis(now - lastTickNanos));
 		lastTickNanos = now;
-		if (profile == null || state == null || !loggedIn || activeBreak != null)
+		if (profile == null || state == null || !loggedIn || !inputOwned || activeBreak != null)
 		{
 			return;
 		}
-		state.addActiveMillis(Math.min(elapsedMillis, MAX_ACTIVE_TICK_MILLIS));
+		long activeMillis = Math.min(elapsedMillis, MAX_ACTIVE_TICK_MILLIS);
+		state.addActiveMillis(activeMillis);
+		state.addMicroPressure(activeMillis * profile.microPressurePerMinute(context.getActivity()) / 60_000.0);
 		if (state.getTotalActiveMillis() - activeMillisAtLastSave >= SAVE_INTERVAL_ACTIVE_MILLIS)
 		{
 			saveStateQuietly();
@@ -216,7 +245,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 		synchronized (this)
 		{
 			ensureOpen();
-			if (!activityContext.allowsBreaks())
+			if (!activityContext.allowsBreaks() || !activityContext.isInputAllowed())
 			{
 				return completed("bypassed", "action", activityContext);
 			}
@@ -229,41 +258,16 @@ final class GenericClientBehaviorController implements AutoCloseable
 				return activeBreak.thenApply(ignored ->
 					receipt("resumed", "existing_break", activityContext));
 			}
-			if (longDue(0.0))
-			{
-				return startLongBreak("action", 0.0);
-			}
 			return completed("ready", "action", activityContext);
 		}
 	}
 
 	CompletableFuture<Map<String, Object>> afterAction(GenericClientActivityContext activityContext)
 	{
-		final CompletableFuture<Map<String, Object>> cursorRelease;
 		synchronized (this)
 		{
 			ensureOpen();
-			if (profile == null || state == null)
-			{
-				return failed(new IllegalStateException("Behavior profile is unavailable until account login"));
-			}
-			cursorRelease = cursorRelease(activityContext);
-		}
-		return cursorRelease.thenCompose(cursor -> afterActionBreak(activityContext).thenApply(pause ->
-		{
-			Map<String, Object> result = new LinkedHashMap<>(pause);
-			result.put("cursor_release", cursor);
-			return result;
-		}));
-	}
-
-	private CompletableFuture<Map<String, Object>> afterActionBreak(
-		GenericClientActivityContext activityContext)
-	{
-		synchronized (this)
-		{
-			ensureOpen();
-			if (!activityContext.allowsBreaks())
+			if (!activityContext.allowsBreaks() || !activityContext.isInputAllowed())
 			{
 				return completed("bypassed", "action_complete", activityContext);
 			}
@@ -280,22 +284,24 @@ final class GenericClientBehaviorController implements AutoCloseable
 				saveStateQuietly();
 				return completed("suppressed_after_long_break", "action_complete", activityContext);
 			}
-			if (longDue(0.0))
+			recordBoundary();
+			if (longMayStart(false, 0.0))
 			{
 				return startLongBreak("action_complete_due", 0.0);
 			}
-			if (random.nextDouble() < profile.getMicroBreakProbability())
+			if (state.getMicroPressure() >= state.getMicroBudget())
 			{
-				return startMicroBreak("action_complete", profile.getMicroBreakProbability(), false);
+				return startMicroBreak(
+					"action_complete", false, activityContext);
 			}
 			return completed("no_break", "action_complete", activityContext);
 		}
 	}
 
-	private CompletableFuture<Map<String, Object>> cursorRelease(
+	private CompletableFuture<Map<String, Object>> microCursorRelease(
 		GenericClientActivityContext activityContext)
 	{
-		if (!activityContext.allowsCursorRelease())
+		if (!activityContext.allowsCursorRelease() || !activityContext.isInputAllowed())
 		{
 			return completed("bypassed", "cursor_release", activityContext);
 		}
@@ -311,7 +317,8 @@ final class GenericClientBehaviorController implements AutoCloseable
 		GenericClientBehaviorProfile.Edge edge = profile.getIdleEdge();
 		reporter.accept("BEHAVIOR_CURSOR_RELEASE_STARTED activity=" +
 			activityContext.getActivity().getValue() + " edge=" + edge.name().toLowerCase(Locale.ROOT));
-		return effects.moveOffscreen(edge).handle((value, error) ->
+		GenericClientBehaviorState owner = state;
+		return effects.moveOffscreen(edge, activityContext).handle((value, error) ->
 		{
 			Map<String, Object> result = receipt(
 				error == null ? "moved" : "failed",
@@ -324,7 +331,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 			{
 				synchronized (GenericClientBehaviorController.this)
 				{
-					if (state != null)
+					if (state == owner && activityContext.isInputAllowed())
 					{
 						state.recordCursorRelease();
 						saveStateQuietly();
@@ -354,7 +361,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 		synchronized (this)
 		{
 			ensureOpen();
-			if (!activityContext.allowsBreaks())
+			if (!activityContext.allowsBreaks() || !activityContext.isInputAllowed())
 			{
 				return completed("bypassed", "phase:" + phase, activityContext);
 			}
@@ -368,6 +375,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 					receipt("resumed", "phase:" + phase, activityContext));
 			}
 
+			recordBoundary();
 			long activeMillis = state.getTotalActiveMillis();
 			Long lastNamed = state.getLastPhaseActiveMillis(phase);
 			boolean globalReady = state.getLastGlobalPhaseActiveMillis() == Long.MIN_VALUE ||
@@ -375,7 +383,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 			boolean namedReady = lastNamed == null || activeMillis - lastNamed >= NAMED_PHASE_COOLDOWN_MILLIS;
 			if (!globalReady || !namedReady)
 			{
-				if (longDue(0.0))
+				if (longMayStart(true, 0.0))
 				{
 					return startLongBreak("phase_due:" + phase, 0.0);
 				}
@@ -387,16 +395,19 @@ final class GenericClientBehaviorController implements AutoCloseable
 				state.getActiveMillisSinceLongBreak() /
 					(profile.getLongCadenceMinutes() * TimeUnit.MINUTES.toMillis(1)));
 			double longBonus = profile.getPhaseLongBonusMaximum() * maturity * maturity;
-			if (longDue(longBonus))
+			if (longMayStart(true, longBonus))
 			{
 				return startLongBreak("phase:" + phase, longBonus);
 			}
-			double shortChance = 1.0 - Math.pow(
-				1.0 - profile.getMicroBreakProbability(),
-				profile.getPhaseShortChances());
-			if (random.nextDouble() < shortChance)
+			if (state.consumeMicroSuppression())
 			{
-				return startMicroBreak("phase:" + phase, shortChance, true);
+				saveStateQuietly();
+				return completed("suppressed_after_long_break", "phase:" + phase, activityContext);
+			}
+			if (inputOwned) state.addMicroPressure(profile.phaseMicroPressure());
+			if (state.getMicroPressure() >= state.getMicroBudget())
+			{
+				return startMicroBreak("phase:" + phase, true, activityContext);
 			}
 			saveStateQuietly();
 			return completed("no_break", "phase:" + phase, activityContext);
@@ -406,6 +417,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 	synchronized Map<String, Object> status()
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
+		value.putAll(policies.status());
 		value.put("available", profile != null && state != null);
 		if (profile == null || state == null)
 		{
@@ -414,7 +426,9 @@ final class GenericClientBehaviorController implements AutoCloseable
 		}
 		value.put("profile", profile.toMap());
 		value.put("generated_profile", generatedProfile.toMap());
-		value.put("state", state.getBreakType().equals("none") ? "ready" : state.getBreakType() + "_break");
+		value.put("state", state.getBreakType().equals("none")
+			? state.isLongBreakDeferred() ? "long_break_deferred" : "ready"
+			: state.getBreakType() + "_break");
 		value.put("long_break_mode", state.getLongBreakMode());
 		value.put("break_remaining_millis", Math.max(0L, state.getBreakEndEpochMillis() - clock.epochMillis()));
 		value.put("active_millis_since_long_break", state.getActiveMillisSinceLongBreak());
@@ -423,6 +437,18 @@ final class GenericClientBehaviorController implements AutoCloseable
 		value.put("long_hazard", hazard);
 		value.put("long_hazard_budget", state.getLongHazardBudget());
 		value.put("long_due", hazard >= state.getLongHazardBudget());
+		value.put("input_owned", inputOwned);
+		value.put("session_active_millis", state.getTotalActiveMillis() - sessionStartedActiveMillis);
+		value.put("long_break_deferred", state.isLongBreakDeferred());
+		double deferredMinutes = state.isLongBreakDeferred()
+			? Math.max(0.0, (state.getLongDeferredUntilActiveMillis() - state.getTotalActiveMillis()) / 60_000.0) : 0.0;
+		value.put("long_break_due_in_active_minutes", Math.max(deferredMinutes,
+			Math.max(0.0,
+			profile.activeMinutesAtLongHazard(state.getLongHazardBudget()) -
+				state.getActiveMillisSinceLongBreak() / 60_000.0)));
+		value.put("micro_pressure", state.getMicroPressure());
+		value.put("micro_budget", state.getMicroBudget());
+		value.put("total_active_millis", state.getTotalActiveMillis());
 		value.put("micro_break_count", state.getMicroBreakCount());
 		value.put("long_break_count", state.getLongBreakCount());
 		value.put("cursor_release_count", state.getCursorReleaseCount());
@@ -431,15 +457,15 @@ final class GenericClientBehaviorController implements AutoCloseable
 
 	CompletableFuture<Map<String, Object>> endLongBreak()
 	{
-		return endBreak("long");
+		return endBreak("long", "manual");
 	}
 
 	CompletableFuture<Map<String, Object>> endActiveBreak()
 	{
-		return endBreak(null);
+		return endBreak(null, "interrupted");
 	}
 
-	private CompletableFuture<Map<String, Object>> endBreak(String requiredType)
+	private CompletableFuture<Map<String, Object>> endBreak(String requiredType, String reason)
 	{
 		final CompletableFuture<Map<String, Object>> completion;
 		final String type;
@@ -458,11 +484,18 @@ final class GenericClientBehaviorController implements AutoCloseable
 				breakTimer = null;
 			}
 			completion = activeBreak;
-			reporter.accept("BEHAVIOR_BREAK_END_REQUESTED type=" + type + " reason=manual");
+			state.interruptBreak(reason);
+			saveStateQuietly();
+			reporter.accept("BEHAVIOR_BREAK_END_REQUESTED type=" + type + " reason=" + reason);
 		}
 
 		finishActiveBreak();
-		return completion.thenApply(ignored -> receipt("ended", type));
+		return completion.thenApply(outcome ->
+		{
+			Map<String, Object> result = new LinkedHashMap<>(outcome);
+			result.put("status", "ended");
+			return result;
+		});
 	}
 
 	synchronized boolean isPaused()
@@ -470,33 +503,69 @@ final class GenericClientBehaviorController implements AutoCloseable
 		return activeBreak != null;
 	}
 
-	private boolean longDue(double bonus)
+	private void recordBoundary()
 	{
+		long now = state.getTotalActiveMillis();
+		if (lastBoundaryActiveMillis >= 0L && now > lastBoundaryActiveMillis)
+		{
+			if (boundaryGaps.size() == 21) boundaryGaps.removeFirst();
+			boundaryGaps.addLast(now - lastBoundaryActiveMillis);
+		}
+		lastBoundaryActiveMillis = now;
+	}
+
+	private boolean longMayStart(boolean phase, double bonus)
+	{
+		if (!inputOwned || (!phase && state.getTotalActiveMillis() - sessionStartedActiveMillis <
+			profile.getSessionGraceMinutes() * 60_000.0)) return false;
+		if (state.isLongBreakDeferred())
+		{
+			return phase && state.getTotalActiveMillis() >= state.getLongDeferredUntilActiveMillis();
+		}
+		double gapMinutes = 0.0;
+		if (!boundaryGaps.isEmpty())
+		{
+			java.util.List<Long> gaps = new java.util.ArrayList<>(boundaryGaps);
+			java.util.Collections.sort(gaps);
+			gapMinutes = gaps.get(gaps.size() / 2) / 60_000.0;
+		}
 		double activeMinutes = state.getActiveMillisSinceLongBreak() /
 			(double) TimeUnit.MINUTES.toMillis(1);
-		return profile.cumulativeLongHazard(activeMinutes) + Math.max(0.0, bonus) >=
+		return profile.cumulativeLongHazard(activeMinutes + gapMinutes) + Math.max(0.0, bonus) >=
 			state.getLongHazardBudget();
 	}
 
 	private CompletableFuture<Map<String, Object>> startMicroBreak(
 		String reason,
-		double chance,
-		boolean phase)
+		boolean phase,
+		GenericClientActivityContext activityContext)
 	{
-		double seconds = sampleMicroSeconds(phase);
-		return startBreak("micro", "none", secondsToMillis(seconds), reason, chance);
+		double pressure = state.getMicroPressure();
+		state.resetMicroPressure(GenericClientBehaviorProfile.sampleExponentialBudget(random));
+		double seconds = profile.sampleMicroSeconds(random, phase);
+		CompletableFuture<Map<String, Object>> pause = startBreak(
+			"micro", "none", secondsToMillis(seconds), reason, pressure);
+		if (!activityContext.allowsCursorRelease())
+		{
+			return pause;
+		}
+
+		CompletableFuture<Map<String, Object>> cursor = microCursorRelease(activityContext);
+		activeBreakEffects = CompletableFuture.allOf(
+			activeBreakEffects,
+			cursor.thenApply(ignored -> null));
+		return pause.thenCombine(cursor, (breakReceipt, cursorReceipt) ->
+		{
+			Map<String, Object> result = new LinkedHashMap<>(breakReceipt);
+			result.put("cursor_release", cursorReceipt);
+			return result;
+		});
 	}
 
 	private CompletableFuture<Map<String, Object>> startLongBreak(String reason, double bonus)
 	{
-		double minutes = sampleLongMinutes();
-		GenericClientBehaviorProfile.LongBreakMode mode = profile.getFavoredLongBreakMode();
-		if (random.nextDouble() < profile.getOppositeLongBreakProbability())
-		{
-			mode = mode == GenericClientBehaviorProfile.LongBreakMode.AFK
-				? GenericClientBehaviorProfile.LongBreakMode.LOGOUT
-				: GenericClientBehaviorProfile.LongBreakMode.AFK;
-		}
+		double minutes = profile.sampleLongMinutes(random);
+		GenericClientBehaviorProfile.LongBreakMode mode = profile.sampleLongBreakMode(random);
 		return startBreak(
 			"long",
 			mode.name().toLowerCase(Locale.ROOT),
@@ -510,16 +579,16 @@ final class GenericClientBehaviorController implements AutoCloseable
 		String mode,
 		long durationMillis,
 		String reason,
-		double rollValue)
+		double triggerValue)
 	{
 		long endEpochMillis = Math.addExact(clock.epochMillis(), durationMillis);
-		state.startBreak(type, mode, endEpochMillis);
+		state.startBreak(type, mode, clock.epochMillis(), endEpochMillis);
 		saveStateQuietly();
 		Map<String, Object> started = receipt("started", type);
 		started.put("reason", reason);
 		started.put("duration_millis", durationMillis);
 		started.put("long_break_mode", mode);
-		started.put("roll_value", rollValue);
+		started.put("micro".equals(type) ? "micro_pressure" : "phase_long_bonus", triggerValue);
 		activeBreak = new CompletableFuture<>();
 		reporter.accept("BEHAVIOR_BREAK_STARTED type=" + type + " mode=" + mode +
 			" durationMillis=" + durationMillis + " reason=" + reason);
@@ -529,7 +598,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 		return activeBreak.thenApply(completed ->
 		{
 			Map<String, Object> result = new LinkedHashMap<>(started);
-			result.put("status", "completed");
+			result.putAll(completed);
 			return result;
 		});
 	}
@@ -568,19 +637,39 @@ final class GenericClientBehaviorController implements AutoCloseable
 					breakTimer = timer.schedule(GenericClientBehaviorController.this::finishActiveBreak, 5_000L);
 					return;
 				}
-				if ("long".equals(type))
+				long elapsedMillis = Math.max(0L, clock.epochMillis() - state.getBreakStartedEpochMillis());
+				String endReason = state.getBreakEndReason();
+				boolean deferred = "long".equals(type) && !"completed".equals(endReason);
+				if (deferred)
 				{
-					state.resetLongClock(nextExponentialBudget());
-					state.suppressNextMicro();
+					state.deferLongBreak(minutesToMillis(profile.getLongRefractoryMinutes()));
+					if (elapsedMillis >= secondsToMillis(profile.getShortBodyMedianSeconds())) suppressMicroAfterLongBreak();
+				}
+				else if ("long".equals(type))
+				{
+					state.resetLongClock(GenericClientBehaviorProfile.sampleExponentialBudget(random));
+					suppressMicroAfterLongBreak();
 				}
 				state.clearBreak();
 				activeBreak = null;
+				lastTickNanos = clock.nanoTime();
 				activeBreakEffects = CompletableFuture.completedFuture(null);
 				saveStateQuietly();
-				reporter.accept("BEHAVIOR_BREAK_COMPLETED type=" + type);
-				completion.complete(receipt("completed", type));
+				reporter.accept("BEHAVIOR_BREAK_" + (deferred ? "DEFERRED" : "COMPLETED") +
+					" type=" + type + " reason=" + endReason + " elapsedMillis=" + elapsedMillis);
+				Map<String, Object> outcome = receipt(deferred ? "deferred" : "completed", type);
+				outcome.put("end_reason", endReason);
+				outcome.put("elapsed_millis", elapsedMillis);
+				outcome.put("long_break_deferred", deferred);
+				completion.complete(outcome);
 			}
 		});
+	}
+
+	private void suppressMicroAfterLongBreak()
+	{
+		state.resetMicroPressure(GenericClientBehaviorProfile.sampleExponentialBudget(random));
+		state.suppressNextMicro();
 	}
 
 	private void restorePersistedBreak()
@@ -590,12 +679,20 @@ final class GenericClientBehaviorController implements AutoCloseable
 			return;
 		}
 		long remaining = state.getBreakEndEpochMillis() - clock.epochMillis();
+		if (!"completed".equals(state.getBreakEndReason()))
+		{
+			activeBreak = new CompletableFuture<>();
+			activeBreakEffects = CompletableFuture.completedFuture(null);
+			breakTimer = timer.schedule(this::finishActiveBreak, 0L);
+			reporter.accept("BEHAVIOR_BREAK_RESTORED type=" + state.getBreakType() + " interrupted=true");
+			return;
+		}
 		if (remaining <= 0L)
 		{
 			if ("long".equals(state.getBreakType()))
 			{
-				state.resetLongClock(nextExponentialBudget());
-				state.suppressNextMicro();
+				state.resetLongClock(GenericClientBehaviorProfile.sampleExponentialBudget(random));
+				suppressMicroAfterLongBreak();
 			}
 			state.clearBreak();
 			saveStateQuietly();
@@ -621,50 +718,6 @@ final class GenericClientBehaviorController implements AutoCloseable
 				}
 				return null;
 			});
-	}
-
-	private double sampleMicroSeconds(boolean phase)
-	{
-		double tailChance = Math.min(0.30,
-			phase ? profile.getShortTailProbability() * 2.0 : profile.getShortTailProbability());
-		if (random.nextDouble() < tailChance)
-		{
-			return Math.min(Math.nextDown(GenericClientBehaviorProfile.SHORT_DURATION_MAX_SECONDS),
-				SHORT_TAIL_MIN_SECONDS * Math.pow(10.0, random.nextDouble()));
-		}
-		double body = 1.0 + (profile.getShortBodyMedianSeconds() - 1.0) *
-			Math.exp(0.5 * random.nextGaussian());
-		return clamp(body,
-			GenericClientBehaviorProfile.SHORT_DURATION_MIN_SECONDS,
-			Math.nextDown(GenericClientBehaviorProfile.SHORT_DURATION_MAX_SECONDS));
-	}
-
-	private double sampleLongMinutes()
-	{
-		double duration = 3.0 + (profile.getLongMedianMinutes() - 3.0) *
-			Math.exp(0.5 * random.nextGaussian());
-		return clamp(duration,
-			GenericClientBehaviorProfile.LONG_DURATION_MIN_MINUTES,
-			GenericClientBehaviorProfile.LONG_DURATION_MAX_MINUTES);
-	}
-
-	private double nextExponentialBudget()
-	{
-		double unit = clamp(random.nextDouble(), 0.000000000001, Math.nextDown(1.0));
-		return -Math.log(1.0 - unit);
-	}
-
-	private void saveState()
-	{
-		try
-		{
-			store.save(state, clock.epochMillis());
-			activeMillisAtLastSave = state.getTotalActiveMillis();
-		}
-		catch (IOException exception)
-		{
-			throw new IllegalStateException("Unable to save behavior state", exception);
-		}
 	}
 
 	private void saveStateQuietly()
@@ -746,8 +799,10 @@ final class GenericClientBehaviorController implements AutoCloseable
 		GenericClientActivityContext activityContext)
 	{
 		Map<String, Object> value = receipt(status, kind);
-		value.put("activity", activityContext.getActivity().getValue());
-		value.put("policy", activityContext.toMap());
+		GenericClientPolicyResolver.Resolution resolved = activityContext.resolve();
+		value.put("activity", resolved.activity.getValue());
+		value.put("policy", resolved.policy.toMap());
+		value.put("policy_reasons", resolved.reasons);
 		return value;
 	}
 
@@ -760,11 +815,6 @@ final class GenericClientBehaviorController implements AutoCloseable
 	{
 		return Math.max(TimeUnit.MINUTES.toMillis(3),
 			Math.min(TimeUnit.MINUTES.toMillis(60), Math.round(minutes * TimeUnit.MINUTES.toMillis(1))));
-	}
-
-	private static double clamp(double value, double minimum, double maximum)
-	{
-		return Math.max(minimum, Math.min(maximum, value));
 	}
 
 	@Override
@@ -784,7 +834,7 @@ final class GenericClientBehaviorController implements AutoCloseable
 
 	interface BreakEffects
 	{
-		CompletableFuture<String> moveOffscreen(GenericClientBehaviorProfile.Edge edge);
+		CompletableFuture<String> moveOffscreen(GenericClientBehaviorProfile.Edge edge, GenericClientActivityContext context);
 
 		CompletableFuture<String> logout();
 
@@ -808,10 +858,5 @@ final class GenericClientBehaviorController implements AutoCloseable
 		long nanoTime();
 	}
 
-	interface RandomSource
-	{
-		double nextDouble();
 
-		double nextGaussian();
-	}
 }

@@ -37,6 +37,22 @@ public class GenericClientCameraOwnerTest
 	}
 
 	@Test
+	public void cancelledActionCannotWriteCameraOrCancelTheReplacement()
+	{
+		CameraState camera = new CameraState();
+		GenericClientCameraOwner owner = new GenericClientCameraOwner(camera.client());
+		GenericClientActionBoundary.Ticket ticket = new GenericClientActionBoundary.Ticket();
+		GenericClientActivityContext context = GenericClientActivityContext.none().withTicket(ticket);
+		GenericClientCameraOwner.Operation first = owner.begin(context);
+		ticket.cancel();
+		assertFalse(first.face(100, 200));
+		GenericClientCameraOwner.Operation second = owner.begin();
+		owner.cancel(context);
+		assertTrue(second.face(300, 400));
+		assertEquals(300, camera.yaw.get());
+	}
+
+	@Test
 	public void activeOperationFacesTheTargetWithoutChangingZoom()
 	{
 		CameraState camera = new CameraState();

@@ -1,5 +1,7 @@
 package com.genericclient;
 
+import java.util.Collections;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -8,8 +10,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.InventoryID;
 import net.runelite.client.callback.ClientThread;
 
 final class GenericClientEmergencyEscapeInput
@@ -44,26 +49,31 @@ final class GenericClientEmergencyEscapeInput
 		this.reporter = reporter;
 	}
 
-	CompletableFuture<Map<String, Object>> escape(GenericClientEmergencyController.Escape escape)
+	CompletableFuture<Map<String, Object>> escape(GenericClientEmergencyEscape escape)
 	{
-		if (escape.getType() == GenericClientEmergencyController.EscapeType.WALK)
+		if (escape.getType() == GenericClientEmergencyEscape.Type.WALK)
 		{
-			return walker.walkTo(
-				escape.getDestination(),
-				escape.getWithin(),
-				300,
-				GenericClientActivityContext.none());
+			return walker.walkTo(new GenericClientWalkRequest(escape.getDestination(), escape.getWithin(), 300, GenericClientActivityContext.none(),
+				true, Collections.emptyList(), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null));
 		}
 		return inventoryDialogueEscape(escape);
 	}
 
 	private CompletableFuture<Map<String, Object>> inventoryDialogueEscape(
-		GenericClientEmergencyController.Escape escape)
+		GenericClientEmergencyEscape escape)
 	{
-		reporter.accept("EMERGENCY_INVENTORY_ESCAPE_ITEM item=" + escape.getItemId() +
+		reporter.accept("EMERGENCY_INVENTORY_ESCAPE_ITEMS candidates=" + escape.getItemIds() +
 			" action=" + escape.getItemAction());
-		return inventoryInput.interact(
-			escape.getItemId(),
+		return resolveInventoryItem(escape).thenCompose(itemId ->
+		{
+			if (itemId < 0)
+			{
+				return CompletableFuture.completedFuture(
+					rejected("emergency_escape_item_missing", null, null));
+			}
+			reporter.accept("EMERGENCY_INVENTORY_ESCAPE_ITEM resolved=" + itemId);
+			return inventoryInput.interact(
+			itemId,
 			null,
 			escape.getItemAction(),
 			GenericClientActivityContext.none()).thenCompose(itemReceipt ->
@@ -82,9 +92,10 @@ final class GenericClientEmergencyEscapeInput
 				}
 				reporter.accept("EMERGENCY_INVENTORY_ESCAPE_CHOICE choice=" +
 					visibleChoice);
-				return dialogueInput.chooseImmediate(
+				return dialogueInput.chooseKeyboard(
 					visibleChoice,
-					GenericClientActivityContext.none()).thenCompose(choiceReceipt ->
+					GenericClientActivityContext.none(),
+					false).thenCompose(choiceReceipt ->
 				{
 					if (!accepted(choiceReceipt))
 					{
@@ -99,7 +110,37 @@ final class GenericClientEmergencyEscapeInput
 								"emergency_escape_arrival_unverified", itemReceipt, choiceReceipt));
 				});
 			});
+			});
 		});
+	}
+
+	private CompletableFuture<Integer> resolveInventoryItem(
+		GenericClientEmergencyEscape escape)
+	{
+		CompletableFuture<Integer> result = new CompletableFuture<>();
+		clientThread.invoke(() ->
+		{
+			ItemContainer inventory = client.getItemContainer(InventoryID.INV);
+			result.complete(escape.resolveItemId(
+				itemId -> carried(inventory, itemId)));
+		});
+		return result;
+	}
+
+	private static boolean carried(ItemContainer inventory, int itemId)
+	{
+		if (inventory == null)
+		{
+			return false;
+		}
+		for (Item item : inventory.getItems())
+		{
+			if (item != null && item.getId() == itemId && item.getQuantity() > 0)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private CompletableFuture<String> waitForChoice(String choice, int attempt)
@@ -179,7 +220,7 @@ final class GenericClientEmergencyEscapeInput
 	}
 
 	private static Map<String, Object> completed(
-		GenericClientEmergencyController.Escape escape,
+		GenericClientEmergencyEscape escape,
 		Map<String, Object> itemReceipt,
 		Map<String, Object> choiceReceipt)
 	{

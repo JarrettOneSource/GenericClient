@@ -40,6 +40,18 @@ public class GenericClientScriptPresentationTest
 			"Duplicate Lua script action id: refresh");
 	}
 
+	@Test
+	public void overlayTextHasNoCharacterLimit()
+	{
+		String label = "A deliberately descriptive overlay label beyond sixteen characters";
+		String value = "Recovered - awaiting control without crashing the automation script";
+		List<GenericClientOverlayRow> rows = GenericClientOverlayRow.parse(
+			Arrays.asList(row(label, value)));
+
+		assertEquals(label, rows.get(0).getLabel());
+		assertEquals(value, rows.get(0).getValue());
+	}
+
 	private static Map<String, Object> action(String id, String label)
 	{
 		Map<String, Object> value = new LinkedHashMap<>();

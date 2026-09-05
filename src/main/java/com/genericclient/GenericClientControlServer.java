@@ -39,6 +39,7 @@ final class GenericClientControlServer implements AutoCloseable
 	private final Function<String, java.util.concurrent.CompletableFuture<String>> noteSetter;
 	private final Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> screenshotAction;
 	private final Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> endBreakAction;
+	private final GenericClientSceneHighlights sceneHighlights;
 	private final Consumer<String> reporter;
 	private final Map<String, RpcHandler> handlers;
 	private final Gson gson = new Gson();
@@ -58,6 +59,7 @@ final class GenericClientControlServer implements AutoCloseable
 		Function<String, java.util.concurrent.CompletableFuture<String>> noteSetter,
 		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> screenshotAction,
 		Supplier<java.util.concurrent.CompletableFuture<Map<String, Object>>> endBreakAction,
+		GenericClientSceneHighlights sceneHighlights,
 		Consumer<String> reporter)
 	{
 		this.requestedPort = port;
@@ -71,6 +73,7 @@ final class GenericClientControlServer implements AutoCloseable
 		this.noteSetter = noteSetter;
 		this.screenshotAction = screenshotAction;
 		this.endBreakAction = endBreakAction;
+		this.sceneHighlights = sceneHighlights;
 		this.reporter = reporter;
 		this.handlers = createHandlers();
 	}
@@ -224,6 +227,8 @@ final class GenericClientControlServer implements AutoCloseable
 	{
 		Map<String, RpcHandler> values = new LinkedHashMap<>();
 		values.put("status", parameters -> statusSupplier.get());
+		values.put("scene.highlight", parameters -> sceneHighlights.replace(parameters.get("markers")));
+		values.put("scene.clear", parameters -> sceneHighlights.clear());
 		values.put("screenshot.capture", parameters -> await(screenshotAction.get(), 15));
 		values.put("behavior.status", parameters -> behaviorStatus());
 		values.put("behavior.profile", parameters -> behaviorProfile());
@@ -255,9 +260,9 @@ final class GenericClientControlServer implements AutoCloseable
 		values.put("lua.eval", parameters -> await(
 			luaHost.evaluate(stringParameter(parameters, "code")), LUA_TIMEOUT_SECONDS));
 		values.put("lua.reset", parameters -> await(luaHost.resetRepl(), 10));
-		values.put("scripts.list", parameters -> luaHost.listScriptValues());
+		values.put("scripts.list", parameters -> luaHost.catalog.listScriptValues());
 		values.put("scripts.get", this::scriptDetails);
-		values.put("scripts.save", parameters -> await(luaHost.saveScript(
+		values.put("scripts.save", parameters -> await(luaHost.catalog.saveScript(
 			stringParameter(parameters, "id"),
 			stringParameter(parameters, "name"),
 			stringParameter(parameters, "description"),
@@ -268,7 +273,7 @@ final class GenericClientControlServer implements AutoCloseable
 		values.put("scripts.action", parameters -> await(
 			luaHost.triggerAction(stringParameter(parameters, "action")), 10));
 		values.put("scripts.stop", parameters -> await(luaHost.stop(), 10));
-		values.put("scripts.reload", parameters -> await(luaHost.reloadManifest(), 10));
+		values.put("scripts.reload", parameters -> await(luaHost.catalog.reloadManifest(), 10));
 		return Collections.unmodifiableMap(values);
 	}
 
@@ -282,15 +287,15 @@ final class GenericClientControlServer implements AutoCloseable
 		throws IOException, ExecutionException, InterruptedException, TimeoutException
 	{
 		String id = stringParameter(parameters, "id");
-		Map<String, Object> script = new LinkedHashMap<>(luaHost.getScriptValue(id));
+		Map<String, Object> script = new LinkedHashMap<>(luaHost.catalog.getScriptValue(id));
 		List<Map<String, Object>> inputs = new ArrayList<>();
-		for (GenericClientScriptInput input : await(luaHost.describe(id), 10))
+		for (GenericClientScriptInput input : await(luaHost.catalog.describe(id), 10))
 		{
 			inputs.add(input.toMap());
 		}
 		script.put("inputs", inputs);
 		List<Map<String, Object>> actions = new ArrayList<>();
-		for (GenericClientScriptAction action : await(luaHost.describeActions(id), 10))
+		for (GenericClientScriptAction action : await(luaHost.catalog.describeActions(id), 10))
 		{
 			actions.add(action.toMap());
 		}

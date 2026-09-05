@@ -3,11 +3,8 @@ package com.genericclient;
 import com.google.gson.Gson;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -98,28 +95,7 @@ final class GenericClientInstanceRegistration implements AutoCloseable
 		value.put("account_profile_id", emptyToNull(accountProfileId));
 
 		Files.createDirectories(descriptorPath.getParent());
-		Files.writeString(
-			temporaryPath,
-			gson.toJson(value) + System.lineSeparator(),
-			StandardCharsets.UTF_8,
-			StandardOpenOption.CREATE,
-			StandardOpenOption.TRUNCATE_EXISTING,
-			StandardOpenOption.WRITE);
-		try
-		{
-			Files.move(
-				temporaryPath,
-				descriptorPath,
-				StandardCopyOption.ATOMIC_MOVE,
-				StandardCopyOption.REPLACE_EXISTING);
-		}
-		catch (AtomicMoveNotSupportedException exception)
-		{
-			Files.move(
-				temporaryPath,
-				descriptorPath,
-				StandardCopyOption.REPLACE_EXISTING);
-		}
+		GenericClientAtomicFile.write(descriptorPath, temporaryPath, gson.toJson(value) + System.lineSeparator());
 		lastValue = new LinkedHashMap<>(value);
 		return new LinkedHashMap<>(value);
 	}

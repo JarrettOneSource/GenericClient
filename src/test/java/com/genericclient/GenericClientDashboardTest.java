@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -48,7 +49,7 @@ public class GenericClientDashboardTest
 			assertNotNull(buttonOrNull(content, "Settings"));
 
 			List<String> labels = labels(content);
-			assertTrue(labels.contains("Chance"));
+			assertTrue(labels.contains("Rate"));
 			assertTrue(labels.contains("Offscreen chance"));
 			assertTrue(labels.contains("Move duration"));
 			assertTrue(labels.contains("Effect"));
@@ -79,14 +80,34 @@ public class GenericClientDashboardTest
 		behavior.put("break_remaining_millis", 0L);
 		settings.updateBehavior(behavior);
 
-		spinnerInRow(settings, "Chance").setValue(91);
+		assertEquals(profile.toMap().get("micro_rate_per_active_hour"), spinnerInRow(settings, "Rate").getValue());
+		spinnerInRow(settings, "Rate").setValue(10.8);
 		spinnerInRow(settings, "Offscreen chance").setValue(87);
 		button(settings, "Save custom").doClick();
-		assertEquals(0.91, actions.savedOverrides.getMicroBreakProbability(), 0.0);
+		assertEquals(0.3, actions.savedOverrides.getMicroBreakProbability(), 1e-12);
 		assertEquals(0.87, actions.savedOverrides.getCursorReleaseProbability(), 0.0);
 
 		button(settings, "Use seeded").doClick();
 		assertEquals(1, actions.resetCount);
+	}
+
+	@Test
+	public void settingsCanPersistentlyToggleTheMouseTileOverlay()
+	{
+		FakeActions actions = new FakeActions();
+		GenericClientSettingsPanel settings = new GenericClientSettingsPanel(actions);
+		settings.updateMouse(
+			"default.json",
+			Collections.singletonList("default.json"),
+			GenericClientMouseEffect.TRAIL,
+			false,
+			0,
+			false);
+
+		JCheckBox showMouseTile = checkBox(settings, "Show mouse tile");
+		assertFalse(showMouseTile.isSelected());
+		showMouseTile.doClick();
+		assertTrue(actions.showMouseTile);
 	}
 
 	@Test
@@ -127,6 +148,8 @@ public class GenericClientDashboardTest
 	{
 		Class<?> type = GenericClientConfig.class.getMethod("mouseEffect").getReturnType();
 		assertTrue(Modifier.isPublic(type.getModifiers()));
+		assertEquals(boolean.class,
+			GenericClientConfig.class.getMethod("showMouseTile").getReturnType());
 	}
 
 	@Test
@@ -136,7 +159,7 @@ public class GenericClientDashboardTest
 			GenericClientTestSupport.luaHost(temporaryFolder, "external-ui").build();
 		try
 		{
-			host.saveScript(
+			host.catalog.saveScript(
 				"travel",
 				"Travel",
 				"Render an external script's destination choices.",
@@ -169,7 +192,7 @@ public class GenericClientDashboardTest
 			GenericClientTestSupport.luaHost(temporaryFolder, "active-ui").build();
 		try
 		{
-			host.saveScript(
+			host.catalog.saveScript(
 				"active-ui",
 				"Active UI",
 				"Exercise the active script page.",
@@ -363,7 +386,7 @@ public class GenericClientDashboardTest
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
+			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
 			Collections.emptyList());
 	}
 
@@ -423,6 +446,30 @@ public class GenericClientDashboardTest
 		throw new AssertionError("Missing button " + text);
 	}
 
+	private static JCheckBox checkBox(Container root, String text)
+	{
+		JCheckBox found = checkBoxOrNull(root, text);
+		if (found != null) return found;
+		throw new AssertionError("Missing checkbox " + text);
+	}
+
+	private static JCheckBox checkBoxOrNull(Container root, String text)
+	{
+		for (Component component : root.getComponents())
+		{
+			if (component instanceof JCheckBox && text.equals(((JCheckBox) component).getText()))
+			{
+				return (JCheckBox) component;
+			}
+			if (component instanceof Container)
+			{
+				JCheckBox nested = checkBoxOrNull((Container) component, text);
+				if (nested != null) return nested;
+			}
+		}
+		return null;
+	}
+
 	private static JButton buttonOrNull(Container root, String text)
 	{
 		for (Component component : root.getComponents())
@@ -448,11 +495,13 @@ public class GenericClientDashboardTest
 		private GenericClientBehaviorOverrides savedOverrides;
 		private int resetCount;
 		private int endedLongBreaks;
+		private boolean showMouseTile;
 
 		@Override public void printDiagnostics() { }
 		@Override public void walkToRandomTile() { }
 		@Override public void setMouseProfile(String file) { }
 		@Override public void setMouseEffect(GenericClientMouseEffect effect) { }
+		@Override public void setShowMouseTile(boolean enabled) { showMouseTile = enabled; }
 		@Override public void reloadMouseProfile() { }
 		@Override public void startMouseRecording() { }
 		@Override public void stopMouseRecording() { }

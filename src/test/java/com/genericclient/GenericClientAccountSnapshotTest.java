@@ -121,11 +121,11 @@ public class GenericClientAccountSnapshotTest
 				120,
 				Arrays.asList(
 					new GenericClientAccountSnapshot.QuestSnapshot(
-						"waterfall_quest", 65, "Waterfall Quest", "finished"),
+						"waterfall_quest", 65, "Waterfall Quest", "finished", 10),
 					new GenericClientAccountSnapshot.QuestSnapshot(
-						"desert_treasure_i", 101, "Desert Treasure I", "in_progress"),
+						"desert_treasure_i", 101, "Desert Treasure I", "in_progress", 3),
 					new GenericClientAccountSnapshot.QuestSnapshot(
-						"kings_ransom", 127, "King's Ransom", "not_started")));
+						"kings_ransom", 127, "King's Ransom", "not_started", 0)));
 
 		Map<String, Object> value = quests.toMap();
 		@SuppressWarnings("unchecked")

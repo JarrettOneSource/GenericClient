@@ -28,6 +28,8 @@ final class GenericClientBehaviorOverrides
 	private int typingWordsPerMinute;
 	@SerializedName("dialogue_reading_percent")
 	private Integer dialogueReadingPercent;
+	@SerializedName("dialogue_input_mode")
+	private GenericClientBehaviorProfile.DialogueInputMode dialogueInputMode;
 
 	private GenericClientBehaviorOverrides()
 	{
@@ -46,7 +48,8 @@ final class GenericClientBehaviorOverrides
 		GenericClientBehaviorProfile.Edge idleEdge,
 		int mouseMoveDurationMillis,
 		int typingWordsPerMinute,
-		int dialogueReadingPercent)
+		int dialogueReadingPercent,
+		GenericClientBehaviorProfile.DialogueInputMode dialogueInputMode)
 	{
 		this.microBreakProbability = microBreakProbability;
 		this.cursorReleaseProbability = cursorReleaseProbability;
@@ -61,6 +64,7 @@ final class GenericClientBehaviorOverrides
 		this.mouseMoveDurationMillis = mouseMoveDurationMillis;
 		this.typingWordsPerMinute = typingWordsPerMinute;
 		this.dialogueReadingPercent = dialogueReadingPercent;
+		this.dialogueInputMode = dialogueInputMode;
 		validate();
 	}
 
@@ -79,7 +83,8 @@ final class GenericClientBehaviorOverrides
 			profile.getIdleEdge(),
 			profile.getMouseMoveDurationMillis(),
 			profile.getTypingWordsPerMinute(),
-			profile.getDialogueReadingPercent());
+			profile.getDialogueReadingPercent(),
+			profile.getDialogueInputMode());
 	}
 
 	void validate()
@@ -88,7 +93,7 @@ final class GenericClientBehaviorOverrides
 		{
 			throw new IllegalArgumentException("Unsupported behavior override schema");
 		}
-		requireRange(microBreakProbability, 0.0, 1.0, "Micro chance");
+		requireRange(microBreakProbability, 0.0, 1.0, "Micro rate fraction");
 		if (cursorReleaseProbability != null)
 		{
 			requireRange(cursorReleaseProbability, 0.0, 1.0, "Cursor release chance");
@@ -200,6 +205,11 @@ final class GenericClientBehaviorOverrides
 		return dialogueReadingPercent;
 	}
 
+	GenericClientBehaviorProfile.DialogueInputMode getDialogueInputMode()
+	{
+		return dialogueInputMode;
+	}
+
 	Map<String, Object> toMap()
 	{
 		Map<String, Object> value = new LinkedHashMap<>();
@@ -219,6 +229,10 @@ final class GenericClientBehaviorOverrides
 		if (dialogueReadingPercent != null)
 		{
 			value.put("dialogue_reading_percent", (long) dialogueReadingPercent);
+		}
+		if (dialogueInputMode != null)
+		{
+			value.put("dialogue_input_mode", dialogueInputMode.name().toLowerCase(Locale.ROOT));
 		}
 		return value;
 	}

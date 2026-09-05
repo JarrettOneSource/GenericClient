@@ -29,7 +29,7 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 
-final class GenericClientObjectInput
+final class GenericClientObjectInput implements GenericClientWalker.ObstacleInput
 {
 	private static final int CAMERA_ATTEMPTS = 1;
 	private static final int CAMERA_POLL_ATTEMPTS = 30;
@@ -56,7 +56,8 @@ final class GenericClientObjectInput
 		this.cameraOwner = cameraOwner;
 	}
 
-	CompletableFuture<Map<String, Object>> interact(
+	@Override
+	public CompletableFuture<Map<String, Object>> interact(
 		int objectId,
 		String action,
 		WorldPoint world,
@@ -90,10 +91,11 @@ final class GenericClientObjectInput
 			objectId, "Use", world, within, true, itemId, itemName, activityContext);
 	}
 
-	void cancel(String reason)
+	@Override
+	public void cancel(String reason, GenericClientActivityContext owner)
 	{
-		cameraOwner.cancel();
-		menuInput.cancel(reason);
+		cameraOwner.cancel(owner);
+		menuInput.cancel(reason, owner);
 	}
 
 	private CompletableFuture<Map<String, Object>> interactWithCamera(
@@ -106,7 +108,7 @@ final class GenericClientObjectInput
 		String itemName,
 		GenericClientActivityContext activityContext)
 	{
-		GenericClientCameraOwner.Operation cameraOperation = cameraOwner.begin();
+		GenericClientCameraOwner.Operation cameraOperation = cameraOwner.begin(activityContext);
 		GenericClientMenuInput.TargetResolver resolver = () -> resolveObject(
 			objectId, action, world, within, selectedItem, itemId, itemName);
 		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->

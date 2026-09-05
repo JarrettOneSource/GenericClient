@@ -23,11 +23,19 @@ maintained from RuneLite's
 [`RandomEventPlugin`](https://github.com/runelite/runelite/blob/master/runelite-client/src/main/java/net/runelite/client/plugins/randomevents/RandomEventPlugin.java),
 but that plugin does not need to be enabled or installed.
 
+During `combat` or `hazardous_travel`, detection is recorded without
+interrupting, auto-talking, or blocking automation. The same NPC is ignored
+until it despawns, at which point the deferred record completes automatically.
+An optional random event must not stop a fight, active escape, or rush through
+a kill zone. `client_status.random_event.deferred_activity` records which
+critical activity owned the deferral.
+
 ## Interruption lifecycle
 
-On detection GenericClient immediately cancels in-flight walker, menu, combat,
-bank, and Grand Exchange input, stops the active standalone Lua coroutine, and
-blocks scheduled automation. A busy REPL call is interrupted too. Once that
+Outside combat and hazardous travel, detection immediately cancels in-flight
+walker, menu, combat, bank, and Grand Exchange input, stops the active
+standalone Lua coroutine, and blocks scheduled automation. A busy REPL call is
+interrupted too. Once that
 cleanup barrier finishes, a fresh REPL remains available for event inspection
 and manual solving. A manually owned script is retained as a restart descriptor:
 script ID plus its validated input values.
@@ -214,3 +222,28 @@ then requires the `6202` to `6200` inventory transition, the catnap message, and
 a verified departure from ScapeRune. The complete interaction sequence is
 live-proven; automatic execution of the registered solver remains pending the
 next Evil Bob occurrence.
+
+## Prison Pete evidence
+
+On 2026-09-03 surface Evil Bob NPC `6754` transported the account into the
+Prison Pete branch of ScapeRune. This is separate from NPC `390`'s fish island
+and must not use that solver. Live inspection identified Prison Pete `368`,
+lever `24296`, target-model widget `17891332`, close widget `17891333`, and
+prison key `6966`. The exact balloon mapping is:
+
+- widget model `10749`: sheep NPC `369` or `5493`;
+- widget model `10750`: cat NPC `371` or `5489`;
+- widget model `11028`: dog NPC `370` or `5488`;
+- widget model `11034`: goat NPC `5491` or `5492`.
+
+The live event requested `10750`, `11028`, and `11034`; exact NPCs `5489`,
+`370`, and `5492` each produced a correct key. After the third return, one
+direct east-hallway click to `(2101,4466,0)` produced the escape message and
+returned the account to Port Sarim. The reward dialogue and inventory agreed on
+`4 x Grimy snapdragon`.
+
+GenericClientScripts `prison-pete` now owns NPC `6754`. It handles the
+invitation, introductory dialogue, transient target widget, exact model-family
+selection, key return, east exit, and reward receipt. The recovered sequence is
+live-proven; automatic execution of the new standalone solver remains pending
+the next occurrence.

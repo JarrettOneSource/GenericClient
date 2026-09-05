@@ -1,6 +1,8 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -9,6 +11,9 @@ import java.util.List;
 import java.util.Map;
 import java.lang.reflect.Proxy;
 import net.runelite.api.Client;
+import net.runelite.api.CollisionDataFlag;
+import net.runelite.api.GameObject;
+import net.runelite.api.ObjectComposition;
 import net.runelite.api.Player;
 import net.runelite.api.Scene;
 import net.runelite.api.Tile;
@@ -20,6 +25,59 @@ import org.junit.Test;
 
 public class GenericClientQuestSnapshotTest
 {
+	@Test
+	public void capturesTheDoorFootprintForPlanningAndInteractionWithoutOpeningAdjacentWalls()
+	{
+		java.util.concurrent.atomic.AtomicInteger width = new java.util.concurrent.atomic.AtomicInteger(3);
+		GameObject door = proxy(GameObject.class, (method, arguments) ->
+		{
+			switch (method)
+			{
+				case "getId": return 1967;
+				case "getWorldLocation": return new WorldPoint(2464, 3492, 0);
+				case "sizeX": return width.get();
+				case "sizeY": return 1;
+				default: return null;
+			}
+		});
+		Tile[][][] tiles = new Tile[1][12][12];
+		tiles[0][4][5] = proxy(Tile.class, (method, arguments) ->
+			"getGameObjects".equals(method) ? new GameObject[]{door} : null);
+		Scene scene = proxy(Scene.class, (method, arguments) -> "getTiles".equals(method) ? tiles : null);
+		WorldView view = proxy(WorldView.class, (method, arguments) -> "getScene".equals(method) ? scene : null);
+		Player player = proxy(Player.class, (method, arguments) ->
+		{
+			switch (method)
+			{
+				case "getWorldLocation": return new WorldPoint(2465, 3491, 0);
+				case "getLocalLocation": return new LocalPoint(704, 576, WorldView.TOPLEVEL);
+				case "getWorldView": return view;
+				default: return null;
+			}
+		});
+		ObjectComposition definition = proxy(ObjectComposition.class, (method, arguments) ->
+			"getName".equals(method) ? "Tree door" : "getActions".equals(method) ? new String[]{"Open"} : null);
+		Client client = proxy(Client.class, (method, arguments) ->
+			"getVarps".equals(method) ? new int[0] : "getObjectDefinition".equals(method) ? definition : null);
+		GenericClientQuestSnapshot captured = GenericClientQuestSnapshot.capture(client, player);
+		width.set(1);
+		int[][] flags = new int[12][12];
+		for (int x = 2; x <= 6; x++) flags[x][5] = CollisionDataFlag.BLOCK_MOVEMENT_FULL;
+		GenericClientSnapshot snapshot = new GenericClientSnapshot(1, "LOGGED_IN", 240,
+			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 2465, 3491, 0, 0), List.of(),
+			GenericClientAccountSnapshot.empty(), captured, List.of(),
+			new GenericClientSceneCollision(true, 2460, 3487, 0, flags));
+		assertTrue(snapshot.canPlanMove(2465, 3491, 0, 0, 1, false));
+		assertTrue(snapshot.canPlanMove(2465, 3492, 0, 0, 1, false));
+		assertFalse(snapshot.canPlanMove(2462, 3491, 0, 0, 1, false));
+		assertFalse(snapshot.canPlanMove(2466, 3491, 0, 0, 1, false));
+		GenericClientSnapshot.RouteBlock block = snapshot.findRouteBlock(
+			List.of(new WorldPoint(2465, 3491, 0), new WorldPoint(2465, 3492, 0)), 0, 1);
+		assertEquals(1967, block.getObjectId());
+		assertEquals(new WorldPoint(2464, 3492, 0), block.getWorld());
+		assertEquals("Open", block.getAction());
+	}
+
 	@Test
 	@SuppressWarnings("unchecked")
 	public void readsOnlyRequestedCopiedVarps()

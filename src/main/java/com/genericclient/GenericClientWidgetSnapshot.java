@@ -1,13 +1,11 @@
 package com.genericclient;
 
 import java.awt.Rectangle;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -17,15 +15,12 @@ import net.runelite.client.plugins.puzzlesolver.solver.PuzzleState;
 import net.runelite.client.plugins.puzzlesolver.solver.heuristics.ManhattanDistance;
 import net.runelite.client.plugins.puzzlesolver.solver.pathfinding.IDAStarMM;
 import net.runelite.api.Client;
-import net.runelite.api.HashTable;
-import net.runelite.api.WidgetNode;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.util.Text;
 
 final class GenericClientWidgetSnapshot
 {
-	private static final int MAX_CAPTURED_WIDGETS = 1_024;
 	private static final int MAX_QUERY_RESULTS = 100;
 
 	private final List<WidgetValue> widgets;
@@ -42,47 +37,20 @@ final class GenericClientWidgetSnapshot
 
 	static GenericClientWidgetSnapshot capture(Client client)
 	{
-		Widget[] roots = client.getWidgetRoots();
-		Set<Widget> seen = Collections.newSetFromMap(new IdentityHashMap<>());
-		ArrayDeque<Widget> queue = new ArrayDeque<>();
-		HashTable<WidgetNode> componentTable = client.getComponentTable();
-		if (componentTable != null)
-		{
-			for (WidgetNode node : componentTable)
-			{
-				if (node != null)
-				{
-					Widget root = client.getWidget(node.getId(), 0);
-					if (root != null)
-					{
-						queue.addLast(root);
-					}
-				}
-			}
-		}
-		add(queue, roots);
 		List<WidgetValue> values = new ArrayList<>();
-		while (!queue.isEmpty() && seen.size() < MAX_CAPTURED_WIDGETS)
-		{
-			Widget widget = queue.removeFirst();
-			if (!seen.add(widget))
-			{
-				continue;
-			}
-			Rectangle bounds = widget.getBounds();
-			if (!widget.isHidden() && !widget.isSelfHidden() && bounds != null &&
-				bounds.width > 0 && bounds.height > 0)
-			{
-				values.add(WidgetValue.capture(widget, bounds));
-			}
-			add(queue, widget.getChildren());
-			add(queue, widget.getDynamicChildren());
-			add(queue, widget.getStaticChildren());
-			add(queue, widget.getNestedChildren());
-		}
+		for (Widget widget : GenericClientWidgets.visible(client))
+			values.add(new WidgetValue(widget, widget.getBounds()));
 		values.sort(Comparator.comparingInt(WidgetValue::getId)
 			.thenComparingInt(WidgetValue::getIndex));
 		return new GenericClientWidgetSnapshot(values);
+	}
+
+	boolean contains(int id, String label)
+	{
+		for (WidgetValue widget : widgets)
+			if (label == null ? widget.id == id : (widget.id == id || widget.ancestors.contains(id)) &&
+				GenericClientWidgets.matchesLabel(label, widget.text, widget.name, widget.actions)) return true;
+		return false;
 	}
 
 	List<Map<String, Object>> read(Map<?, ?> query)
@@ -228,21 +196,6 @@ final class GenericClientWidgetSnapshot
 		return values;
 	}
 
-	private static void add(ArrayDeque<Widget> queue, Widget[] widgets)
-	{
-		if (widgets == null)
-		{
-			return;
-		}
-		for (Widget widget : widgets)
-		{
-			if (widget != null)
-			{
-				queue.addLast(widget);
-			}
-		}
-	}
-
 	private static int number(Object value, int defaultValue)
 	{
 		return value instanceof Number ? ((Number) value).intValue() : defaultValue;
@@ -262,6 +215,7 @@ final class GenericClientWidgetSnapshot
 		private final int componentId;
 		private final int index;
 		private final int parentId;
+		private final Set<Integer> ancestors;
 		private final int type;
 		private final String text;
 		private final String name;
@@ -271,60 +225,26 @@ final class GenericClientWidgetSnapshot
 		private final int spriteId;
 		private final Rectangle bounds;
 
-		private WidgetValue(
-			int id,
-			int index,
-			int parentId,
-			int type,
-			String text,
-			String name,
-			List<String> actions,
-			int itemId,
-			int modelId,
-			int spriteId,
-			Rectangle bounds)
+		private WidgetValue(Widget widget, Rectangle bounds)
 		{
-			this.id = id;
+			this.id = widget.getId();
 			this.groupId = id >>> 16;
 			this.componentId = id & 0xFFFF;
-			this.index = index;
-			this.parentId = parentId;
-			this.type = type;
-			this.text = text;
-			this.name = name;
-			this.actions = actions;
-			this.itemId = itemId;
-			this.modelId = modelId;
-			this.spriteId = spriteId;
+			this.index = widget.getIndex();
+			this.parentId = widget.getParentId();
+			this.type = widget.getType();
+			this.text = clean(widget.getText());
+			this.name = clean(widget.getName());
+			String[] rawActions = widget.getActions();
+			this.actions = rawActions == null ? List.of() : Arrays.stream(rawActions)
+				.map(WidgetValue::clean).filter(action -> !action.isEmpty()).collect(java.util.stream.Collectors.toUnmodifiableList());
+			this.itemId = widget.getItemId();
+			this.modelId = widget.getModelId();
+			this.spriteId = widget.getSpriteId();
 			this.bounds = new Rectangle(bounds);
-		}
-
-		private static WidgetValue capture(Widget widget, Rectangle bounds)
-		{
-			List<String> actions = new ArrayList<>();
-			if (widget.getActions() != null)
-			{
-				for (String action : widget.getActions())
-				{
-					String clean = clean(action);
-					if (!clean.isEmpty())
-					{
-						actions.add(clean);
-					}
-				}
-			}
-			return new WidgetValue(
-				widget.getId(),
-				widget.getIndex(),
-				widget.getParentId(),
-				widget.getType(),
-				clean(widget.getText()),
-				clean(widget.getName()),
-				Collections.unmodifiableList(actions),
-				widget.getItemId(),
-				widget.getModelId(),
-				widget.getSpriteId(),
-				bounds);
+			Set<Integer> parents = new LinkedHashSet<>();
+			for (Widget parent = widget.getParent(); parent != null; parent = parent.getParent()) parents.add(parent.getId());
+			this.ancestors = Set.copyOf(parents);
 		}
 
 		private int getId()

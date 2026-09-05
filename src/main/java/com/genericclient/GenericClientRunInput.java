@@ -16,7 +16,7 @@ import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 
-final class GenericClientRunInput
+final class GenericClientRunInput implements GenericClientWalker.RunInput
 {
 	private static final int VERIFY_ATTEMPTS = 20;
 	private static final long VERIFY_INTERVAL_MILLIS = 50L;
@@ -43,7 +43,8 @@ final class GenericClientRunInput
 		return setEnabled(true, activityContext);
 	}
 
-	CompletableFuture<Map<String, Object>> setEnabled(boolean expected, GenericClientActivityContext activityContext)
+	@Override
+	public CompletableFuture<Map<String, Object>> setEnabled(boolean expected, GenericClientActivityContext activityContext)
 	{
 		return clientRead(this::isEnabled).thenCompose(
 			enabled -> toggleIfNeeded(expected, activityContext, enabled));
@@ -87,9 +88,10 @@ final class GenericClientRunInput
 		return result;
 	}
 
-	void cancel(String reason)
+	@Override
+	public void cancel(String reason, GenericClientActivityContext owner)
 	{
-		menuInput.cancel(reason);
+		menuInput.cancel(reason, owner);
 	}
 
 	private GenericClientMenuInput.Resolution resolveRunButton()

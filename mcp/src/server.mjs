@@ -41,6 +41,28 @@ function screenshotResult(value) {
   };
 }
 
+const sceneMarkerMetadata = {
+  label: z.string().min(1).optional().describe("Optional caption shown above the target."),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional()
+    .describe("Optional marker color in #RRGGBB form."),
+};
+const worldPoint = z.object({
+  x: z.number().int(),
+  y: z.number().int(),
+  plane: z.number().int().min(0).max(3),
+});
+const sceneMarker = z.union([
+  z.object({ tile: worldPoint, ...sceneMarkerMetadata }),
+  z.object({ npc_id: z.number().int().positive(), ...sceneMarkerMetadata }),
+  z.object({ object_id: z.number().int().positive(), ...sceneMarkerMetadata }),
+  z.object({ ground_item_id: z.number().int().positive(), ...sceneMarkerMetadata }),
+  z.object({ player_name: z.string().min(1), ...sceneMarkerMetadata }),
+  z.object({ mouse_tile: z.literal(true), ...sceneMarkerMetadata }),
+]);
+
 export function createServer(bridge = new GenericClientBridge()) {
   const server = new McpServer(
     { name: "genericclient", version: VERSION },
@@ -49,8 +71,10 @@ export function createServer(bridge = new GenericClientBridge()) {
         "GenericClient controls the live RuneLite client through Lua. Call client_status first, then account_snapshot before planning account work. " +
         "Use client_screenshot whenever structured state does not fully explain the visible game, widget, dialogue, camera, or menu state. " +
         "Use lua_eval for ad-hoc exploration; its code is the body of a persistent Lua function, so return a value to receive it. " +
-        "Available Lua primitives are gc.read, gc.await, gc.log, gc.overlay, and gc.next_action. " +
-        "Each composite client interaction uses the seeded behavior profile unless breaks=false; gc.phase(name) performs a heavier phase evaluation. " +
+        "Use gc.activity(name, policy) for script behavior and gc.intent(name, fn) for short action sequences. " +
+        "REPL actions are plain unless humanize=true is explicit; standalone scripts use their declared policy. " +
+        "gc.await accepts independent policy overrides; per-await breaks and interrupt_on_dialogue are rejected. " +
+        "Use gc.walk.to for destination journeys with via, interrupt_on, and resume options. " +
         "Use script_save for reusable standalone scripts, script_run with declared inputs, and script_action for declared buttons. " +
         "Use random_event_status whenever client_status reports attention_required; acknowledgement never releases the block, while completion does. " +
         "Use automation_status before changing scheduled rules; scheduled and manual scripts share the single manifest-script slot.",
@@ -89,6 +113,42 @@ export function createServer(bridge = new GenericClientBridge()) {
       },
     },
     async () => screenshotResult(await bridge.call("screenshot.capture")),
+  );
+
+  server.registerTool(
+    "scene_highlight",
+    {
+      title: "Highlight RuneLite scene targets",
+      description:
+        "Replace the MCP-owned scene highlights with one or more world tiles, NPC IDs, object IDs, ground-item IDs, players, or the current mouse tile. Highlights remain visible for screenshots until scene_clear is called.",
+      inputSchema: z.object({
+        markers: z.array(sceneMarker).min(1).describe("Targets to highlight together."),
+      }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async ({ markers }) => result(await bridge.call("scene.highlight", { markers })),
+  );
+
+  server.registerTool(
+    "scene_clear",
+    {
+      title: "Clear RuneLite scene highlights",
+      description:
+        "Clear markers created by scene_highlight without changing Lua-script markers or the Show mouse tile setting.",
+      inputSchema: z.object({}),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => result(await bridge.call("scene.clear")),
   );
 
   server.registerTool(
@@ -488,7 +548,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Save Lua script",
       description:
-        "Create or replace a standalone Lua script and register it in scripts/manifest.json. Source must return a descriptor table with a run function and optional inputs/actions. Use a short lowercase id such as inspect-varrock-npcs.",
+        "Create or update a registered Lua script. Updates preserve its filename and declared modules. Source must return a descriptor table with a run function and optional inputs/actions. Use a short lowercase id such as inspect-varrock-npcs.",
       inputSchema: z.object({
         id: z
           .string()
