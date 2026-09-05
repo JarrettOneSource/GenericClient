@@ -146,8 +146,8 @@ these gaps.
 - Continue from the matching Java checkouts described in the handoff. The normal checkouts remain on the earlier behavior-framework branches; their committed implementation changes are incorporated without switching another session's checkout.
 - Refresh both `main` branches immediately before declaring the work finished; incorporate and validate any newly published changes.
 
-No artifact from this migration has been installed into a running game, used for
-account progression, or pushed. Historical live receipts apply to their original
+No artifact from this migration has been installed into a running game or used for
+account progression. Historical live receipts apply to their original
 revisions. Loaded-artifact and watched live acceptance are separate from these
 local source, build and scenario results.
 
