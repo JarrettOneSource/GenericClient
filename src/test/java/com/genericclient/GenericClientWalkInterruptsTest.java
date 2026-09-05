@@ -8,6 +8,15 @@ import org.junit.Test;
 
 public class GenericClientWalkInterruptsTest
 {
+	@Test public void arrayPredicatesRejectObjectsIncludingEmptyOnes()
+	{
+		for (String field : List.of("missing_item", "inventory_below", "varbit_equals", "area"))
+		{
+			assertThrows(IllegalArgumentException.class, () -> parse(Map.of(field, Map.of())));
+			assertNull(parse(Map.of(field, List.of())).evaluate(snapshot(5000, 0, 4, 12, 1, false, true), false));
+		}
+	}
+
 	@Test
 	public void anOwnedTransportDialogueDoesNotSuppressThePoisonInterrupt()
 	{
@@ -49,7 +58,7 @@ public class GenericClientWalkInterruptsTest
 	}
 
 	@Test
-	public void reserveAndUpkeepPredicatesPreserveTheLuaThresholds()
+	public void reserveAndUpkeepPredicatesPreserveTheCatalogThresholds()
 	{
 		GenericClientWalkInterrupts interrupts = parse(Map.of("inventory_below", List.of(Map.of("id", 379, "quantity", 4)),
 			"skill_below", Map.of("prayer", 12), "varbit_equals", List.of(Map.of("id", 25, "value", 0))));
@@ -105,7 +114,7 @@ public class GenericClientWalkInterruptsTest
 		int[] varps = new int[103];
 		varps[102] = poison;
 		return new GenericClientSnapshot(1, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("interrupt-test", 100, 100, 0, 0, -1, null, 31, 31, energy, false, null),
+			new GenericClientPlayerSnapshot(1L, "interrupt-test", 100, 100, 0, 0, -1, null, 31, 31, energy, false, null),
 			Collections.emptyList(), account, new GenericClientQuestSnapshot(true, varps, Map.of(25, stamina),
 				Collections.emptyList(), dialogue ? GenericClientQuestSnapshot.DialogueSnapshot.continueDialogue("Test", "Continue")
 					: GenericClientQuestSnapshot.DialogueSnapshot.closed()));

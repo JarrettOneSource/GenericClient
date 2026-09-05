@@ -206,7 +206,7 @@ final class GenericClientGrandExchangeWidgets
 		return value == null ? "" : Text.removeTags(value).trim();
 	}
 
-	private static boolean hasDeclaredAction(Widget widget, String action)
+	static boolean hasDeclaredAction(Widget widget, String action)
 	{
 		if (widget == null || widget.getActions() == null)
 		{

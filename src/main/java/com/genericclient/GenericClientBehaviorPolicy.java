@@ -46,7 +46,7 @@ final class GenericClientBehaviorPolicy
 	GenericClientBehaviorPolicy withOverrides(Object raw)
 	{
 		if (raw == null) return this;
-		if (!(raw instanceof Map)) throw new IllegalArgumentException("policy must be a table");
+		if (!(raw instanceof Map)) throw new IllegalArgumentException("policy must be a map");
 		boolean changedBreaks = breaks;
 		CursorRelease changedRelease = cursorRelease;
 		Mouse changedMouse = mouse;

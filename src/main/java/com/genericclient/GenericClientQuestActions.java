@@ -76,11 +76,14 @@ final class GenericClientQuestActions
 		Map<String, Object> action,
 		GenericClientActivityContext activityContext)
 	{
+		if (type.startsWith("bank.") && !type.equals("bank.loadout"))
+			return bankInput.execute(type, action, activityContext);
 		switch (type)
 		{
 			case "object.interact":
 				return objectInput.interact(
 					requiredInt(action, "id", type),
+					action.containsKey("identity") ? ((Number)action.get("identity")).longValue() : null,
 					requiredText(action, "action", type),
 					optionalWorld(action, type),
 					within(action, type),
@@ -113,11 +116,10 @@ final class GenericClientQuestActions
 					activityContext,
 					optionalBoolean(action, "reading", true, type));
 			case "dialogue.choose":
-				String choice = requiredText(action, "text", type);
-				boolean reading = optionalBoolean(action, "reading", true, type);
-				return optionalBoolean(action, "keyboard", false, type)
-					? dialogueInput.chooseKeyboard(choice, activityContext, reading)
-					: dialogueInput.choose(choice, activityContext, reading);
+				return dialogueInput.choose(requiredText(action, "text", type),
+					action.containsKey("index") ? requiredPositiveInt(action, "index", type) : null,
+					optionalBoolean(action, "keyboard", false, type), activityContext,
+					optionalBoolean(action, "reading", true, type));
 			case "bank.loadout":
 				return bankInput.loadout(
 					bankRequirements(action),
@@ -143,6 +145,7 @@ final class GenericClientQuestActions
 				return uiInput.click(
 					requiredInt(action, "widget_id", type),
 					optionalInt(action, "widget_index", type),
+					optionalText(action.get("action")),
 					activityContext);
 			case "ui.key":
 				return uiInput.key(requiredText(action, "key", type), activityContext);
@@ -166,6 +169,8 @@ final class GenericClientQuestActions
 				return spellInput.castOnNpc(
 					requiredText(action, "spell", type),
 					optionalInt(action, "npc_id", type),
+					optionalInt(action, "npc_index", type),
+					entityIdentity(action),
 					optionalText(action.get("npc_name")),
 					within(action, type),
 					activityContext);
@@ -201,6 +206,11 @@ final class GenericClientQuestActions
 		}
 	}
 
+	private static Long entityIdentity(Map<String,Object> action)
+	{
+		return action.containsKey("entity_identity") ? ((Number)action.get("entity_identity")).longValue() : null;
+	}
+
 	private CompletableFuture<Map<String, Object>> setPrayer(
 		Map<String, Object> action,
 		String type,
@@ -221,7 +231,7 @@ final class GenericClientQuestActions
 		});
 	}
 
-	synchronized CompletableFuture<Map<String, Object>> releaseScriptPrayer()
+	synchronized CompletableFuture<Map<String, Object>> releaseScriptPrayer(GenericClientActivityContext context)
 	{
 		if ("none".equals(scriptOwnedPrayer))
 		{
@@ -232,7 +242,7 @@ final class GenericClientQuestActions
 			return CompletableFuture.completedFuture(receipt);
 		}
 		String prayer = scriptOwnedPrayer;
-		return prayerInput.set(prayer, false, GenericClientActivityContext.none())
+		return prayerInput.set(prayer, false, context)
 			.thenApply(receipt ->
 			{
 				synchronized (this)
@@ -405,10 +415,6 @@ final class GenericClientQuestActions
 		Map<String, Object> action)
 	{
 		Object rawItems = action.get("items");
-		if (rawItems instanceof Map && ((Map<?, ?>) rawItems).isEmpty())
-		{
-			return new ArrayList<>();
-		}
 		if (!(rawItems instanceof List))
 		{
 			throw new IllegalArgumentException("bank.loadout requires an items array");
@@ -528,7 +534,7 @@ final class GenericClientQuestActions
 						"item_used_on_object", selection, rejected("requested_item_not_selected")));
 				}
 				return objectInput.useSelectedItemOnObject(
-					objectId, world, within, itemId, null, activityContext)
+					objectId, entityIdentity(action), world, within, itemId, null, activityContext)
 					.thenCompose(target -> finishSelectedItemAction(
 						"item_used_on_object", itemId, slot, selection, target, activityContext));
 			});
@@ -558,7 +564,7 @@ final class GenericClientQuestActions
 						"item_used_on_npc", selection, rejected("requested_item_not_selected")));
 				}
 				return npcInput.useSelectedItemOnNpc(
-					npcId, npcName, within, itemId, null, activityContext)
+					npcId, optionalInt(action, "npc_index", "item.use_on_npc"), entityIdentity(action), npcName, within, itemId, null, activityContext)
 					.thenCompose(target -> finishSelectedItemAction(
 						"item_used_on_npc", itemId, slot, selection, target, activityContext));
 			});

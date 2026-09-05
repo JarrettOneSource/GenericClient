@@ -26,8 +26,6 @@ configurations {
 
 dependencies {
 	compileOnly group: 'net.runelite', name:'client', version: runeLiteVersion
-	implementation 'party.iroiro.luajava:lua54:4.1.0'
-	runtimeOnly 'party.iroiro.luajava:lua54-platform:4.1.0:natives-desktop'
 	standaloneRuntime group: 'net.runelite', name:'client', version: runeLiteVersion
 	standaloneRuntime group: 'net.runelite', name:'jshell', version: runeLiteVersion
 
@@ -50,14 +48,17 @@ sourceSets {
 
 def routeAuditFile = layout.buildDirectory.file('route-audit/routes.tsv')
 tasks.register('exportRoutes', Exec) {
+	dependsOn 'sdkJar'
 	workingDir providers.gradleProperty('scriptCatalog').getOrElse('../GenericClientScripts')
-	doFirst { routeAuditFile.get().asFile.parentFile.mkdirs() }
-	commandLine 'lua5.4', 'tools/export-routes.lua', routeAuditFile.get().asFile.absolutePath
+	commandLine System.getProperty('os.name').startsWith('Windows') ? 'gradlew.bat' : './gradlew',
+		'exportRoutes', "-PgenericClientDir=${projectDir}",
+		"-PscriptApiJar=${layout.buildDirectory.file('libs/GenericClient-script-api.jar').get().asFile.absolutePath}",
+		"-ProuteOutput=${routeAuditFile.get().asFile.absolutePath}", '--console=plain'
 }
 
 tasks.register('routeAudit', JavaExec) {
 	group = 'verification'
-	description = 'Plan the Lua catalog routes against bundled navigation data.'
+	description = 'Plan the Java catalog routes against bundled navigation data.'
 	dependsOn 'classes', 'routeAuditClasses', 'exportRoutes'
 	classpath = sourceSets.routeAudit.runtimeClasspath
 	mainClass = 'com.genericclient.GenericClientRouteAudit'
@@ -66,7 +67,7 @@ tasks.register('routeAudit', JavaExec) {
 
 tasks.register('scriptCatalogAudit', JavaExec) {
 	group = 'verification'
-	description = 'Load every external script descriptor with the client registry and native Lua VM.'
+	description = 'Load the packaged Java catalog with the client registry without starting scripts.'
 	dependsOn 'testClasses'
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = 'com.genericclient.GenericClientScriptCatalogAudit'
@@ -88,6 +89,14 @@ tasks.named('jar') {
 	archiveFileName.set('GenericClient-thin.jar')
 }
 
+tasks.register('sdkJar', Jar) {
+	dependsOn 'classes'
+	from sourceSets.main.output
+	include 'org/dreambot/api/**'
+	include 'com/genericclient/script/**'
+	archiveFileName.set('GenericClient-script-api.jar')
+}
+
 tasks.withType(JavaCompile).configureEach {
 	options.encoding = 'UTF-8'
 	options.release.set(11)
@@ -106,11 +115,11 @@ pmd {
 }
 
 pitest {
-	// Native input tests need the same AWT display as the ordinary test task.
-	features = ['-macos_focus']
+	// PIT's focus feature forces headless mode; native input tests require Canvas peers.
+	features = ['-MACOS_FOCUS']
 	targetClasses = providers.gradleProperty('pitestTargetClasses')
 		.map { value -> value.split(',') as List }
-		.getOrElse(['com.genericclient.*'])
+		.getOrElse(['com.genericclient.*', 'org.dreambot.api.*'])
 	targetTests = providers.gradleProperty('pitestTargetTests')
 		.map { value -> value.split(',') as List }
 		.getOrElse(['com.genericclient.*'])
@@ -119,6 +128,23 @@ pitest {
 	timestampedReports = false
 	timeoutConstInMillis = 10_000
 	timeoutFactor = 2.0
+}
+
+if (providers.gradleProperty('scriptCatalog').isPresent()) {
+	def catalog = file(providers.gradleProperty('scriptCatalog').get())
+	def catalogTests = tasks.register('compileCatalogTests', Exec) {
+		dependsOn 'sdkJar'
+		workingDir catalog
+		commandLine System.getProperty('os.name').startsWith('Windows') ? 'gradlew.bat' : './gradlew',
+			'testClasses', "-PgenericClientDir=${projectDir}",
+			"-PscriptApiJar=${layout.buildDirectory.file('libs/GenericClient-script-api.jar').get().asFile.absolutePath}", '--console=plain'
+		if (gradle.startParameter.offline) args '--offline'
+	}
+	tasks.named('pitest') {
+		dependsOn catalogTests
+		additionalClasspath.from(new File(catalog, 'build/classes/java/main'), new File(catalog, 'build/classes/java/test'),
+			new File(catalog, 'build/resources/test'))
+	}
 }
 
 tasks.named('test') {
@@ -133,6 +159,23 @@ tasks.named('jacocoTestReport') {
 	}
 }
 
+tasks.register('jacocoCombinedReport', JacocoReport) {
+	group = 'verification'
+	description = 'Report client coverage from client tests and catalog tests using the same SDK build.'
+	dependsOn 'test'
+	sourceSets sourceSets.main
+	def catalog = file(providers.gradleProperty('scriptCatalog').getOrElse('../GenericClientScripts'))
+	def catalogData = new File(catalog, 'build/jacoco/test.exec')
+	executionData layout.buildDirectory.file('jacoco/test.exec').get().asFile, catalogData
+	doFirst {
+		if (!catalogData.isFile()) throw new GradleException('Run the Java catalog tests before requesting combined coverage.')
+	}
+	reports {
+		xml.required = true
+		html.required = true
+	}
+}
+
 tasks.withType(Pmd).configureEach {
 	reports {
 		xml.required = true
@@ -140,11 +183,32 @@ tasks.withType(Pmd).configureEach {
 	}
 }
 
+tasks.register('cpdMain') {
+	group = LifecycleBasePlugin.VERIFICATION_GROUP
+	description = 'Check production Java for duplicated blocks of at least 100 tokens; optionally include -PscriptCatalog.'
+	doLast {
+		ant.taskdef(name: 'cpdReport', classname: 'net.sourceforge.pmd.ant.CPDTask',
+			classpath: (configurations.pmd + configurations.testRuntimeClasspath).asPath)
+		def report = layout.buildDirectory.file('reports/cpd/production.xml').get().asFile
+		report.parentFile.mkdirs()
+		ant.cpdReport(minimumTokenCount: 100, format: 'xml', outputFile: report,
+			language: 'java', encoding: 'UTF-8', failOnError: true) {
+			fileset(dir: 'src/main/java', includes: '**/*.java')
+			if (providers.gradleProperty('scriptCatalog').isPresent()) {
+				fileset(dir: providers.gradleProperty('scriptCatalog').get() + '/src/main/java', includes: '**/*.java')
+			}
+		}
+		def duplicateGroups = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+			.newDocumentBuilder().parse(report).getElementsByTagName('duplication').length
+		if (duplicateGroups > 0) throw new GradleException("CPD found ${duplicateGroups} duplicated production blocks: ${report}")
+	}
+}
+
 tasks.register('qualityReport') {
 	group = LifecycleBasePlugin.VERIFICATION_GROUP
 	description = 'Runs tests, coverage reporting, and static analysis.'
 	dependsOn tasks.named('test'), tasks.named('jacocoTestReport'),
-		tasks.named('pmdMain'), tasks.named('pmdTest')
+		tasks.named('pmdMain'), tasks.named('pmdTest'), tasks.named('cpdMain')
 }
 
 tasks.register('run', JavaExec) {

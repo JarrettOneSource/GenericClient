@@ -172,10 +172,10 @@ export class FleetController {
     const memory = settledValue(memoryResult, "memory", warnings);
     const cpu = settledValue(cpuResult, "cpu", warnings);
     const player = status?.player || null;
-    const lua = status?.lua || null;
+    const scripts = status?.scripts || null;
     const behavior = status?.behavior || null;
     const randomEvent = status?.random_event || null;
-    const activeScript = activeScriptName(lua);
+    const activeScript = activeScriptName(scripts);
     const scripting = Boolean(activeScript);
     const breaking = typeof behavior?.state === "string" && behavior.state.endsWith("_break");
     const attentionRequired = Boolean(randomEvent?.attention_required);
@@ -200,10 +200,10 @@ export class FleetController {
       runtime: status?.runtime || null,
       active_script: activeScript,
       scripting,
-      activity: lua?.activity || "idle",
-      script_state: lua?.script_state || "idle",
-      scripts: Array.isArray(lua?.scripts) ? lua.scripts : [],
-      recent_logs: Array.isArray(lua?.recent_logs) ? lua.recent_logs : [],
+      activity: scripts?.activity || "idle",
+      script_state: scripts?.script_state || "idle",
+      scripts: Array.isArray(scripts?.scripts) ? scripts.scripts : [],
+      recent_logs: Array.isArray(scripts?.recent_logs) ? scripts.recent_logs : [],
       behavior,
       automation: status?.automation || null,
       safety: status?.safety || null,
@@ -247,8 +247,8 @@ function settledValue(result, label, warnings) {
   return null;
 }
 
-function activeScriptName(lua) {
-  const value = lua?.active_script;
+function activeScriptName(scripts) {
+  const value = scripts?.active_script;
   if (typeof value !== "string" || value === "none" || value.trim() === "") {
     return null;
   }

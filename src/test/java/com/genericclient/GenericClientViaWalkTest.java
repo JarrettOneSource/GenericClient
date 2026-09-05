@@ -239,7 +239,7 @@ public class GenericClientViaWalkTest
 		private void advance(WorldPoint player, boolean dialogue)
 		{
 			walker.publishGameTick(new GenericClientSnapshot(++tick, "LOGGED_IN", 240,
-				new GenericClientWorldSnapshot.PlayerSnapshot("via-test", player.getX(), player.getY(), 0, -1),
+				new GenericClientPlayerSnapshot(1L, "via-test", player.getX(), player.getY(), 0, -1),
 				Collections.emptyList(), GenericClientAccountSnapshot.empty(),
 				new GenericClientQuestSnapshot(true, new int[0], Collections.emptyList(), dialogue
 					? GenericClientQuestSnapshot.DialogueSnapshot.continueDialogue("Test", "Continue")

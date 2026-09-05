@@ -203,6 +203,7 @@ final class GenericClientSpellInput
 	CompletableFuture<Map<String, Object>> castOnNpc(
 		String spellName,
 		Integer npcId,
+		Integer npcIndex, Long identity,
 		String npcName,
 		int within,
 		GenericClientActivityContext activityContext)
@@ -221,12 +222,13 @@ final class GenericClientSpellInput
 			throw new IllegalArgumentException("combat.cast within must be between 1 and 32");
 		}
 		String cleanNpcName = npcName == null || npcName.trim().isEmpty() ? null : npcName.trim();
-		return castOnNpc(spell, npcId, cleanNpcName, within, activityContext);
+		return castOnNpc(spell, npcId, npcIndex, identity, cleanNpcName, within, activityContext);
 	}
 
 	private CompletableFuture<Map<String, Object>> castOnNpc(
 		Spell spell,
 		Integer npcId,
+		Integer npcIndex, Long identity,
 		String npcName,
 		int within,
 		GenericClientActivityContext activityContext)
@@ -241,15 +243,15 @@ final class GenericClientSpellInput
 			if (path == SpellbookPath.TARGET_SELECTED)
 			{
 				return castSelectedSpell(
-					spell, npcId, npcName, within, activityContext, steps);
+					spell, npcId, npcIndex, identity, npcName, within, activityContext, steps);
 			}
 			if (path == SpellbookPath.OPEN)
 			{
 				return openSpellbookAndCast(
-					spell, npcId, npcName, within, activityContext);
+					spell, npcId, npcIndex, identity, npcName, within, activityContext);
 			}
 			return selectAndCast(
-				spell, npcId, npcName, within, activityContext, steps);
+				spell, npcId, npcIndex, identity, npcName, within, activityContext, steps);
 		});
 	}
 
@@ -373,6 +375,7 @@ final class GenericClientSpellInput
 	private CompletableFuture<Map<String, Object>> openSpellbookAndCast(
 		Spell spell,
 		Integer npcId,
+		Integer npcIndex, Long identity,
 		String npcName,
 		int within,
 		GenericClientActivityContext activityContext)
@@ -386,7 +389,7 @@ final class GenericClientSpellInput
 			List<Map<String, Object>> steps = new ArrayList<>();
 			steps.add(tabReceipt);
 			return waitForSpellbook(spell).thenCompose(visible -> visible
-				? selectAndCast(spell, npcId, npcName, within, activityContext, steps)
+				? selectAndCast(spell, npcId, npcIndex, identity, npcName, within, activityContext, steps)
 				: CompletableFuture.completedFuture(rejected("spellbook_did_not_open", steps)));
 		});
 	}
@@ -408,6 +411,7 @@ final class GenericClientSpellInput
 	private CompletableFuture<Map<String, Object>> selectAndCast(
 		Spell spell,
 		Integer npcId,
+		Integer npcIndex, Long identity,
 		String npcName,
 		int within,
 		GenericClientActivityContext activityContext,
@@ -429,7 +433,7 @@ final class GenericClientSpellInput
 						rejected("spell_selection_not_applied", steps));
 				}
 				return castSelectedSpell(
-					spell, npcId, npcName, within, activityContext, steps);
+					spell, npcId, npcIndex, identity, npcName, within, activityContext, steps);
 			});
 		});
 	}
@@ -437,6 +441,7 @@ final class GenericClientSpellInput
 	private CompletableFuture<Map<String, Object>> castSelectedSpell(
 		Spell spell,
 		Integer npcId,
+		Integer npcIndex, Long identity,
 		String npcName,
 		int within,
 		GenericClientActivityContext activityContext,
@@ -444,6 +449,7 @@ final class GenericClientSpellInput
 	{
 		return npcInput.castSelectedSpellOnNpc(
 			npcId,
+			npcIndex, identity,
 			npcName,
 			within,
 			spell.widgetId,

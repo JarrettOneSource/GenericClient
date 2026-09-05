@@ -100,6 +100,80 @@ final class GenericClientBankInput implements AutoCloseable
 		return result;
 	}
 
+	synchronized CompletableFuture<Map<String, Object>> execute(String operation, Map<String, Object> arguments,
+		GenericClientActivityContext context)
+	{
+		if (closed || !context.isInputAllowed()) return CompletableFuture.completedFuture(rejected("action_cancelled"));
+		if (!running.compareAndSet(false, true)) return CompletableFuture.completedFuture(rejected("interaction_already_running"));
+		CompletableFuture<Map<String, Object>> result = new CompletableFuture<>();
+		activeResult = result;
+		clientRead(this::bankOpen).thenCompose(open ->
+		{
+			if (!open) return CompletableFuture.completedFuture(rejected("bank_not_open"));
+			switch (operation)
+			{
+				case "bank.close": return closeBank(context);
+				case "bank.deposit_inventory": return clickAndVerify(InterfaceID.Bankmain.DEPOSITINV,
+					"deposit_inventory", () -> containerUsedSlots(InventoryID.INV) == 0, context);
+				case "bank.deposit_equipment": return clickAndVerify(InterfaceID.Bankmain.DEPOSITWORN,
+					"deposit_equipment", () -> containerUsedSlots(InventoryID.WORN) == 0, context);
+				case "bank.withdraw":
+				case "bank.deposit": return transfer(operation.equals("bank.withdraw"),
+					((Number) arguments.get("id")).intValue(), ((Number) arguments.get("quantity")).intValue(),
+					Boolean.TRUE.equals(arguments.get("all")), context);
+				default: throw new IllegalArgumentException("Unknown bank operation: " + operation);
+			}
+		}).whenComplete((receipt, error) -> finishOwned(result, error == null ? receipt : rejected(rootMessage(error))));
+		return result;
+	}
+
+	private CompletableFuture<Map<String, Object>> transfer(boolean withdrawing, int itemId, int quantity,
+		boolean all, GenericClientActivityContext context)
+	{
+		if (quantity < 1) throw new IllegalArgumentException("Transfer quantity must be positive");
+		String suffix = all ? "All" : quantity == 1 || quantity == 5 || quantity == 10 ? Integer.toString(quantity) : "X";
+		String action = (withdrawing ? "Withdraw-" : "Deposit-") + suffix;
+		CompletableFuture<Void> visible = withdrawing ? ensureBankItemVisible(itemId, context) : CompletableFuture.completedFuture(null);
+		return visible.thenCompose(ignored -> clientRead(() -> observeTransfer(itemId,withdrawing))).thenCompose(before ->
+		{
+			int widget = withdrawing ? InterfaceID.Bankmain.ITEMS : InterfaceID.Bankside.ITEMS;
+			return menuInput.interact(() -> resolveContainerItem(itemId,action,widget),context).thenCompose(click ->
+			{
+				if (!wasDispatched(click)) return CompletableFuture.completedFuture(click);
+				CompletableFuture<?> entered = suffix.equals("X") ? enterQuantity(quantity,context) : CompletableFuture.completedFuture(null);
+				return entered.thenCompose(ignored -> verifyReceipt(click,action,() -> withdrawing
+					? itemQuantity(InventoryID.INV,before.id) > before.quantity
+					: itemQuantity(InventoryID.INV,before.id) < before.quantity));
+			});
+		});
+	}
+
+	private TransferObservation observeTransfer(int itemId, boolean withdrawing)
+	{
+		int observedId = itemId;
+		if (withdrawing && client.getVarbitValue(VarbitID.BANK_WITHDRAWNOTES) != 0)
+		{
+			int note = client.getItemDefinition(itemId).getLinkedNoteId();
+			if (note >= 0) observedId = note;
+		}
+		return new TransferObservation(observedId,itemQuantity(InventoryID.INV,observedId));
+	}
+
+	private CompletableFuture<String> enterQuantity(int quantity, GenericClientActivityContext context)
+	{
+		return waitUntil(() -> client.getVarcIntValue(VarClientID.MESLAYERMODE) == 7,"bank_quantity_prompt")
+			.thenCompose(prompt -> "complete".equals(prompt.get("status"))
+				? keyboard.type(Integer.toString(quantity),true,INPUT_SETTLE_MILLIS,context)
+				: CompletableFuture.failedFuture(new IllegalStateException("Bank quantity prompt did not open")));
+	}
+
+	private static final class TransferObservation
+	{
+		final int id;
+		final int quantity;
+		TransferObservation(int id, int quantity) { this.id = id; this.quantity = quantity; }
+	}
+
 	private CompletableFuture<Map<String, Object>> loadoutFrom(BankState initial, List<Requirement> requested,
 		int minimumFreeSlots, boolean closeBank, GenericClientActivityContext activityContext)
 	{		String rejection = preflight(initial, requested);
@@ -189,7 +263,7 @@ final class GenericClientBankInput implements AutoCloseable
 			if (!"Withdraw-X".equals(action))
 			{
 				return menuInput.interact(
-					() -> resolveBankItem(requirement.itemId, action), activityContext)
+					() -> resolveContainerItem(requirement.itemId, action, InterfaceID.Bankmain.ITEMS), activityContext)
 					.thenCompose(receipt -> verifyReceipt(
 						receipt,
 						"withdraw_" + requirement.itemId,
@@ -299,27 +373,21 @@ final class GenericClientBankInput implements AutoCloseable
 	private CompletableFuture<Map<String, Object>> withdrawExact(
 		Requirement requirement, GenericClientActivityContext activityContext)
 	{
-		return menuInput.interact(() -> resolveBankItem(requirement.itemId, "Withdraw-X"), activityContext)
+		return menuInput.interact(() -> resolveContainerItem(requirement.itemId, "Withdraw-X", InterfaceID.Bankmain.ITEMS), activityContext)
 			.thenCompose(click ->
 			{
 				if (!wasDispatched(click)) return CompletableFuture.completedFuture(click);
-				return waitUntil(() -> client.getVarcIntValue(VarClientID.MESLAYERMODE) == 7,
-					"bank_quantity_prompt").thenCompose(prompt ->
-				{
-					if (!"complete".equals(prompt.get("status"))) return CompletableFuture.completedFuture(prompt);
-					return keyboard.type(Integer.toString(requirement.quantity), true, INPUT_SETTLE_MILLIS, activityContext)
-						.thenCompose(ignored -> waitUntil(
-							() -> itemQuantity(InventoryID.INV, requirement.itemId) == requirement.quantity,
-							"withdraw_" + requirement.itemId))
-						.thenApply(verified ->
-						{
-							Map<String, Object> result = new LinkedHashMap<>(verified);
-							result.put("menu_receipt", click);
-							result.put("typed_quantity", (long) requirement.quantity);
-							result.put("click_count", clickCount(click));
-							return result;
-						});
-				});
+				return enterQuantity(requirement.quantity,activityContext)
+					.thenCompose(ignored -> waitUntil(
+						() -> itemQuantity(InventoryID.INV,requirement.itemId) == requirement.quantity,"withdraw_" + requirement.itemId))
+					.thenApply(verified ->
+					{
+						Map<String,Object> result = new LinkedHashMap<>(verified);
+						result.put("menu_receipt",click);
+						result.put("typed_quantity",(long)requirement.quantity);
+						result.put("click_count",clickCount(click));
+						return result;
+					});
 			});
 	}
 
@@ -414,13 +482,13 @@ final class GenericClientBankInput implements AutoCloseable
 			entry -> matchesWidget(entry, widget)));
 	}
 
-	private GenericClientMenuInput.Resolution resolveBankItem(int itemId, String action)
+	private GenericClientMenuInput.Resolution resolveContainerItem(int itemId, String action, int containerWidget)
 	{
 		if (!bankOpen())
 		{
 			return GenericClientMenuInput.Resolution.rejected("bank_not_open");
 		}
-		Widget bankItems = visibleWidget(InterfaceID.Bankmain.ITEMS);
+		Widget bankItems = visibleWidget(containerWidget);
 		if (bankItems == null)
 		{
 			return GenericClientMenuInput.Resolution.rejected("bank_items_not_visible");
@@ -440,7 +508,8 @@ final class GenericClientBankInput implements AutoCloseable
 					continue;
 				}
 				Rectangle clickableBounds = clipBankItemBounds(
-					item.getBounds(), bankControlsTop(), client.getCanvasWidth(), client.getCanvasHeight());
+					item.getBounds(), containerWidget == InterfaceID.Bankmain.ITEMS ? bankControlsTop() : client.getCanvasHeight(),
+					client.getCanvasWidth(), client.getCanvasHeight());
 				Point point = GenericClientMenuInput.randomPointInside(
 					clickableBounds, client.getCanvasWidth(), client.getCanvasHeight());
 				if (point == null)

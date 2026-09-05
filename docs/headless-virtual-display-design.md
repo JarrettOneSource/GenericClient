@@ -1,6 +1,6 @@
 # Headless virtual-display design
 
-Status: **Deferred**. This document preserves the agreed technical direction. Lua scripting remains the active design and implementation track.
+Status: **Deferred**. This document preserves the agreed technical direction. The current scripting implementation is documented in [Java scripting](java-scripting.md).
 
 Research baseline: RuneLite [`2624bcc`](https://github.com/runelite/runelite/tree/2624bcc4136cea1011bf1bb154581a4b16c7a3ca) and released `injected-client` 1.12.36.
 
@@ -66,7 +66,7 @@ Starting with the injected client retains these semantics while the independent 
 
 ## External seam
 
-Use one deep `HeadlessClientKernel` module. Callers, including Lua, should not learn packet opcodes, RuneLite objects, rasterizer details, or AWT event types.
+Use one deep `HeadlessClientKernel` module. Callers, including Java scripts, should not learn packet opcodes, RuneLite objects, rasterizer details, or AWT event types.
 
 ```java
 public interface HeadlessClientKernel extends AutoCloseable

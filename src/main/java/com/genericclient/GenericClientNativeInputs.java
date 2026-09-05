@@ -14,6 +14,7 @@ final class GenericClientNativeInputs implements AutoCloseable
 	final GenericClientMenuInput menuInput;
 	final GenericClientRunInput runInput;
 	final GenericClientNpcInput npcInput;
+	final GenericClientPlayerInput playerInput;
 	final GenericClientInventoryInput inventoryInput;
 	final GenericClientSpellInput spellInput;
 	final GenericClientAutocastInput autocastInput;
@@ -37,7 +38,7 @@ final class GenericClientNativeInputs implements AutoCloseable
 		GenericClientSyntheticKeyboard syntheticKeyboard,
 		GenericClientBehaviorController behaviorController,
 		Supplier<GenericClientSnapshot> snapshot,
-		Consumer<String> reporter)
+		Consumer<String> reporter, GenericClientEntityIds entityIds)
 	{
 		cameraOwner = new GenericClientCameraOwner(client);
 		gameInput = new GenericClientGameInput(
@@ -54,7 +55,8 @@ final class GenericClientNativeInputs implements AutoCloseable
 			reporter);
 		runInput = new GenericClientRunInput(client, clientThread, executor, menuInput);
 		npcInput = new GenericClientNpcInput(
-			client, clientThread, executor, menuInput, cameraOwner, reporter);
+			client, clientThread, executor, menuInput, cameraOwner, reporter, entityIds);
+		playerInput = new GenericClientPlayerInput(client,menuInput,entityIds);
 		inventoryInput = new GenericClientInventoryInput(
 			client, clientThread, executor, menuInput);
 		spellInput = new GenericClientSpellInput(
@@ -65,7 +67,7 @@ final class GenericClientNativeInputs implements AutoCloseable
 			client, clientThread, executor, menuInput, reporter);
 		uiInput = new GenericClientUiInput(
 			client, clientThread, menuInput, syntheticKeyboard);
-		objectInput = new GenericClientObjectInput(client, clientThread, executor, menuInput, cameraOwner);
+		objectInput = new GenericClientObjectInput(client, clientThread, executor, menuInput, cameraOwner, entityIds);
 		equipmentInput = new GenericClientEquipmentInput(client, clientThread, executor, menuInput);
 		groundItemInput = new GenericClientGroundItemInput(
 			client, clientThread, executor, menuInput, cameraOwner);

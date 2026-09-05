@@ -283,7 +283,7 @@ final class GenericClientWalkJourney
 			return Collections.emptySet();
 		}
 		Set<WorldPoint> occupied = new LinkedHashSet<>();
-		for (GenericClientWorldSnapshot.NpcSnapshot npc : snapshot.getNpcs())
+		for (GenericClientNpcSnapshot npc : snapshot.getNpcs())
 		{
 			if (npc.isDead())
 			{

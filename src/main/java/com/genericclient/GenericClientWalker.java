@@ -634,6 +634,12 @@ final class GenericClientWalker implements AutoCloseable
 			if (active != walk || walk.inputRevision != inputRevision) return;
 			GenericClientSnapshot snapshot = latestSnapshot;
 			String failure = walk.recordClick(snapshot, reach, result, error);
+			if (result != null && result.isWalkExecuted() && result.getTarget() != null && walk.clickBoundary.singleStep())
+			{
+				finish(walk,"stepped","click_dispatched",latestSnapshot == null ? null : latestSnapshot.getPlayerWorldPoint(),
+					latestSnapshot == null ? walk.startedAtTick : latestSnapshot.getGameTick());
+				return;
+			}
 			if (failure != null)
 			{
 				WorldPoint reached = snapshot == null ? null : snapshot.getPlayerWorldPoint();
@@ -845,6 +851,7 @@ final class GenericClientWalker implements AutoCloseable
 
 	interface ClickBoundary
 	{
+		default boolean singleStep() { return false; }
 		CompletableFuture<GenericClientInteractionResult> execute(
 			GenericClientActivityContext input,
 			java.util.function.Supplier<CompletableFuture<GenericClientInteractionResult>> action);

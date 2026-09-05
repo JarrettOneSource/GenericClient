@@ -41,23 +41,27 @@ public class GenericClientTransportInputTest
 		Rectangle bounds = new Rectangle(400, 200, 40, 40);
 		try (GenericClientNativeInputFixture scene = new GenericClientNativeInputFixture(folders.newFolder().toPath()))
 		{
-			GameObject wanted = object(24718, target, bounds);
-			GameObject other = object(24718, standing, new Rectangle(100, 100, 40, 40));
 			Tile[][][] tiles = new Tile[1][3][3];
-			tiles[0][1][1] = stub(Tile.class, Map.of("getGameObjects", new GameObject[]{other, wanted}),
+			WorldView view = stub(WorldView.class, Map.of("getId", WorldView.TOPLEVEL,
+				"getScene", stub(Scene.class, Map.of("getTiles", tiles))));
+			GameObject wanted = object(24718, target, bounds, view, 2, 1);
+			GameObject other = object(24718, standing, new Rectangle(100, 100, 40, 40), view, 1, 1);
+			tiles[0][1][1] = stub(Tile.class, Map.of("getGameObjects", new GameObject[]{other}),
 				"getWallObject", "getGroundObject", "getDecorativeObject");
-			WorldView view = stub(WorldView.class, Map.of("getScene", stub(Scene.class, Map.of("getTiles", tiles))));
+			tiles[0][2][1] = stub(Tile.class, Map.of("getGameObjects", new GameObject[]{wanted}),
+				"getWallObject", "getGroundObject", "getDecorativeObject");
 			scene.player = stub(Player.class, Map.of("getWorldLocation", standing, "getWorldView", view,
 				"getLocalLocation", new LocalPoint(192, 192, WorldView.TOPLEVEL)));
 			scene.objects.put(24718, stub(ObjectComposition.class, Map.of("getActions", new String[]{"Climb-down"},
 				"getName", "Ladder"), "getImpostorIds"));
 			scene.offerMenu(bounds, stub(MenuEntry.class, Map.of("getIdentifier", 24718, "getOption", "Climb-down",
-				"getTarget", "Ladder", "getType", MenuAction.GAME_OBJECT_FIRST_OPTION)));
+				"getTarget", "Ladder", "getType", MenuAction.GAME_OBJECT_FIRST_OPTION,
+				"getWorldViewId", WorldView.TOPLEVEL, "getParam0", 2, "getParam1", 1)));
 			GenericClientTransport.ObjectStep step = new GenericClientTransport.ObjectStep(24718, "Climb-down", new WorldArea(target, 1, 1));
 			assertFalse(step.available(snapshot(standing, List.of(), List.of())));
 			GenericClientSnapshot captured = snapshot(standing, List.of(), List.of(
-				new GenericClientQuestSnapshot.ObjectSnapshot(24718, "Ladder", "game", standing.getX(), standing.getY(), 0, 0, List.of("Climb-down")),
-				new GenericClientQuestSnapshot.ObjectSnapshot(24718, "Ladder", "game", target.getX(), target.getY(), 0, 1, List.of("Climb-down"))));
+				new GenericClientQuestSnapshot.ObjectSnapshot(scene.identities.identify(other),24718, "Ladder", "game", standing.getX(), standing.getY(), 0, 0, List.of("Climb-down")),
+				new GenericClientQuestSnapshot.ObjectSnapshot(scene.identities.identify(wanted),24718, "Ladder", "game", target.getX(), target.getY(), 0, 1, List.of("Climb-down"))));
 			assertTrue(step.available(captured));
 			Map<String, Object> receipt = step.execute(scene.inputs, captured, GenericClientActivityContext.none()).get(3, TimeUnit.SECONDS);
 			assertEquals("dispatched", receipt.get("status"));
@@ -68,14 +72,21 @@ public class GenericClientTransportInputTest
 			assertTrue(bounds.contains(scene.pressed.get(0)));
 			GenericClientActivityContext context = GenericClientActivityContext.none().openInputScope();
 			scene.onTarget = context::cancelInput;
-				Map<String, Object> cancelled = step.execute(scene.inputs, captured, context).get(3, TimeUnit.SECONDS);
-				assertEquals("rejected", cancelled.get("status"));
-				assertEquals("action_cancelled", cancelled.get("result"));
-				assertEquals(1, scene.clicks.get());
-				scene.onTarget = () -> { };
-				assertEquals("dispatched", step.execute(scene.inputs, captured, GenericClientActivityContext.none())
-					.get(3, TimeUnit.SECONDS).get("status"));
-				assertEquals(2, scene.clicks.get());
+			Map<String, Object> cancelled = step.execute(scene.inputs, captured, context).get(3, TimeUnit.SECONDS);
+			assertEquals("rejected", cancelled.get("status"));
+			assertEquals("action_cancelled", cancelled.get("result"));
+			assertEquals(1, scene.clicks.get());
+			scene.onTarget = () -> { };
+			assertEquals("dispatched", step.execute(scene.inputs, captured, GenericClientActivityContext.none())
+				.get(3, TimeUnit.SECONDS).get("status"));
+			assertEquals(2, scene.clicks.get());
+			net.runelite.api.events.GameObjectDespawned despawned = new net.runelite.api.events.GameObjectDespawned();
+			despawned.setTile(tiles[0][2][1]);
+			despawned.setGameObject(wanted);
+			scene.identities.onGameObjectDespawned(despawned);
+			scene.identities.identify(wanted);
+			assertEquals("rejected",step.execute(scene.inputs,captured,GenericClientActivityContext.none()).get(3,TimeUnit.SECONDS).get("status"));
+			assertEquals("A reused ladder reference must not inherit the captured lifetime",2,scene.clicks.get());
 		}
 	}
 
@@ -89,6 +100,7 @@ public class GenericClientTransportInputTest
 			NPCComposition composition = stub(NPCComposition.class, Map.of("getActions", new String[]{"Talk-to", "Glider"}));
 			NPC captain = stub(NPC.class, Map.of("getId", 10467, "getIndex", 3, "getName", "Captain Errdo",
 				"getWorldLocation", standing, "getTransformedComposition", composition, "getConvexHull", bounds), "getInteracting");
+			scene.identities.identify(captain);
 			IndexedObjectSet<NPC> npcs = new IndexedObjectSet<>()
 			{
 				@Override public Iterator<NPC> iterator() { return List.of(captain).iterator(); }
@@ -110,26 +122,32 @@ public class GenericClientTransportInputTest
 			assertEquals(10467L, ((Map<?, ?>) receipt.get("target")).get("id"));
 			assertEquals(1, scene.clicks.get());
 			assertTrue(bounds.contains(scene.pressed.get(0)));
+			scene.identities.onNpcDespawned(new net.runelite.api.events.NpcDespawned(captain));
+			scene.identities.identify(captain);
+			assertEquals("rejected",step.execute(scene.inputs,captured,GenericClientActivityContext.none()).get(3,TimeUnit.SECONDS).get("status"));
+			assertEquals("A reused captain reference must not inherit the captured lifetime",1,scene.clicks.get());
 		}
 	}
 
-	private static GenericClientWorldSnapshot.NpcSnapshot npc(WorldPoint point, String action)
+	private static GenericClientNpcSnapshot npc(WorldPoint point, String action)
 	{
-		return new GenericClientWorldSnapshot.NpcSnapshot(3, 10467, "Captain Errdo", point.getX(), point.getY(), point.getPlane(),
+		return new GenericClientNpcSnapshot(1L,3, 10467, "Captain Errdo", point.getX(), point.getY(), point.getPlane(),
 			0, 0, -1, null, List.of(action));
 	}
 
-	private static GameObject object(int id, WorldPoint world, Rectangle bounds)
+	private static GameObject object(int id, WorldPoint world, Rectangle bounds, WorldView view, int sceneX, int sceneY)
 	{
-		return stub(GameObject.class, Map.of("getId", id, "getWorldLocation", world, "getLocalLocation", new LocalPoint(192, 192, WorldView.TOPLEVEL),
-			"getCanvasLocation", new net.runelite.api.Point(bounds.x, bounds.y), "getClickbox", bounds, "getHash", 1L), "getOpOverride");
+		return stub(GameObject.class, Map.of("getId", id, "getWorldLocation", world,
+			"getLocalLocation", new LocalPoint(sceneX*128+64, sceneY*128+64, WorldView.TOPLEVEL),
+			"getCanvasLocation", new net.runelite.api.Point(bounds.x, bounds.y), "getClickbox", bounds, "getHash", 1L,
+			"getWorldView", view, "getSceneMinLocation", new net.runelite.api.Point(sceneX,sceneY)), "getOpOverride");
 	}
 
-	private static GenericClientSnapshot snapshot(WorldPoint point, List<GenericClientWorldSnapshot.NpcSnapshot> npcs,
+	private static GenericClientSnapshot snapshot(WorldPoint point, List<GenericClientNpcSnapshot> npcs,
 		List<GenericClientQuestSnapshot.ObjectSnapshot> objects)
 	{
 		return new GenericClientSnapshot(1, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("transport-test", point.getX(), point.getY(), point.getPlane(), 0), npcs,
+			new GenericClientPlayerSnapshot(1L,"transport-test", point.getX(), point.getY(), point.getPlane(), 0), npcs,
 			GenericClientAccountSnapshot.empty(), new GenericClientQuestSnapshot(true, new int[0], objects,
 				GenericClientQuestSnapshot.DialogueSnapshot.closed()));
 	}

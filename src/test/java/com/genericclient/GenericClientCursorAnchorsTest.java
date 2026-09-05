@@ -119,6 +119,7 @@ public class GenericClientCursorAnchorsTest
 					case "isHidden": return hidden;
 					case "isSelfHidden": return false;
 					case "getStaticChildren": return children;
+					case "getChildren":
 					case "getDynamicChildren":
 					case "getNestedChildren": return null;
 				case "getParent": return null;

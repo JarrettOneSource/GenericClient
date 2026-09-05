@@ -10,36 +10,45 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import net.runelite.client.callback.ClientThread;
 
 /** Binds queued input work to the operation that scheduled it, under that input's lock. */
 final class GenericClientInputCallbacks
 {
 	private final Object lock;
 	private final Supplier<? extends CompletableFuture<?>> current;
-	private final ScheduledExecutorService executor;
-	private final List<ScheduledFuture<?>> pending = new ArrayList<>();
+	private final Runnable rejected;
+	private final List<ScheduledFuture<?>> scheduled = new ArrayList<>();
 
-	GenericClientInputCallbacks(Object lock, Supplier<? extends CompletableFuture<?>> current, ScheduledExecutorService executor)
+	GenericClientInputCallbacks(Object lock, Supplier<? extends CompletableFuture<?>> current, Runnable rejected)
 	{
 		this.lock = lock;
 		this.current = current;
-		this.executor = executor;
+		this.rejected = rejected;
 	}
 
-	void schedule(Runnable action, long delayMillis)
+	void invoke(ClientThread clientThread, GenericClientActivityContext context, Runnable action)
+	{
+		clientThread.invoke(bind(() -> {
+			if (context.isInputAllowed()) action.run();
+			else rejected.run();
+		}));
+	}
+
+	void schedule(ScheduledExecutorService executor, Runnable action, long delayMillis)
 	{
 		synchronized (lock)
 		{
-			pending.add(executor.schedule(bind(action), delayMillis, TimeUnit.MILLISECONDS));
+			scheduled.add(executor.schedule(bind(action), delayMillis, TimeUnit.MILLISECONDS));
 		}
 	}
 
-	void cancelPending()
+	void cancelScheduled()
 	{
 		synchronized (lock)
 		{
-			for (ScheduledFuture<?> future : pending) future.cancel(false);
-			pending.clear();
+			for (ScheduledFuture<?> future : scheduled) future.cancel(false);
+			scheduled.clear();
 		}
 	}
 

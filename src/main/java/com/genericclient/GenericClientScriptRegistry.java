@@ -1,406 +1,135 @@
 package com.genericclient;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonParseException;
-import com.google.gson.annotations.SerializedName;
+import com.genericclient.script.ScriptSettings;
 import java.io.IOException;
-import java.io.Reader;
-import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Modifier;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.regex.Pattern;
+import java.util.jar.JarFile;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.dreambot.api.script.AbstractScript;
+import org.dreambot.api.script.ScriptManifest;
 
 final class GenericClientScriptRegistry
 {
-	private static final String SCHEMA = "genericclient_scripts";
-	private static final String MANIFEST_FILE = "manifest.json";
-	private static final Pattern SCRIPT_ID = Pattern.compile("[a-z0-9][a-z0-9_-]*");
-	private static final Pattern MODULE_FILE =
-		Pattern.compile("[a-z0-9][a-z0-9_/-]*\\.lua");
-
 	private final Path directory;
-	private volatile State state;
+	private volatile List<Script> scripts = Collections.emptyList();
 	private volatile long revision;
 
 	GenericClientScriptRegistry(Path directory) throws IOException
 	{
 		this.directory = directory;
-		installEmptyManifest();
+		Files.createDirectories(directory);
 		reload();
 	}
 
-	List<Script> list()
-	{
-		return state.scripts;
-	}
-
-	long getRevision()
-	{
-		return revision;
-	}
+	List<Script> list() { return scripts; }
+	long getRevision() { return revision; }
 
 	Script get(String id)
 	{
-		Script script = state.byId.get(id);
-		if (script == null)
-		{
-			throw new IllegalArgumentException("Unknown script id: " + id);
-		}
-		return script;
+		return scripts.stream().filter(script -> script.id.equals(id)).findFirst()
+			.orElseThrow(() -> new IllegalArgumentException("Unknown script: " + id));
 	}
 
 	Script findRandomEventSolver(int npcId)
 	{
-		return state.randomEventSolvers.get(npcId);
-	}
-
-	String readSource(String id) throws IOException
-	{
-		return Files.readString(sourcePath(get(id)), StandardCharsets.UTF_8);
-	}
-
-	String readExecutableSource(String id) throws IOException
-	{
-		Script script = get(id);
-		if (script.modules.isEmpty())
-		{
-			return readSource(id);
-		}
-		StringBuilder source = new StringBuilder(modulePrelude());
-		for (Map.Entry<String, String> module : script.modules.entrySet())
-		{
-			source.append("__gc_module_loaders[\"")
-				.append(module.getKey())
-				.append("\"] = function()\n")
-				.append(Files.readString(directory.resolve(module.getValue()), StandardCharsets.UTF_8))
-				.append("\nend\n");
-		}
-		source.append(readSource(id));
-		return source.toString();
-	}
-
-	Map<String, String> readModuleSources(String id) throws IOException
-	{
-		Map<String, String> result = new LinkedHashMap<>();
-		for (Map.Entry<String, String> module : get(id).modules.entrySet())
-		{
-			result.put(module.getKey(),
-				Files.readString(directory.resolve(module.getValue()), StandardCharsets.UTF_8));
-		}
-		return Collections.unmodifiableMap(result);
-	}
-
-	synchronized Script save(String id, String name, String description, String source) throws IOException
-	{
-		return save(id, name, description, source, Collections.emptyList());
-	}
-
-	synchronized Script save(
-		String id,
-		String name,
-		String description,
-		String source,
-		List<Integer> randomEvents) throws IOException
-	{
-		validateId(id);
-		String cleanName = requireText(name, "Script name");
-		String cleanDescription = requireText(description, "Script description");
-		if (source == null || source.trim().isEmpty())
-		{
-			throw new IllegalArgumentException("Script source cannot be empty");
-		}
-
-		Script previous = state.byId.get(id);
-		String file = previous == null ? id + ".lua" : previous.file;
-		for (Script registered : state.scripts)
-		{
-			if (registered.file.equals(file) && !registered.id.equals(id))
-				throw new IllegalArgumentException("Script file " + file + " is already used by " + registered.id);
-		}
-		Script saved = new Script(
-			id,
-			cleanName,
-			cleanDescription,
-			file,
-			previous == null ? Collections.emptyMap() : previous.modules,
-			validateRandomEvents(randomEvents));
-		for (int npcId : saved.randomEvents)
-		{
-			Script existing = state.randomEventSolvers.get(npcId);
-			if (existing != null && !existing.id.equals(id))
-			{
-				throw new IllegalArgumentException(
-					"Random-event NPC " + npcId + " is already handled by script " + existing.id);
-			}
-		}
-		GenericClientAtomicFile.write(directory.resolve(file), source);
-
-		List<Script> scripts = new ArrayList<>(state.scripts);
-		scripts.removeIf(existing -> existing.id.equals(id));
-		scripts.add(saved);
-		scripts.sort(Comparator.comparing(Script::getName, String.CASE_INSENSITIVE_ORDER));
-		writeManifest(scripts);
-		state = buildState(scripts);
-		revision++;
-		return saved;
+		return scripts.stream().filter(script -> script.randomEvents.contains(npcId)).findFirst().orElse(null);
 	}
 
 	synchronized void reload() throws IOException
 	{
-		Path path = directory.resolve(MANIFEST_FILE);
-		ManifestFile manifest = readManifest(path);
-
-		if (!SCHEMA.equals(manifest.schema))
-		{
-			throw new IOException("Unsupported script manifest schema: " + path);
-		}
-		if (manifest.scripts == null)
-		{
-			throw new IOException("Script manifest has no scripts array: " + path);
-		}
-
-		List<Script> scripts = new ArrayList<>(manifest.scripts.size());
-		Set<String> ids = new HashSet<>();
-		Set<String> files = new HashSet<>();
-		Map<Integer, String> randomEventOwners = new HashMap<>();
-		for (int index = 0; index < manifest.scripts.size(); index++)
-		{
-			scripts.add(readScript(
-				manifest.scripts.get(index), index, ids, files, randomEventOwners));
-		}
-
-		scripts.sort(Comparator.comparing(Script::getName, String.CASE_INSENSITIVE_ORDER));
-		state = buildState(scripts);
+		List<Path> jars = jarFiles();
+		scripts = discoverCatalog(jars, jars);
 		revision++;
 	}
 
-	private Script readScript(
-		ManifestScript entry,
-		int index,
-		Set<String> ids,
-		Set<String> files,
-		Map<Integer, String> randomEventOwners) throws IOException
+	private List<Path> jarFiles() throws IOException
 	{
-		if (entry == null)
+		try (Stream<Path> files = Files.list(directory))
 		{
-			throw new IOException("Script manifest entry " + index + " is null");
+			return files.filter(path -> Files.isRegularFile(path) && path.toString().endsWith(".jar"))
+				.sorted().collect(Collectors.toList());
 		}
-		validateId(entry.id);
-		String name = requireText(entry.name, "Script name");
-		String description = requireText(entry.description, "Script description");
-		String file = validateFileName(entry.file);
-		if (!ids.add(entry.id))
-		{
-			throw new IOException("Duplicate script id: " + entry.id);
-		}
-		if (!files.add(file))
-		{
-			throw new IOException("Duplicate script file: " + file);
-		}
+	}
 
-		Map<String, String> modules = validateModules(entry.modules);
-		List<Integer> randomEvents = validateRandomEvents(entry.randomEvents);
-		for (int npcId : randomEvents)
+	private List<Script> discoverCatalog(List<Path> inspectionPaths, List<Path> installedPaths) throws IOException
+	{
+		URL[] inspection = urls(inspectionPaths);
+		URL[] installed = urls(installedPaths);
+		Map<String, Script> discovered = new LinkedHashMap<>();
+		Map<Integer, String> solvers = new LinkedHashMap<>();
+		try (URLClassLoader loader = new URLClassLoader(inspection, AbstractScript.class.getClassLoader()))
 		{
-			String existing = randomEventOwners.putIfAbsent(npcId, entry.id);
-			if (existing != null)
+			for (int i = 0; i < inspectionPaths.size(); i++)
+				discover(inspectionPaths.get(i), installedPaths.get(i), installed, loader, discovered, solvers);
+		}
+		List<Script> ordered = new ArrayList<>(discovered.values());
+		ordered.sort(Comparator.comparing(Script::getName, String.CASE_INSENSITIVE_ORDER));
+		return Collections.unmodifiableList(ordered);
+	}
+
+	private static URL[] urls(List<Path> paths) throws IOException
+	{
+		URL[] urls = new URL[paths.size()];
+		for (int i = 0; i < paths.size(); i++) urls[i] = paths.get(i).toUri().toURL();
+		return urls;
+	}
+
+	private void discover(Path path, Path installedPath, URL[] classpath, ClassLoader loader,
+		Map<String, Script> discovered, Map<Integer, String> solvers) throws IOException
+	{
+		try (JarFile jar = new JarFile(path.toFile()))
+		{
+			List<String> names = jar.stream().map(entry -> entry.getName())
+				.filter(name -> name.endsWith(".class") && !name.startsWith("META-INF/") && !name.endsWith("module-info.class"))
+				.sorted().collect(Collectors.toList());
+			for (String name : names)
 			{
-				throw new IOException("Random-event NPC " + npcId +
-					" is already handled by script " + existing);
+				Class<?> type = Class.forName(name.substring(0, name.length() - 6).replace('/', '.'), false, loader);
+				ScriptManifest manifest = type.getAnnotation(ScriptManifest.class);
+				if (manifest == null || !AbstractScript.class.isAssignableFrom(type) || Modifier.isAbstract(type.getModifiers())) continue;
+				Script script = new Script(type, manifest, installedPath, classpath);
+				if (discovered.putIfAbsent(script.id, script) != null)
+					throw new IOException("Duplicate script id: " + script.id);
+				for (int npc : script.randomEvents)
+				{
+					if (solvers.putIfAbsent(npc, script.id) != null)
+						throw new IOException("Duplicate random-event solver for NPC " + npc);
+				}
 			}
 		}
-
-		Script script = new Script(entry.id, name, description, file, modules, randomEvents);
-		if (!Files.isRegularFile(sourcePath(script)))
+		catch (ClassNotFoundException | LinkageError error)
 		{
-			throw new IOException("Script file does not exist: " + file);
-		}
-		for (String moduleFile : modules.values())
-		{
-			if (!Files.isRegularFile(directory.resolve(moduleFile)))
-			{
-				throw new IOException("Script module does not exist: " + moduleFile);
-			}
-		}
-		return script;
-	}
-
-	private void installEmptyManifest() throws IOException
-	{
-		Files.createDirectories(directory);
-		if (!Files.exists(directory.resolve(MANIFEST_FILE)))
-		{
-			writeManifest(Collections.emptyList());
+			throw new IOException("Cannot load script catalog " + path.getFileName() + ": " + error.getMessage(), error);
 		}
 	}
 
-	private static ManifestFile readManifest(Path path) throws IOException
+	synchronized void compile(String className, String source) throws IOException
 	{
-		try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8))
+		try (GenericClientJavaCompiler.Compilation compiled = new GenericClientJavaCompiler().compile(className, source, directory))
 		{
-			ManifestFile manifest = new Gson().fromJson(reader, ManifestFile.class);
-			if (manifest == null)
-			{
-				throw new IOException("Script manifest is empty: " + path);
-			}
-			return manifest;
+			List<Path> installed = jarFiles();
+			if (!installed.contains(compiled.destination)) installed.add(compiled.destination);
+			installed.sort(Comparator.naturalOrder());
+			List<Path> inspection = new ArrayList<>(installed);
+			inspection.set(installed.indexOf(compiled.destination), compiled.jar);
+			List<Script> next = discoverCatalog(inspection, installed);
+			if (next.stream().noneMatch(script -> script.className.equals(className)))
+				throw new IllegalArgumentException("Compiled class must be an annotated AbstractScript: " + className);
+			compiled.install();
+			scripts = next;
+			revision++;
 		}
-		catch (JsonParseException exception)
-		{
-			throw new IOException("Invalid script manifest JSON: " + path, exception);
-		}
-	}
-
-	private void writeManifest(List<Script> scripts) throws IOException
-	{
-		ManifestFile manifest = new ManifestFile();
-		manifest.schema = SCHEMA;
-		manifest.scripts = new ArrayList<>(scripts.size());
-		for (Script script : scripts)
-		{
-			ManifestScript entry = new ManifestScript();
-			entry.id = script.id;
-			entry.name = script.name;
-			entry.description = script.description;
-			entry.file = script.file;
-			entry.modules = script.modules.isEmpty()
-				? null
-				: new LinkedHashMap<>(script.modules);
-			entry.randomEvents = script.randomEvents.isEmpty()
-				? null
-				: new ArrayList<>(script.randomEvents);
-			manifest.scripts.add(entry);
-		}
-		String json = new GsonBuilder().setPrettyPrinting().create().toJson(manifest) + System.lineSeparator();
-		GenericClientAtomicFile.write(directory.resolve(MANIFEST_FILE), json);
-	}
-
-	private Path sourcePath(Script script)
-	{
-		return directory.resolve(script.file);
-	}
-
-	private static State buildState(List<Script> scripts)
-	{
-		List<Script> immutable = Collections.unmodifiableList(new ArrayList<>(scripts));
-		Map<String, Script> byId = new HashMap<>();
-		Map<Integer, Script> randomEventSolvers = new HashMap<>();
-		for (Script script : immutable)
-		{
-			byId.put(script.id, script);
-			for (int npcId : script.randomEvents)
-			{
-				randomEventSolvers.put(npcId, script);
-			}
-		}
-		return new State(
-			immutable,
-			Collections.unmodifiableMap(byId),
-			Collections.unmodifiableMap(randomEventSolvers));
-	}
-
-
-	private static void validateId(String id)
-	{
-		if (id == null || !SCRIPT_ID.matcher(id).matches())
-		{
-			throw new IllegalArgumentException("Script id must use lowercase letters, numbers, hyphens, or underscores");
-		}
-	}
-
-	private static String validateFileName(String file)
-	{
-		String clean = requireText(file, "Script file");
-		Path name = Path.of(clean).getFileName();
-		if (!name.toString().equals(clean) || !clean.endsWith(".lua"))
-		{
-			throw new IllegalArgumentException("Script file must be a .lua filename inside the scripts directory");
-		}
-		return clean;
-	}
-
-	private static Map<String, String> validateModules(Map<String, String> raw)
-	{
-		if (raw == null || raw.isEmpty())
-		{
-			return Collections.emptyMap();
-		}
-		Map<String, String> modules = new LinkedHashMap<>();
-		for (Map.Entry<String, String> entry : raw.entrySet())
-		{
-			validateId(entry.getKey());
-			String file = requireText(entry.getValue(), "Module file");
-			if (!MODULE_FILE.matcher(file).matches() || file.contains("//") || file.contains(".."))
-			{
-				throw new IllegalArgumentException(
-					"Module file must be a relative .lua path inside the scripts directory");
-			}
-			modules.put(entry.getKey(), file);
-		}
-		return Collections.unmodifiableMap(modules);
-	}
-
-	private static List<Integer> validateRandomEvents(List<Integer> raw)
-	{
-		if (raw == null || raw.isEmpty())
-		{
-			return Collections.emptyList();
-		}
-		List<Integer> randomEvents = new ArrayList<>(raw.size());
-		Set<Integer> unique = new HashSet<>();
-		for (Integer npcId : raw)
-		{
-			if (npcId == null || !GenericClientRandomEventController.isRandomEventNpcId(npcId))
-			{
-				throw new IllegalArgumentException(
-					"NPC id " + npcId + " is not a supported random-event NPC");
-			}
-			if (!unique.add(npcId))
-			{
-				throw new IllegalArgumentException("Duplicate random-event NPC id: " + npcId);
-			}
-			randomEvents.add(npcId);
-		}
-		return Collections.unmodifiableList(randomEvents);
-	}
-
-	private static String modulePrelude()
-	{
-		return "local __gc_module_loaders = {}\n" +
-			"local __gc_module_cache = {}\n" +
-			"local __gc_module_loading = {}\n" +
-			"gc.require = function(name)\n" +
-			"  local cached = __gc_module_cache[name]\n" +
-			"  if cached ~= nil then return cached end\n" +
-			"  local loader = __gc_module_loaders[name]\n" +
-			"  if not loader then error('Unknown script module: ' .. tostring(name), 2) end\n" +
-			"  if __gc_module_loading[name] then error('Circular script module: ' .. name, 2) end\n" +
-			"  __gc_module_loading[name] = true\n" +
-			"  local value = loader()\n" +
-			"  __gc_module_loading[name] = nil\n" +
-			"  if value == nil then error('Script module returned nil: ' .. name, 2) end\n" +
-			"  __gc_module_cache[name] = value\n" +
-			"  return value\n" +
-			"end\n";
-	}
-
-	private static String requireText(String value, String label)
-	{
-		if (value == null || value.trim().isEmpty())
-		{
-			throw new IllegalArgumentException(label + " cannot be empty");
-		}
-		return value.trim();
 	}
 
 	static final class Script
@@ -408,44 +137,61 @@ final class GenericClientScriptRegistry
 		private final String id;
 		private final String name;
 		private final String description;
-		private final String file;
-		private final Map<String, String> modules;
+		private final String className;
+		private final Path jar;
+		private final URL[] classpath;
+		private final List<GenericClientScriptInput> inputs;
+		private final List<GenericClientScriptAction> actions;
 		private final List<Integer> randomEvents;
 
-		private Script(
-			String id,
-			String name,
-			String description,
-			String file,
-			Map<String, String> modules,
-			List<Integer> randomEvents)
+		Script(Class<?> type, ScriptManifest manifest, Path jar, URL[] classpath) throws IOException
 		{
-			this.id = id;
-			this.name = name;
-			this.description = description;
-			this.file = file;
-			this.modules = Collections.unmodifiableMap(new LinkedHashMap<>(modules));
-			this.randomEvents = Collections.unmodifiableList(new ArrayList<>(randomEvents));
+			try { type.getConstructor(); }
+			catch (NoSuchMethodException error) { throw new IOException("Script requires a public no-argument constructor: " + type.getName(), error); }
+			ScriptSettings settings = type.getAnnotation(ScriptSettings.class);
+			id = settings == null ? type.getName() : settings.id();
+			if (id.isBlank()) throw new IOException("Script id must not be blank: " + type.getName());
+			name = manifest.name();
+			description = manifest.description();
+			className = type.getName();
+			this.jar = jar;
+			this.classpath = classpath.clone();
+			inputs = new ArrayList<>();
+			actions = new ArrayList<>();
+			randomEvents = new ArrayList<>();
+			if (settings != null)
+			{
+				inputs.addAll(GenericClientScriptInput.from(settings.inputs()));
+				actions.addAll(GenericClientScriptAction.from(settings.actions()));
+				for (int npc : settings.randomEvents())
+				{
+					if (!GenericClientRandomEventController.isRandomEventNpcId(npc))
+						throw new IOException("Unsupported random-event NPC: " + npc);
+					randomEvents.add(npc);
+				}
+			}
 		}
 
-		String getId()
-		{
-			return id;
-		}
+		String getId() { return id; }
+		String getName() { return name; }
+		String getDescription() { return description; }
+		List<GenericClientScriptInput> getInputs() { return Collections.unmodifiableList(inputs); }
+		List<GenericClientScriptAction> getActions() { return Collections.unmodifiableList(actions); }
+		List<Integer> getRandomEvents() { return Collections.unmodifiableList(randomEvents); }
 
-		String getName()
+		LoadedScript load() throws IOException
 		{
-			return name;
-		}
-
-		String getDescription()
-		{
-			return description;
-		}
-
-		List<Integer> getRandomEvents()
-		{
-			return randomEvents;
+			URLClassLoader loader = new URLClassLoader(classpath, AbstractScript.class.getClassLoader());
+			try
+			{
+				Class<? extends AbstractScript> type = Class.forName(className, false, loader).asSubclass(AbstractScript.class);
+				return new LoadedScript(type, loader);
+			}
+			catch (ReflectiveOperationException | LinkageError error)
+			{
+				loader.close();
+				throw new IOException("Cannot construct script " + id, error);
+			}
 		}
 
 		Map<String, Object> toMap()
@@ -454,56 +200,31 @@ final class GenericClientScriptRegistry
 			value.put("id", id);
 			value.put("name", name);
 			value.put("description", description);
-			value.put("file", file);
-			if (!modules.isEmpty())
-			{
-				value.put("modules", new LinkedHashMap<>(modules));
-			}
-			if (!randomEvents.isEmpty())
-			{
-				value.put("random_events", new ArrayList<>(randomEvents));
-			}
+			value.put("class_name", className);
+			value.put("file", jar.getFileName().toString());
+			value.put("random_events", randomEvents);
 			return value;
+		}
+	}
+
+	static final class LoadedScript implements AutoCloseable
+	{
+		volatile AbstractScript script;
+		private final Class<? extends AbstractScript> type;
+		private final URLClassLoader loader;
+
+		LoadedScript(Class<? extends AbstractScript> type, URLClassLoader loader)
+		{
+			this.type = type;
+			this.loader = loader;
+		}
+
+		void instantiate() throws ReflectiveOperationException
+		{
+			script = type.getDeclaredConstructor().newInstance();
 		}
 
 		@Override
-		public String toString()
-		{
-			return name;
-		}
-	}
-
-	private static final class State
-	{
-		private final List<Script> scripts;
-		private final Map<String, Script> byId;
-		private final Map<Integer, Script> randomEventSolvers;
-
-		private State(
-			List<Script> scripts,
-			Map<String, Script> byId,
-			Map<Integer, Script> randomEventSolvers)
-		{
-			this.scripts = scripts;
-			this.byId = byId;
-			this.randomEventSolvers = randomEventSolvers;
-		}
-	}
-
-	private static final class ManifestFile
-	{
-		private String schema;
-		private List<ManifestScript> scripts;
-	}
-
-	private static final class ManifestScript
-	{
-		private String id;
-		private String name;
-		private String description;
-		private String file;
-		private Map<String, String> modules;
-		@SerializedName("random_events")
-		private List<Integer> randomEvents;
+		public void close() throws IOException { loader.close(); }
 	}
 }

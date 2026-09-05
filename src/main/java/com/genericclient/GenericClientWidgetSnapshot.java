@@ -38,8 +38,12 @@ final class GenericClientWidgetSnapshot
 	static GenericClientWidgetSnapshot capture(Client client)
 	{
 		List<WidgetValue> values = new ArrayList<>();
-		for (Widget widget : GenericClientWidgets.visible(client))
-			values.add(new WidgetValue(widget, widget.getBounds()));
+		for (Widget widget : GenericClientWidgets.all(client))
+		{
+			Rectangle bounds = widget.getBounds();
+			boolean visible = GenericClientWidgets.isVisible(widget) && bounds != null && bounds.width > 0 && bounds.height > 0;
+			values.add(new WidgetValue(widget, bounds == null ? new Rectangle() : bounds, visible));
+		}
 		values.sort(Comparator.comparingInt(WidgetValue::getId)
 			.thenComparingInt(WidgetValue::getIndex));
 		return new GenericClientWidgetSnapshot(values);
@@ -48,15 +52,15 @@ final class GenericClientWidgetSnapshot
 	boolean contains(int id, String label)
 	{
 		for (WidgetValue widget : widgets)
-			if (label == null ? widget.id == id : (widget.id == id || widget.ancestors.contains(id)) &&
-				GenericClientWidgets.matchesLabel(label, widget.text, widget.name, widget.actions)) return true;
+			if (widget.visible && (label == null ? widget.id == id : (widget.id == id || widget.ancestors.contains(id)) &&
+				GenericClientWidgets.matchesLabel(label, widget.text, widget.name, widget.actions))) return true;
 		return false;
 	}
 
 	List<Map<String, Object>> read(Map<?, ?> query)
 	{
 		int limit = Math.min(
-			MAX_QUERY_RESULTS,
+			widgets.size(),
 			Math.max(0, number(query == null ? null : query.get("limit"), 50)));
 		if (limit == 0)
 		{
@@ -67,6 +71,7 @@ final class GenericClientWidgetSnapshot
 			? ((Number) query.get("group")).intValue()
 			: null;
 		String action = text(query == null ? null : query.get("action"));
+		boolean includeHidden = query != null && Boolean.TRUE.equals(query.get("include_hidden"));
 		String requiredText = null;
 		if (query != null && query.get("where") instanceof Map)
 		{
@@ -75,7 +80,7 @@ final class GenericClientWidgetSnapshot
 		List<Map<String, Object>> result = new ArrayList<>();
 		for (WidgetValue widget : widgets)
 		{
-			if (!ids.isEmpty() && !ids.contains(widget.id) ||
+			if (!includeHidden && !widget.visible || !ids.isEmpty() && !ids.contains(widget.id) ||
 				group != null && widget.groupId != group ||
 				action != null && widget.actions.stream()
 					.noneMatch(candidate -> candidate.equalsIgnoreCase(action)) ||
@@ -100,7 +105,7 @@ final class GenericClientWidgetSnapshot
 		int widgetId = -1;
 		for (WidgetValue widget : widgets)
 		{
-			if (widget.groupId == InterfaceID.TRAIL_SLIDEPUZZLE && "Sliding piece".equals(widget.name) &&
+			if (widget.visible && widget.groupId == InterfaceID.TRAIL_SLIDEPUZZLE && "Sliding piece".equals(widget.name) &&
 				widget.index >= 0 && widget.index < 25)
 			{
 				positions.put(widget.bounds, widget.index);
@@ -110,7 +115,7 @@ final class GenericClientWidgetSnapshot
 		for (WidgetValue widget : widgets)
 		{
 			Integer position = positions.get(widget.bounds);
-			if (widget.groupId == InterfaceID.TRAIL_SLIDEPUZZLE && widget.type == 6 &&
+			if (widget.visible && widget.groupId == InterfaceID.TRAIL_SLIDEPUZZLE && widget.type == 6 &&
 				widget.modelId >= 0 && position != null)
 			{
 				modelAtPosition.put(position, widget.modelId);
@@ -224,8 +229,9 @@ final class GenericClientWidgetSnapshot
 		private final int modelId;
 		private final int spriteId;
 		private final Rectangle bounds;
+		private final boolean visible;
 
-		private WidgetValue(Widget widget, Rectangle bounds)
+		private WidgetValue(Widget widget, Rectangle bounds, boolean visible)
 		{
 			this.id = widget.getId();
 			this.groupId = id >>> 16;
@@ -242,6 +248,7 @@ final class GenericClientWidgetSnapshot
 			this.modelId = widget.getModelId();
 			this.spriteId = widget.getSpriteId();
 			this.bounds = new Rectangle(bounds);
+			this.visible = visible;
 			Set<Integer> parents = new LinkedHashSet<>();
 			for (Widget parent = widget.getParent(); parent != null; parent = parent.getParent()) parents.add(parent.getId());
 			this.ancestors = Set.copyOf(parents);
@@ -266,6 +273,7 @@ final class GenericClientWidgetSnapshot
 			value.put("index", (long) index);
 			value.put("parent_id", (long) parentId);
 			value.put("type", (long) type);
+			value.put("visible", visible);
 			value.put("text", text);
 			value.put("name", name);
 			value.put("actions", actions);

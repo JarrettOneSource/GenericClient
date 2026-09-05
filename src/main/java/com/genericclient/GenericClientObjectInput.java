@@ -21,10 +21,7 @@ import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.ObjectComposition;
 import net.runelite.api.Player;
-import net.runelite.api.Scene;
-import net.runelite.api.Tile;
 import net.runelite.api.TileObject;
-import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
@@ -41,24 +38,32 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 	private final ScheduledExecutorService executor;
 	private final GenericClientMenuInput menuInput;
 	private final GenericClientCameraOwner cameraOwner;
+	private final GenericClientEntityIds identities;
 
 	GenericClientObjectInput(
 		Client client,
 		ClientThread clientThread,
 		ScheduledExecutorService executor,
 		GenericClientMenuInput menuInput,
-		GenericClientCameraOwner cameraOwner)
+		GenericClientCameraOwner cameraOwner, GenericClientEntityIds identities)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
 		this.executor = executor;
 		this.menuInput = menuInput;
 		this.cameraOwner = cameraOwner;
+		this.identities = identities;
 	}
 
 	@Override
+	public CompletableFuture<Map<String,Object>> interact(int id, String action, WorldPoint world, int within,
+		GenericClientActivityContext context)
+	{
+		return interact(id,null,action,world,within,context);
+	}
+
 	public CompletableFuture<Map<String, Object>> interact(
-		int objectId,
+		int objectId, Long identity,
 		String action,
 		WorldPoint world,
 		int within,
@@ -71,11 +76,11 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 		String cleanAction = requireText(action, "Object action");
 		validateRadius(within);
 		return interactWithCamera(
-			objectId, cleanAction, world, within, false, -1, null, activityContext);
+			objectId, identity, cleanAction, world, within, false, -1, null, activityContext);
 	}
 
 	CompletableFuture<Map<String, Object>> useSelectedItemOnObject(
-		int objectId,
+		int objectId, Long identity,
 		WorldPoint world,
 		int within,
 		int itemId,
@@ -88,10 +93,9 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 		}
 		validateRadius(within);
 		return interactWithCamera(
-			objectId, "Use", world, within, true, itemId, itemName, activityContext);
+			objectId, identity, "Use", world, within, true, itemId, itemName, activityContext);
 	}
 
-	@Override
 	public void cancel(String reason, GenericClientActivityContext owner)
 	{
 		cameraOwner.cancel(owner);
@@ -99,7 +103,7 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 	}
 
 	private CompletableFuture<Map<String, Object>> interactWithCamera(
-		int objectId,
+		int objectId, Long identity,
 		String action,
 		WorldPoint world,
 		int within,
@@ -110,7 +114,7 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 	{
 		GenericClientCameraOwner.Operation cameraOperation = cameraOwner.begin(activityContext);
 		GenericClientMenuInput.TargetResolver resolver = () -> resolveObject(
-			objectId, action, world, within, selectedItem, itemId, itemName);
+			objectId, identity, action, world, within, selectedItem, itemId, itemName);
 		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
 		{
 			if (!cameraOperation.isActive() || !shouldFaceAndRetry(receipt))
@@ -119,7 +123,7 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 			}
 			return retryWithCamera(
 					resolver,
-					objectId,
+					objectId, identity,
 					world,
 					within,
 					action,
@@ -133,7 +137,7 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 
 	private CompletableFuture<Map<String, Object>> retryWithCamera(
 		GenericClientMenuInput.TargetResolver resolver,
-		int objectId,
+		int objectId, Long identity,
 		WorldPoint world,
 		int within,
 		String action,
@@ -148,7 +152,7 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 			return CompletableFuture.completedFuture(previousReceipt);
 		}
 		return faceObject(
-			objectId, world, within, action, selectedItem, cameraOperation).thenCompose(target ->
+			objectId, identity, world, within, action, selectedItem, cameraOperation).thenCompose(target ->
 		{
 			if (target == null)
 			{
@@ -164,7 +168,7 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 					shouldFaceAndRetry(receipt)
 						? retryWithCamera(
 							resolver,
-							objectId,
+							objectId, identity,
 							world,
 							within,
 							action,
@@ -187,7 +191,7 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 	}
 
 	private CompletableFuture<CameraTarget> faceObject(
-		int objectId,
+		int objectId, Long identity,
 		WorldPoint world,
 		int within,
 		String action,
@@ -209,7 +213,7 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 				return;
 			}
 			List<TileObject> matches = findObjects(
-				player, objectId, world, within, action, selectedItem);
+				player, objectId, identity, world, within, action, selectedItem);
 			if (matches.isEmpty() || matches.get(0).getWorldLocation() == null)
 			{
 				result.complete(null);
@@ -280,7 +284,7 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 
 
 	private GenericClientMenuInput.Resolution resolveObject(
-		int objectId,
+		int objectId, Long identity,
 		String action,
 		WorldPoint requestedWorld,
 		int within,
@@ -306,12 +310,13 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 			return GenericClientMenuInput.Resolution.rejected("local_player_unavailable");
 		}
 
-		List<TileObject> matches = findObjects(player, objectId, requestedWorld, within, action, selectedItem);
+		List<TileObject> matches = findObjects(player, objectId, identity, requestedWorld, within, action, selectedItem);
 		if (matches.isEmpty())
 		{
 			return GenericClientMenuInput.Resolution.rejected("matching_object_not_found");
 		}
 		TileObject object = matches.get(0);
+		long resolvedIdentity = identities.identify(object);
 		net.runelite.api.Point canvasLocation = object.getCanvasLocation();
 		Shape shape = object.getClickbox();
 		if (shape == null)
@@ -339,7 +344,7 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 			action,
 			"object:" + objectId + ":" + world.getX() + "," + world.getY() + "," + world.getPlane(),
 			value,
-			entry -> matchesObject(entry, objectId) &&
+			entry -> identities.matches(object,resolvedIdentity) && matchesObject(entry,object) &&
 				(selectedItem
 					? entry.getType() == MenuAction.WIDGET_TARGET_ON_GAME_OBJECT
 					: action.equalsIgnoreCase(entry.getOption()))));
@@ -366,52 +371,28 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 
 	private List<TileObject> findObjects(
 		Player player,
-		int objectId,
+		int objectId, Long identity,
 		WorldPoint requestedWorld,
 		int within,
 		String action,
 		boolean selectedItem)
 	{
-		WorldView worldView = player.getWorldView();
-		Scene scene = worldView.getScene();
-		Tile[][][] tiles = scene == null ? null : scene.getTiles();
-		if (tiles == null || tiles.length == 0)
-		{
-			return Collections.emptyList();
-		}
-		int plane = Math.max(0, Math.min(tiles.length - 1, player.getWorldLocation().getPlane()));
-		if (tiles[plane].length == 0 || tiles[plane][0].length == 0)
-		{
-			return Collections.emptyList();
-		}
-		int minX = Math.max(0, player.getLocalLocation().getSceneX() - within);
-		int maxX = Math.min(tiles[plane].length - 1, player.getLocalLocation().getSceneX() + within);
-		int minY = Math.max(0, player.getLocalLocation().getSceneY() - within);
-		int maxY = Math.min(tiles[plane][0].length - 1, player.getLocalLocation().getSceneY() + within);
 		Set<TileObject> seen = Collections.newSetFromMap(new IdentityHashMap<>());
 		List<TileObject> result = new ArrayList<>();
-		for (int sceneX = minX; sceneX <= maxX; sceneX++)
+		GenericClientSceneTiles.visitNearby(player, within, tile ->
 		{
-			for (int sceneY = minY; sceneY <= maxY; sceneY++)
+			addIfMatches(result, seen, tile.getWallObject(), objectId, identity, requestedWorld, action, selectedItem);
+			addIfMatches(result, seen, tile.getGroundObject(), objectId, identity, requestedWorld, action, selectedItem);
+			addIfMatches(result, seen, tile.getDecorativeObject(), objectId, identity, requestedWorld, action, selectedItem);
+			GameObject[] gameObjects = tile.getGameObjects();
+			if (gameObjects != null)
 			{
-				Tile tile = tiles[plane][sceneX][sceneY];
-				if (tile == null)
+				for (GameObject gameObject : gameObjects)
 				{
-					continue;
-				}
-				addIfMatches(result, seen, tile.getWallObject(), objectId, requestedWorld, action, selectedItem);
-				addIfMatches(result, seen, tile.getGroundObject(), objectId, requestedWorld, action, selectedItem);
-				addIfMatches(result, seen, tile.getDecorativeObject(), objectId, requestedWorld, action, selectedItem);
-				GameObject[] gameObjects = tile.getGameObjects();
-				if (gameObjects != null)
-				{
-					for (GameObject gameObject : gameObjects)
-					{
-						addIfMatches(result, seen, gameObject, objectId, requestedWorld, action, selectedItem);
-					}
+					addIfMatches(result, seen, gameObject, objectId, identity, requestedWorld, action, selectedItem);
 				}
 			}
-		}
+		});
 		WorldPoint playerWorld = player.getWorldLocation();
 		result.sort(Comparator
 			.comparingInt((TileObject object) -> playerWorld.distanceTo(object.getWorldLocation()))
@@ -423,12 +404,13 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 		List<TileObject> result,
 		Set<TileObject> seen,
 		TileObject object,
-		int objectId,
+		int objectId, Long identity,
 		WorldPoint requestedWorld,
 		String action,
 		boolean selectedItem)
 	{
 		if (object == null || !seen.add(object) || object.getId() != objectId ||
+			(identity != null && !identities.matches(object,identity)) ||
 			object.getWorldLocation() == null || object.getLocalLocation() == null ||
 			(requestedWorld != null && !requestedWorld.equals(object.getWorldLocation())) ||
 			(!selectedItem && !hasAction(object, action)))
@@ -474,9 +456,24 @@ final class GenericClientObjectInput implements GenericClientWalker.ObstacleInpu
 		return composition == null ? "<unknown>" : composition.getName();
 	}
 
-	static boolean matchesObject(MenuEntry entry, int objectId)
+	static boolean matchesObject(MenuEntry entry, TileObject object)
 	{
-		return entry.getIdentifier() == objectId;
+		switch (entry.getType())
+		{
+			case GAME_OBJECT_FIRST_OPTION:
+			case GAME_OBJECT_SECOND_OPTION:
+			case GAME_OBJECT_THIRD_OPTION:
+			case GAME_OBJECT_FOURTH_OPTION:
+			case GAME_OBJECT_FIFTH_OPTION:
+			case WIDGET_TARGET_ON_GAME_OBJECT:
+			case EXAMINE_OBJECT:
+				break;
+			default: return false;
+		}
+		net.runelite.api.Point scene = object instanceof GameObject ? ((GameObject)object).getSceneMinLocation() :
+			new net.runelite.api.Point(object.getLocalLocation().getSceneX(),object.getLocalLocation().getSceneY());
+		return entry.getIdentifier() == object.getId() && entry.getWorldViewId() == object.getWorldView().getId() &&
+			entry.getParam0() == scene.getX() && entry.getParam1() == scene.getY();
 	}
 
 	private static Map<String, Object> objectMap(TileObject object, String name)

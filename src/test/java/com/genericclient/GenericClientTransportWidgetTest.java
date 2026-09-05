@@ -95,7 +95,7 @@ public class GenericClientTransportWidgetTest
 	private static GenericClientSnapshot snapshot(GenericClientNativeInputFixture scene)
 	{
 		return new GenericClientSnapshot(1, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("transport-test", 3184, 3508, 0, 0), List.of(),
+			new GenericClientPlayerSnapshot(1L,"transport-test", 3184, 3508, 0, 0), List.of(),
 			GenericClientAccountSnapshot.empty(), GenericClientQuestSnapshot.empty(), List.of(),
 			GenericClientSceneCollision.empty(), GenericClientWidgetSnapshot.capture(scene.client));
 	}

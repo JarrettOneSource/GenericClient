@@ -19,7 +19,7 @@ Game socket -> packet decode -> Jagex client state -> RuneLite callbacks/events
                                       immutable GenericClient snapshots
                                                    |
                                                    v
-                                        Lua queries and intents
+                                        script queries and intents
                                                    |
                                                    v
                                       client-thread action adapter
@@ -77,7 +77,7 @@ For this revision:
 
 The names are obfuscated and will change. The structural sequence is the durable observation. `Client.getSocketFD()` is used by RuneLite's world-hopper only to read TCP timing information ([source](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-client/src/main/java/net/runelite/client/plugins/worldhopper/WorldHopperPlugin.java#L910-L940)); it is not a stable packet-stream API.
 
-The outgoing direction follows the inverse pattern: semantic client actions construct and queue outgoing packet nodes, and the packet writer flushes their bytes to the socket. GenericClient should enter this pipeline through `Client.menuAction(...)`, which preserves the Jagex client's current parameter and packet construction, rather than creating outgoing packets in Lua.
+The outgoing direction follows the inverse pattern: semantic client actions construct and queue outgoing packet nodes, and the packet writer flushes their bytes to the socket. GenericClient should enter this pipeline through `Client.menuAction(...)`, which preserves the Jagex client's current parameter and packet construction, so the adapter does not need to construct outgoing packets.
 
 ## From state mutation to plugin data
 
@@ -99,7 +99,7 @@ Timing matters:
 - `Hooks.tick` replays deferred events, posts `GameTick`, increments the tick count, and drains `ClientThread` work; `tickEnd` drains end-of-cycle work and posts `PostClientTick` ([source](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-client/src/main/java/net/runelite/client/callback/Hooks.java#L220-L290)).
 - `EventBus.post` invokes subscribers immediately on the posting thread ([source](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-client/src/main/java/net/runelite/client/eventbus/EventBus.java#L202-L221)).
 
-Therefore an event subscriber must copy the state it needs quickly and leave the client thread. A Lua VM must never execute arbitrary script code directly inside a RuneLite callback.
+Therefore an event subscriber must copy the state it needs quickly and leave the client thread. Script workers must not execute user code directly inside a RuneLite callback.
 
 ## Rendering
 
@@ -149,83 +149,28 @@ RuneLite also includes a JShell console whose prelude exposes `Client`, `ClientT
 | Socket/proxy/pcap | Raw transport bytes | Very high semantic cost | Network diagnostics, not scripting |
 | New protocol client | Everything must be reimplemented | Highest | Separate client project, not GenericClient's base |
 
-If packet tracing is needed, install a Java agent or offline ASM transform before the obfuscated `client` class loads. Locate the parser by bytecode structure rather than the current name `client.tg`, inject callbacks immediately after opcode/length decoding and after dispatch, and pin the transform to the exact injected-client hash. This tracer should emit an experimental revisioned record; Lua scripts should still consume semantic snapshots.
+If packet tracing is needed, install a Java agent or offline ASM transform before the obfuscated `client` class loads. Locate the parser by bytecode structure rather than the current name `client.tg`, inject callbacks immediately after opcode/length decoding and after dispatch, and pin the transform to the exact injected-client hash. This tracer should emit an experimental revisioned record; scripts should still consume semantic snapshots.
 
-## Recommended scripting architecture
+## Scripting architecture
 
-Use one RuneLite adapter and keep all RuneLite types on the client thread:
+RuneLite events feed immutable game and UI snapshots. Java workers read those
+snapshots through the DreamBot-compatible SDK and submit semantic operations to
+the existing input services. Live RuneLite entities stay on the client thread;
+opaque lifetime IDs connect script handles to native references and are checked
+again during input resolution.
 
-```text
-RuneLite events/API
-      |
-      v
-WorldSnapshotCollector ----> immutable frames/deltas ----> Lua scheduler thread
-      ^                                                    |
-      |                                                    v
-ActionDispatcher <---- validated semantic intents <---- script coroutines
-      |
-      v
-ClientThread -> target re-resolution -> Client.menuAction -> action receipt
-```
+`GenericClientScriptHost` owns catalog selection and execution ownership.
+`GenericClientScriptRun` owns one worker, pause state, callbacks, and revocable
+input. `GenericClientScriptActions` places behavior around semantic operations;
+the input services own native camera, menu, keyboard, and mouse completion.
 
-### State rules
-
-- Capture a server-consistent frame on `GameTick` and UI/client deltas at `PostClientTick` or specific events.
-- Never pass a live `NPC`, `Widget`, `Tile`, or `Client` object to Lua.
-- Give each frame an `epoch`, server tick, client tick, and monotonic sequence.
-- Increment the epoch on logout, login, world hop, and equivalent identity resets.
-- References include kind, worldview, stable coordinates/index, ID, and spawn generation. An action re-resolves the reference on the client thread and rejects it if it is stale or the requested action no longer exists.
-- Wrap stock `ClientThread.invoke` in a GenericClient command queue that completes a `CompletableFuture`; the stock adapter queues `Runnable`/`BooleanSupplier` work but has no value-returning future ([source](https://github.com/runelite/runelite/blob/2624bcc4136cea1011bf1bb154581a4b16c7a3ca/runelite-client/src/main/java/net/runelite/client/callback/ClientThread.java#L35-L116)).
-- Serialize mutating intents per client. A receipt distinguishes `DISPATCHED`, observed menu action, postcondition success, stale/unavailable rejection, and timeout.
-- Build world/object caches from spawn/despawn events and periodically reconcile them against a complete scene scan.
-- Record frames, events, intents, and receipts so scripts can be replay-tested without a live client.
-
-The selected Lua interface is deliberately smaller than a module for every RuneLite concept: `gc.read(subject, query)`, `gc.await(request)`, `gc.log(level, event, fields)`, `gc.overlay(rows)`, and `gc.next_action()`. Subjects and semantic action request types can grow without expanding the top-level host seam. The complete scripting design is in [`lua-scripting-design.md`](lua-scripting-design.md).
-
-### Lua runtime
-
-Lua is a good fit: small language, inexpensive native coroutines, quick reload, and a narrow host interface. Two JVM implementations were investigated:
-
-- [LuaJ](https://github.com/luaj/luaj) is pure Java, but its mainline API targets Lua 5.2, the project is old, and each Lua coroutine creates and parks a Java thread ([source](https://github.com/luaj/luaj/blob/daf3da94e3cdba0ac6a289148d7e38bd53d3fe64/src/core/org/luaj/vm2/LuaThread.java#L27-L57)). That is the wrong scheduler shape for await-heavy scripts.
-- [LuaJava](https://github.com/gudzpoz/luajava) actively supports Lua 5.1 through 5.5, LuaJIT, and LuaJ, with desktop native artifacts for current PUC Lua. Its Lua 5.4 adapter uses native Lua coroutine stacks and is the selected runtime.
-
-Use LuaJava 4.1.0 with PUC Lua 5.4. A Java 11 spike verified selective libraries, coroutine yield/resume, a hidden per-coroutine instruction hook, removal of Java/package/I/O/OS access, and the existing GenericClient fat-JAR pattern. The all-platform probe JAR was approximately 1.5 MiB.
-
-Create restricted globals rather than `standardGlobals`: expose no Java bridge, filesystem, network, process, OS, or debug library to normal scripts. Install an internal instruction hook for per-resume budgets, enforce wall-clock deadlines and bounded event queues, and give each script its own VM/environment and lifecycle. Lua runs on a dedicated scheduler thread, never the client thread or Swing EDT.
-
-Scripts use one sequential root coroutine. The source chunk returns a descriptor,
-and its `run(input)` function becomes that coroutine. `gc.await` yields in Lua
-rather than sleeping or yielding across a Java callback:
-
-```lua
-return {
-  run = function(input)
-    while true do
-      gc.await { event = "game.tick" }
-      local banker = gc.read("npcs", {
-        where = { name = "Banker" },
-        within = 15,
-        action = "Bank",
-        limit = 1,
-      })[1]
-
-      if banker then
-        local receipt = gc.await {
-          action = { type = "interact", target = banker.ref, option = "Bank" },
-          timeout = { game_ticks = 5 },
-        }
-        gc.log("info", "bank-action", receipt)
-      end
-    end
-  end,
-}
-```
-
-Compiled Java modules remain a useful second extension type for performance-heavy pathfinding or domain libraries. JShell remains a developer console. An out-of-process controller is useful for multi-language tooling or crash isolation, but a second JVM per client is less resource-efficient than the in-process Lua runtime.
+This keeps the source-script language independent of Jagex's own cache scripts.
+The supported API and compilation model are documented in
+[Java scripting](java-scripting.md).
 
 ## Headless modes
 
-The packet-tap, virtual interaction display, synthetic camera/pointer, and shadow protocol-reducer design is preserved separately in [`headless-virtual-display-design.md`](headless-virtual-display-design.md). Its implementation is currently deferred while Lua scripting remains active.
+The packet-tap, virtual interaction display, synthetic camera/pointer, and shadow protocol-reducer design is preserved separately in [`headless-virtual-display-design.md`](headless-virtual-display-design.md). Its implementation is currently deferred separately from the Java scripting runtime.
 
 Stock RuneLite has no true headless mode. `RuneLite.start` always initializes `ClientUI`; `ClientUI.init` constructs a Swing `JFrame`; and the injected game engine is an AWT `Panel` with a `Canvas`. Setting `java.awt.headless=true` while taking the normal startup path will therefore fail rather than merely hide the window.
 
@@ -281,7 +226,7 @@ Use one game client per JVM. The injected client and RuneLite contain substantia
 
 1. Extract the smallest immutable player/NPC/inventory/widget/dialog frame from the current plugin and add epoch/generation references.
 2. Add a client-thread `ActionDispatcher` that re-resolves references and uses `Client.menuAction`; preserve the current template-generated synthetic canvas adapter as an optional visible-mode implementation.
-3. Embed LuaJava 4.1.0 plus PUC Lua 5.4, the narrow scripting interface, one scheduler thread, one state/root coroutine per script, hidden instruction/deadline hooks, structured logs, and atomic one-file reload.
+3. Maintain the Java script host, per-run input ownership, copied snapshots, structured logs, and atomic validated catalog publication.
 4. Prove one vertical script that logs nearby NPCs, interacts with a selected target, handles dialog, and never blocks RuneLite's client thread.
 5. Add a compact frame/event/intent/receipt journal and replay that script without RuneLite.
 6. Expand snapshot subjects and action types only when concrete scripts require them.

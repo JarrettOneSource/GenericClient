@@ -23,58 +23,31 @@ try {
   const account = await call("account_snapshot");
   const behaviorProfile = await call("behavior_profile");
   const behaviorStatus = await call("behavior_status");
-  const lua = await call("lua_eval", {
-    code: 'return { player = gc.read("player"), runtime = gc.read("runtime"), npcs = gc.read("npcs", { within = 8, limit = 5 }) }',
+  const diagnostic = await call("java_eval", {
+    code: "return org.dreambot.api.Client.isLoggedIn();",
   });
-  const replFirst = await call("lua_eval", {
-    code: "smoke_counter = (smoke_counter or 0) + 1\nreturn smoke_counter",
+  const compiled = await call("script_compile", {
+    class_name: "McpSmoke",
+    source: `import org.dreambot.api.script.*;
+@ScriptManifest(name="MCP smoke",author="GenericClient",category=Category.UTILITY,version=1)
+public class McpSmoke extends AbstractScript {
+  public int onLoop() { log("mcp-smoke-complete"); return -1; }
+}`,
   });
-  const replSecond = await call("lua_eval", {
-    code: "smoke_counter = smoke_counter + 1\nreturn smoke_counter",
-  });
-  const interaction = await call("lua_eval", {
-    code:
-      'return gc.await { action = { type = "walk.random" }, timeout = { game_ticks = 12 }, breaks = false }',
-  });
-  const phase = await call("lua_eval", {
-    code: 'return gc.phase("diagnostics.mcp-smoke", { breaks = false })',
-  });
-  const saved = await call("script_save", {
-    id: "mcp-location-check",
-    name: "MCP location check",
-    description: "Log the current player snapshot once.",
-    source:
-      'return { run = function(input)\n  gc.await { event = "game.tick" }\n  gc.log("info", "mcp-location-check", gc.read("player"))\nend }\n',
-  });
-  const started = await call("script_run", { id: "mcp-location-check" });
-  await new Promise((resolve) => setTimeout(resolve, 1_500));
+  const started = await call("script_run", { id: "McpSmoke" });
+  await new Promise((resolve) => setTimeout(resolve, 500));
   const afterScript = await call("client_status");
-  status.lua.recent_logs = [];
-  afterScript.lua.recent_logs = Array.isArray(afterScript.lua.recent_logs)
-    ? afterScript.lua.recent_logs.filter((line) => line.includes("mcp-location-check"))
-    : [];
-
-  process.stdout.write(
-    `${JSON.stringify(
-      {
-        tools: tools.tools.map((tool) => tool.name),
-        status,
-        account,
-        behavior_profile: behaviorProfile,
-        behavior_status: behaviorStatus,
-        lua,
-        repl_first: replFirst,
-        repl_second: replSecond,
-        interaction,
-        phase,
-        saved,
-        started,
-        after_script: afterScript,
-      },
-      null,
-      2,
-    )}\n`,
-  );
+  process.stdout.write(`${JSON.stringify({
+    tools: tools.tools.map((tool) => tool.name),
+    game_state: status.game_state,
+    cash: account.cash,
+    behavior_profile: behaviorProfile,
+    behavior_status: behaviorStatus,
+    diagnostic,
+    compiled,
+    started,
+    script_status: afterScript.scripts.script_status,
+  }, null, 2)}\n`);
 } finally {
   await client.close();
 }

@@ -1,8 +1,7 @@
 # GenericClient
 
-GenericClient is a RuneLite plugin with a Lua 5.4 scripting host over immutable
-client snapshots, seeded per-account behavior profiles, and synthetic
-client-only input.
+GenericClient is a RuneLite plugin with Java scripting, a DreamBot source API,
+immutable game snapshots, per-account behavior profiles, and synthetic input.
 
 ## Install on Windows
 
@@ -37,10 +36,10 @@ Click the GenericClient toolbar icon to open the resizable dashboard popout:
 
 - **Active Script** shows the current script, elapsed runtime, configuration,
   cooperative script buttons, Restart, and Stop.
-- **Automations** runs manifest scripts and shows their output.
+- **Automations** runs Java scripts and shows their output.
 - **Schedules** shows named time windows, rule decisions, the active rule lease,
   and Enable/Pause/Reload controls.
-- **Console** contains the Lua REPL plus manual status and walk checks.
+- **Console** contains Java diagnostics plus manual status and walk checks.
 - **Settings** contains mouse movement/trail options, a persistent **Show mouse
   tile** switch with world coordinates, and the behavior profile.
 
@@ -85,107 +84,32 @@ render target and suppressed normal canvas presentation; they are not
 proof boundaries and [`docs/harness-dashboard.md`](docs/harness-dashboard.md)
 for the web contract.
 
-## Lua scripts
+## Java scripts
 
-The current scripting interface is API 3, reported by
-`gc.read("runtime").api_version`. Install the matching
-[GenericClientScripts catalog](https://github.com/Pernasua/GenericClientScripts)
-with the client. Scripts live under `~/.runelite/genericclient/scripts/`;
-startup creates an empty manifest only when one is absent.
+Build scripts against `build/libs/GenericClient-script-api.jar` and place their
+JARs in `~/.runelite/genericclient/scripts/`. Entry points extend DreamBot's
+`AbstractScript` and declare `@ScriptManifest`. The optional `@ScriptSettings`
+annotation supplies a catalog ID, inputs, cooperative buttons, and event IDs.
 
-`manifest.json` registers entry files, optional named modules and random-event
-solver IDs. Modules load through `gc.require` and remain inside the script's
-sandbox. `script_get` exposes their sources; `script_save` preserves an existing
-filename and module bindings. External edits take effect after manifest reload
-and a new start/restart. The client does not update the external catalog by
-itself.
+The maintained [GenericClientScripts](https://github.com/JarrettOneSource/GenericClientScripts)
+catalog provides training, quest, recovery, and random-event workflows. It is
+compiled separately; no standalone catalog is embedded in the client artifact.
 
-| Interface | Purpose |
-| --- | --- |
-| `gc.read(subject, query)` | Read copied world/account/UI state from one pinned frame |
-| `gc.await(request)` | Wait for ticks or a semantic action receipt |
-| `gc.activity(name, policy)` | Declare independent behavior and safety policy |
-| `gc.state(name)`, `gc.phase(name, options)` | Report script state and evaluate major transitions |
-| `gc.intent(name, fn)` | Share one behavior boundary across a short sequence |
-| `gc.walk.to(options)` | Plan and execute a constrained destination journey |
-| `gc.log`, `gc.overlay` | Publish diagnostics and up to four overlay rows/scene markers |
-| `gc.next_action()` | Cooperatively consume a declared script button |
-| `gc.require(name)` | Load a manifest-declared module |
-| `gc.checkpoint`, `gc.clear_checkpoint` | Persist or clear an account/script integer checkpoint |
+`Walking.walk()` dispatches one route step. GenericClient's `Navigation` extension
+handles complete journeys with via points, avoided tiles, arrival alternatives,
+and resumable interruptions. Script workers use copied state and revocable input
+authority. Physical mouse takeover pauses them; ESC stops them.
 
-An entry file returns a descriptor with `run(input)`, optional choice inputs
-and optional action buttons. The dashboard and MCP validate the same input
-metadata. A complete destination script can use:
+See [Java scripting](docs/java-scripting.md) for supported API methods, lifecycle,
+compilation, and concurrency rules. Source compilation requires a JDK; loading
+precompiled catalog JARs does not.
 
-```lua
-local destinations = {
-  varrock = { x = 3210, y = 3424, plane = 0 },
-  grand_exchange = { x = 3164, y = 3487, plane = 0 },
-}
-
-return {
-  inputs = {
-    {
-      id = "destination",
-      label = "Destination",
-      type = "choice",
-      default = "varrock",
-      choices = {
-        { value = "varrock", label = "Varrock" },
-        { value = "grand_exchange", label = "Grand Exchange" },
-      },
-    },
-  },
-  run = function(input)
-    gc.activity("travel")
-    local journey = gc.walk.to {
-      destination = destinations[input.destination],
-      within = 3,
-      ticks = 600,
-      interrupt_on = { dialogue = true },
-    }
-    if journey.status ~= "arrived" then return journey end
-    gc.phase("route.arrived")
-    gc.await { action = { type = "mouse.offscreen" } }
-    return journey
-  end,
-}
-```
-
-Journeys combine bundled global terrain with current scene collision and
-eligible directed transports. `via` preserves required corridors,
-`avoid_tiles` excludes quest hazards, `arrival_tiles` restricts allowed final
-tiles, and `resume` carries observed progress after an interruption. Native
-input verifies the selected object, widget or conversation and observes the
-transport landing. Door failures are remembered per account and trigger
-replanning. The [walker contract](docs/walker-design.md) defines limits,
-interrupt priority, cancellation and receipt fields.
-
-Semantic actions own their native substeps and one completion boundary. Micro
-pressure accrues with owned active time; completed actions and phases provide
-places to take a due break. Intents suppress discretionary behavior between
-related steps, while long approaches and training loops stay outside them.
-Use `gc.activity("combat", { breaks = true })` for repeatable combat that should
-retain combat's damage and prayer policy while allowing breaks. Expected damage
-does not disable forced healing or emergency escape.
-
-Operator REPL calls are plain unless an await or phase explicitly sets
-`humanize = true`. Standalone scripts keep their declared policy. One-off
-urgent behavior belongs in a `policy` table; the per-await `breaks` field and
-`interrupt_on_dialogue` alias are rejected.
-
-Snapshots include player, skills, inventory, equipment, bank cache, quests,
-offers, cash, scene entities, widgets and dialogue. Unknown or stale data cannot
-stand in for a fresh account frame. A dispatched action is not automatically a
-quest postcondition; the script observes the expected state before advancing.
-
-The detailed interfaces are documented in
-[Lua runtime](docs/lua-scripting-design.md),
-[behavior system](docs/behavior-system.md), and
-[MCP/Lua control](docs/mcp-lua-control.md).
-Random-event ownership and solver registration are described in
-[random-events.md](docs/random-events.md). Source tests, a loaded artifact and
-fresh live receipts remain separate acceptance steps.
+The Java catalog uses runtime API 3. `Automation.activity(name, policy)` declares
+independent behavior and safety choices; `Automation.intent(name, body)` groups
+short action sequences. Long approaches and training loops stay outside intents.
+Gameplay continues to count owned time while discretionary behavior is suppressed.
+See the [behavior contract](docs/behavior-system.md), [journey contract](docs/walker-design.md),
+and [MCP control reference](docs/mcp-control.md).
 
 ## Scheduled rules
 
@@ -218,8 +142,7 @@ through 17:00 Eastern while Strength is below 30:
         "script": "aio-melee",
         "inputs": {
           "skill": "strength",
-          "target_level": "30",
-          "method": "auto"
+          "target_level": "30"
         }
       },
       "retry_after": "PT10M"
@@ -240,7 +163,7 @@ limit are documented in
 
 The included stdio MCP server lets Codex read live, behavior, and scheduling
 state, highlight scene tiles/entities for inspection, capture the fully rendered
-game canvas as a PNG, execute Lua snippets, save and run scripts, and control the
+game canvas as a PNG, execute Java diagnostics, compile and run scripts, and control the
 Jagex-backed game session.
 GenericClient exposes its control bridge only on `127.0.0.1`; the default port
 is `17343`.
@@ -254,9 +177,8 @@ codex mcp add genericclient -- \
   '\\wsl.localhost\Ubuntu\home\user\GenericClient\mcp\src\server.mjs'
 ```
 
-The MCP tools, Lua REPL examples, manifest format, and junior-friendly script
-workflow are documented in
-[`docs/mcp-lua-control.md`](docs/mcp-lua-control.md).
+The tools and Java diagnostic workflow are documented in
+[MCP control](docs/mcp-control.md).
 
 ## Mouse profiles
 
@@ -276,10 +198,10 @@ The active behavior profile supplies the account's mouse movement duration;
 Settings can save a manual duration as part of that account-specific profile.
 
 Physical mouse movement, dragging, canvas entry/exit, or a press immediately
-preempts synthetic input and pauses the current Lua action. After 1.5 seconds
+preempts synthetic input and pauses the current script action. After 1.5 seconds
 without another physical mouse event, GenericClient resumes the same script,
 retaining verified input or retrying a canceled attempt from fresh state. A physical Escape keypress is the manual stop:
-it cancels client input, stops Lua, and keeps Idle from moving the cursor until
+it cancels client input, stops scripts, and keeps Idle from moving the cursor until
 another standalone automation starts. Synthetic mouse and key events never
 trigger either boundary. Emergency food or escape already in progress retains
 input ownership; Escape remains the explicit way to stop it.
@@ -299,13 +221,31 @@ Log lines use the `[GenericClient]` prefix.
 ## Build
 
 ```bash
-./gradlew clean jar shadowJar
+./gradlew clean jar shadowJar sdkJar
 ```
 
 Artifacts:
 
 - `build/libs/GenericClient-thin.jar`
 - `build/libs/GenericClient.jar`
+- `build/libs/GenericClient-script-api.jar`
+
+Validate Java and native canvas interactions on a Linux host without a display:
+
+```bash
+xvfb-run -a ./gradlew test pmdMain pmdTest cpdMain
+npm --prefix mcp test
+npm --prefix harness test
+```
+
+Include the maintained catalog's workflow tests when mutation-testing the SDK:
+
+```bash
+xvfb-run -a ./gradlew pitest -PscriptCatalog=../GenericClientScripts
+```
+
+On a desktop, run the Gradle command directly. Canvas interaction tests need a
+display; `java.awt.headless=true` cannot execute those checks.
 
 Run the standalone artifact with:
 

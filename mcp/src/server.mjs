@@ -68,16 +68,14 @@ export function createServer(bridge = new GenericClientBridge()) {
     { name: "genericclient", version: VERSION },
     {
       instructions:
-        "GenericClient controls the live RuneLite client through Lua. Call client_status first, then account_snapshot before planning account work. " +
-        "Use client_screenshot whenever structured state does not fully explain the visible game, widget, dialogue, camera, or menu state. " +
-        "Use lua_eval for ad-hoc exploration; its code is the body of a persistent Lua function, so return a value to receive it. " +
-        "Use gc.activity(name, policy) for script behavior and gc.intent(name, fn) for short action sequences. " +
-        "REPL actions are plain unless humanize=true is explicit; standalone scripts use their declared policy. " +
-        "gc.await accepts independent policy overrides; per-await breaks and interrupt_on_dialogue are rejected. " +
-        "Use gc.walk.to for destination journeys with via, interrupt_on, and resume options. " +
-        "Use script_save for reusable standalone scripts, script_run with declared inputs, and script_action for declared buttons. " +
-        "Use random_event_status whenever client_status reports attention_required; acknowledgement never releases the block, while completion does. " +
-        "Use automation_status before changing scheduled rules; scheduled and manual scripts share the single manifest-script slot.",
+        "GenericClient runs Java scripts through its DreamBot-compatible API. Call client_status first, then account_snapshot before planning account work. " +
+        "Use client_screenshot when structured state does not explain the visible game. " +
+        "Use java_eval for a Java method body that returns a diagnostic value; the active script must be stopped first. " +
+        "Use Automation.activity(name, policy) and Automation.intent(name, supplier) for script behavior and grouped actions. " +
+        "Diagnostics are plain unless humanize=true is explicit; standalone scripts use their declared policy. " +
+        "Use Navigation.Journey for travel constraints and Navigation.walk for interruption and continuation receipts. " +
+        "Use script_compile for annotated Java source, script_run for declared inputs, and script_action for cooperative script buttons. " +
+        "Use random_event_status when attention is required and automation_status before changing scheduled rules.",
     },
   );
 
@@ -86,7 +84,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Read GenericClient status",
       description:
-        "Read the live player position, game state, Lua state, behavior profile, latched random-event state, registered scripts, mouse profile, recent logs, and bounded chat/system messages. Call this before exploring or interacting.",
+        "Read the live player position, game state, script state, behavior profile, latched random-event state, registered scripts, mouse profile, recent logs, and bounded chat/system messages. Call this before exploring or interacting.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: true,
@@ -139,7 +137,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Clear RuneLite scene highlights",
       description:
-        "Clear markers created by scene_highlight without changing Lua-script markers or the Show mouse tile setting.",
+        "Clear markers created by scene_highlight without changing script markers or the Show mouse tile setting.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: false,
@@ -242,7 +240,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "End active break",
       description:
-        "Manually end the active micro or long break. This is the MCP equivalent of the X on the in-client break banner; Lua scripts cannot call it.",
+        "Manually end the active micro or long break. This is the MCP equivalent of the X on the in-client break banner; Java scripts cannot call it.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: false,
@@ -475,13 +473,13 @@ export function createServer(bridge = new GenericClientBridge()) {
   );
 
   server.registerTool(
-    "lua_eval",
+    "java_eval",
     {
-      title: "Execute Lua in RuneLite",
+      title: "Execute Java in RuneLite",
       description:
-        "Execute a Lua snippet against the live client and wait for its returned value. Use `return gc.read(\"player\")` for a simple query. Globals persist between calls. The snippet may use gc.await and semantic actions such as walk.to.",
+        "Execute a Java method body against the live client. Return a value to receive it. Each invocation has its own state and runs with plain input behavior.",
       inputSchema: z.object({
-        code: z.string().min(1).describe("Lua function body. Use return to send a structured value back."),
+        code: z.string().min(1).describe("Java method body returning a value."),
       }),
       annotations: {
         readOnlyHint: false,
@@ -490,30 +488,14 @@ export function createServer(bridge = new GenericClientBridge()) {
         openWorldHint: true,
       },
     },
-    async ({ code }) => result(await bridge.call("lua.eval", { code })),
-  );
-
-  server.registerTool(
-    "lua_repl_reset",
-    {
-      title: "Reset Lua REPL",
-      description: "Clear globals created by earlier lua_eval calls and create a fresh REPL state.",
-      inputSchema: z.object({}),
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-    },
-    async () => result(await bridge.call("lua.reset")),
+    async ({ code }) => result(await bridge.call("java.eval", { code })),
   );
 
   server.registerTool(
     "script_list",
     {
-      title: "List Lua scripts",
-      description: "List every standalone Lua script registered in scripts/manifest.json.",
+      title: "List Java scripts",
+      description: "List annotated scripts discovered in the external JAR catalog.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: true,
@@ -528,10 +510,10 @@ export function createServer(bridge = new GenericClientBridge()) {
   server.registerTool(
     "script_get",
     {
-      title: "Read Lua script",
-      description: "Read one registered script's manifest metadata and complete Lua source.",
+      title: "Read Java script",
+      description: "Read a script's class, metadata, inputs, and cooperative buttons.",
       inputSchema: z.object({
-        id: z.string().min(1).describe("Manifest script id, for example account-auditor."),
+        id: z.string().min(1).describe("Script id, for example account-auditor."),
       }),
       annotations: {
         readOnlyHint: true,
@@ -544,26 +526,13 @@ export function createServer(bridge = new GenericClientBridge()) {
   );
 
   server.registerTool(
-    "script_save",
+    "script_compile",
     {
-      title: "Save Lua script",
-      description:
-        "Create or update a registered Lua script. Updates preserve its filename and declared modules. Source must return a descriptor table with a run function and optional inputs/actions. Use a short lowercase id such as inspect-varrock-npcs.",
+      title: "Compile Java script",
+      description: "Compile a Java class against the script SDK and reload the JAR catalog. Scripts use DreamBot's AbstractScript and ScriptManifest.",
       inputSchema: z.object({
-        id: z
-          .string()
-          .regex(/^[a-z0-9][a-z0-9_-]*$/)
-          .describe("Stable lowercase script id."),
-        name: z.string().min(1).describe("Human-readable name shown in Automations."),
-        description: z.string().min(1).describe("One sentence explaining what the script does."),
-        source: z
-          .string()
-          .min(1)
-          .describe("Complete Lua file returning { inputs = {...}, run = function(input) ... end }."),
-        random_events: z
-          .array(z.number().int().positive())
-          .default([])
-          .describe("Optional RuneLite random-event NPC IDs this standalone solver handles."),
+        class_name: z.string().regex(/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/),
+        source: z.string().min(1).describe("Complete Java source for the named class."),
       }),
       annotations: {
         readOnlyHint: false,
@@ -572,26 +541,17 @@ export function createServer(bridge = new GenericClientBridge()) {
         openWorldHint: false,
       },
     },
-    async ({ id, name, description, source, random_events }) =>
-      result(
-        await bridge.call("scripts.save", {
-          id,
-          name,
-          description,
-          source,
-          random_events,
-        }),
-      ),
+    async ({ class_name, source }) => result(await bridge.call("scripts.compile", { class_name, source })),
   );
 
   server.registerTool(
     "script_run",
     {
-      title: "Run Lua script",
+      title: "Run Java script",
       description:
-        "Start a registered standalone script by manifest id. Pass values for inputs declared by the script descriptor. It becomes the active script shown in the GenericClient dashboard.",
+        "Start a registered standalone script by catalog id. Pass values for inputs declared by the script settings. It becomes the active script shown in the GenericClient dashboard.",
       inputSchema: z.object({
-        id: z.string().min(1).describe("Manifest script id."),
+        id: z.string().min(1).describe("Script id."),
         inputs: z
           .record(z.string(), z.string())
           .optional()
@@ -610,8 +570,8 @@ export function createServer(bridge = new GenericClientBridge()) {
   server.registerTool(
     "script_stop",
     {
-      title: "Stop active Lua script",
-      description: "Stop the active standalone Lua script and cancel its active walk.",
+      title: "Stop active Java script",
+      description: "Stop the active standalone Java script and cancel its active walk.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: false,
@@ -628,7 +588,7 @@ export function createServer(bridge = new GenericClientBridge()) {
     {
       title: "Trigger active script action",
       description:
-        "Queue one action declared by the running script. The Lua coroutine consumes it cooperatively with gc.next_action().",
+        "Queue one action declared by the running Java script.",
       inputSchema: z.object({
         action: z.string().min(1).describe("Declared action id from client_status or script_get."),
       }),
@@ -643,11 +603,11 @@ export function createServer(bridge = new GenericClientBridge()) {
   );
 
   server.registerTool(
-    "script_reload_manifest",
+    "script_reload",
     {
-      title: "Reload script manifest",
+      title: "Reload script catalog",
       description:
-        "Reload scripts/manifest.json after files were edited outside GenericClient. The dashboard and MCP list update immediately.",
+        "Reload the script JAR catalog after files were edited outside GenericClient. The dashboard and MCP list update immediately.",
       inputSchema: z.object({}),
       annotations: {
         readOnlyHint: false,

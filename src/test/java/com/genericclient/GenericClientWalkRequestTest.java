@@ -58,12 +58,11 @@ public class GenericClientWalkRequestTest
 	}
 
 	@Test
-	public void acceptsAnEmptyLuaTableForAnOptionalPointList()
+	public void rejectsAnObjectWhereAJourneyPointArrayIsRequired()
 	{
-		GenericClientWalkRequest request = GenericClientWalkRequest.parse(Map.of(
+		assertThrows(IllegalArgumentException.class, () -> GenericClientWalkRequest.parse(Map.of(
 			"destination", point(3200, 3200, 0), "via", Collections.emptyMap()), 100,
-			GenericClientActivityContext.none());
-		assertTrue(request.via.isEmpty());
+			GenericClientActivityContext.none()));
 	}
 
 	@Test(expected = IllegalArgumentException.class)

@@ -35,8 +35,8 @@ public class GenericClientDashboardTest
 	@Test
 	public void keepsThePopoutToFocusedDestinations() throws Exception
 	{
-		GenericClientLuaHost host =
-			GenericClientTestSupport.luaHost(temporaryFolder, "dashboard").build();
+		GenericClientScriptHost host =
+			GenericClientTestSupport.scriptHost(temporaryFolder, "dashboard").build();
 		try
 		{
 			GenericClientDashboard dashboard = new GenericClientDashboard(null, new FakeActions(), host);
@@ -113,8 +113,8 @@ public class GenericClientDashboardTest
 	@Test
 	public void longBreakBannerCanEndTheBreak() throws Exception
 	{
-		GenericClientLuaHost host =
-			GenericClientTestSupport.luaHost(temporaryFolder, "break-banner").build();
+		GenericClientScriptHost host =
+			GenericClientTestSupport.scriptHost(temporaryFolder, "break-banner").build();
 		try
 		{
 			FakeActions actions = new FakeActions();
@@ -153,22 +153,14 @@ public class GenericClientDashboardTest
 	}
 
 	@Test
-	public void rendersInputsFromAnExternalLuaDescriptor() throws Exception
+	public void rendersInputsFromAnExternalScriptDescriptor() throws Exception
 	{
-		GenericClientLuaHost host =
-			GenericClientTestSupport.luaHost(temporaryFolder, "external-ui").build();
+		GenericClientScriptHost host =
+			GenericClientTestSupport.scriptHost(temporaryFolder, "external-ui").build();
 		try
 		{
-			host.catalog.saveScript(
-				"travel",
-				"Travel",
-				"Render an external script's destination choices.",
-				"return { inputs = {{ id = 'destination', label = 'Destination', " +
-					"type = 'choice', default = 'grand_exchange', choices = {" +
-					"{ value = 'grand_exchange', label = 'Grand Exchange' }, " +
-					"{ value = 'varrock_center', label = 'Varrock Center' } } }}, " +
-					"run = function(input) return input.destination end }\n")
-				.get(2, java.util.concurrent.TimeUnit.SECONDS);
+			host.compile("Travel", GenericClientTestSupport.javaScript("Travel", "@ScriptSettings(id=\"travel\", inputs=@ScriptSettings.Input(id=\"destination\", label=\"Destination\", choices={\"grand_exchange\", \"varrock_center\"}, labels={\"Grand Exchange\", \"Varrock Center\"}, defaultValue=\"grand_exchange\"))", "public int onLoop() { return -1; }"))
+				.get(5, java.util.concurrent.TimeUnit.SECONDS);
 			GenericClientScriptsPanel panel = new GenericClientScriptsPanel(host);
 			JComboBox<?> selector = scriptSelector(panel);
 			SwingUtilities.invokeAndWait(() -> selectScript(selector, "travel"));
@@ -188,26 +180,17 @@ public class GenericClientDashboardTest
 	@Test
 	public void activeScriptPageShowsConfigurationAndDeclaredActions() throws Exception
 	{
-		GenericClientLuaHost host =
-			GenericClientTestSupport.luaHost(temporaryFolder, "active-ui").build();
+		GenericClientScriptHost host =
+			GenericClientTestSupport.scriptHost(temporaryFolder, "active-ui").build();
 		try
 		{
-			host.catalog.saveScript(
-				"active-ui",
-				"Active UI",
-				"Exercise the active script page.",
-				"return {\n" +
-				" inputs = {{ id = 'mode', label = 'Mode', type = 'choice', " +
-					"choices = {{ value = 'normal', label = 'Normal' }} }},\n" +
-				" actions = {{ id = 'refresh', label = 'Refresh' }},\n" +
-				" run = function(input) while true do gc.await { event = 'game.tick' }; " +
-					"if gc.next_action() == 'refresh' then return true end end end,\n" +
-				"}\n").get(2, java.util.concurrent.TimeUnit.SECONDS);
+			host.compile("ActiveUI", GenericClientTestSupport.javaScript("ActiveUI", "@ScriptSettings(id=\"active-ui\", inputs=@ScriptSettings.Input(id=\"mode\", label=\"Mode\", choices={\"normal\"}, labels={\"Normal\"}, defaultValue=\"normal\"), actions=@ScriptSettings.Button(id=\"refresh\", label=\"Refresh\"))", "public int onLoop() { return \"refresh\".equals(ScriptScope.current().nextAction()) ? -1 : 10; }"))
+				.get(5, java.util.concurrent.TimeUnit.SECONDS);
 			host.start("active-ui").get(2, java.util.concurrent.TimeUnit.SECONDS);
 			GenericClientActiveScriptPanel panel = new GenericClientActiveScriptPanel(host);
 			SwingUtilities.invokeAndWait(panel::update);
 
-			assertTrue(labels(panel).contains("Active UI"));
+			assertTrue(labels(panel).contains("ActiveUI"));
 			assertTrue(labels(panel).contains("Mode"));
 			assertNotNull(buttonOrNull(panel, "Refresh"));
 			assertNotNull(buttonOrNull(panel, "Restart"));
@@ -215,7 +198,7 @@ public class GenericClientDashboardTest
 
 			SwingUtilities.invokeAndWait(() -> button(panel, "Refresh").doClick());
 			host.publishGameTick(snapshot(1));
-			waitForLuaStatus(host, "COMPLETED");
+			waitForScriptStatus(host, "COMPLETED");
 		}
 		finally
 		{
@@ -370,7 +353,7 @@ public class GenericClientDashboardTest
 		throw new AssertionError("Missing label " + label);
 	}
 
-	private static void waitForLuaStatus(GenericClientLuaHost host, String expected) throws Exception
+	private static void waitForScriptStatus(GenericClientScriptHost host, String expected) throws Exception
 	{
 		long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
 		while (!expected.equals(host.getStatus()) && System.nanoTime() < deadline)
@@ -386,7 +369,7 @@ public class GenericClientDashboardTest
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
+			new GenericClientPlayerSnapshot(1L, "Player", 3200, 3200, 0, -1),
 			Collections.emptyList());
 	}
 

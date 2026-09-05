@@ -10,6 +10,24 @@ import java.util.Set;
 
 final class GenericClientScriptInput
 {
+	private static GenericClientScriptInput from(com.genericclient.script.ScriptSettings.Input input)
+	{
+		List<Option> choices = new ArrayList<>();
+		if (input.labels().length != 0 && input.labels().length != input.choices().length)
+			throw new IllegalArgumentException("Choice labels must match choices for " + input.id());
+		Set<String> values = new HashSet<>();
+		for (int i = 0; i < input.choices().length; i++)
+		{
+			String value = input.choices()[i];
+			if (value.isBlank() || !values.add(value)) throw new IllegalArgumentException("Invalid choice value for " + input.id());
+			String label = input.labels().length == 0 ? value : input.labels()[i];
+			if (label.isBlank()) throw new IllegalArgumentException("Choice label is required for " + input.id());
+			choices.add(new Option(value,label));
+		}
+		if (choices.isEmpty() || findChoice(choices, input.defaultValue()) == null)
+			throw new IllegalArgumentException("Invalid choices for " + input.id());
+		return new GenericClientScriptInput(input.id(), input.label(), choices, input.defaultValue());
+	}
 	private final String id;
 	private final String label;
 	private final List<Option> choices;
@@ -63,56 +81,17 @@ final class GenericClientScriptInput
 		return value;
 	}
 
-	static List<GenericClientScriptInput> parse(Object rawInputs)
+	static List<GenericClientScriptInput> from(com.genericclient.script.ScriptSettings.Input[] definitions)
 	{
-		if (rawInputs == null)
-		{
-			return Collections.emptyList();
-		}
-		if (rawInputs instanceof Map && ((Map<?, ?>) rawInputs).isEmpty())
-		{
-			return Collections.emptyList();
-		}
-		if (!(rawInputs instanceof List))
-		{
-			throw new IllegalArgumentException("Lua script inputs must be an array");
-		}
-
 		List<GenericClientScriptInput> inputs = new ArrayList<>();
 		Set<String> ids = new HashSet<>();
-		for (Object rawInput : (List<?>) rawInputs)
+		for (com.genericclient.script.ScriptSettings.Input input : definitions)
 		{
-			if (!(rawInput instanceof Map))
-			{
-				throw new IllegalArgumentException("Each Lua script input must be a table");
-			}
-			Map<?, ?> input = (Map<?, ?>) rawInput;
-			String id = requiredString(input, "id", "Script input id");
-			if (!id.matches("[a-z][a-z0-9_]{0,31}"))
-			{
-				throw new IllegalArgumentException(
-					"Script input id must be 1-32 lowercase letters, numbers, or underscores");
-			}
-			if (!ids.add(id))
-			{
-				throw new IllegalArgumentException("Duplicate Lua script input id: " + id);
-			}
-			String label = requiredString(input, "label", "Script input label");
-			String type = requiredString(input, "type", "Script input type");
-			if (!"choice".equals(type))
-			{
-				throw new IllegalArgumentException("Unsupported Lua script input type: " + type);
-			}
-			List<Option> choices = parseChoices(input.get("choices"), id);
-			String defaultValue = input.get("default") instanceof String
-				? (String) input.get("default")
-				: choices.get(0).value;
-			if (findChoice(choices, defaultValue) == null)
-			{
-				throw new IllegalArgumentException(
-					"Default value for script input " + id + " is not one of its choices");
-			}
-			inputs.add(new GenericClientScriptInput(id, label, choices, defaultValue));
+			if (!input.id().matches("[a-z][a-z0-9_]{0,31}"))
+				throw new IllegalArgumentException("Script input id must be 1-32 lowercase letters, numbers, or underscores");
+			if (!ids.add(input.id())) throw new IllegalArgumentException("Duplicate script input id: " + input.id());
+			if (input.label().isBlank()) throw new IllegalArgumentException("Script input label is required");
+			inputs.add(from(input));
 		}
 		return Collections.unmodifiableList(inputs);
 	}
@@ -147,33 +126,6 @@ final class GenericClientScriptInput
 		return Collections.unmodifiableMap(resolved);
 	}
 
-	private static List<Option> parseChoices(Object rawChoices, String inputId)
-	{
-		if (!(rawChoices instanceof List) || ((List<?>) rawChoices).isEmpty())
-		{
-			throw new IllegalArgumentException("Choice input " + inputId + " requires at least one choice");
-		}
-		List<Option> choices = new ArrayList<>();
-		Set<String> values = new HashSet<>();
-		for (Object rawChoice : (List<?>) rawChoices)
-		{
-			if (!(rawChoice instanceof Map))
-			{
-				throw new IllegalArgumentException("Choices for script input " + inputId + " must be tables");
-			}
-			Map<?, ?> choice = (Map<?, ?>) rawChoice;
-			String value = requiredString(choice, "value", "Choice value");
-			String label = requiredString(choice, "label", "Choice label");
-			if (!values.add(value))
-			{
-				throw new IllegalArgumentException(
-					"Duplicate choice value for script input " + inputId + ": " + value);
-			}
-			choices.add(new Option(value, label));
-		}
-		return choices;
-	}
-
 	private static Option findChoice(List<Option> choices, String value)
 	{
 		for (Option choice : choices)
@@ -184,16 +136,6 @@ final class GenericClientScriptInput
 			}
 		}
 		return null;
-	}
-
-	private static String requiredString(Map<?, ?> value, String key, String label)
-	{
-		Object raw = value.get(key);
-		if (!(raw instanceof String) || ((String) raw).trim().isEmpty())
-		{
-			throw new IllegalArgumentException(label + " is required");
-		}
-		return ((String) raw).trim();
 	}
 
 	static final class Option

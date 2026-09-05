@@ -23,7 +23,7 @@ import javax.swing.border.EmptyBorder;
 
 final class GenericClientScriptsPanel extends JPanel
 {
-	private final GenericClientLuaHost host;
+	private final GenericClientScriptHost host;
 	private final GenericClientDashboardStyle.Chip status =
 		GenericClientDashboardStyle.chip("Idle", GenericClientDashboardStyle.MUTED);
 	private final JComboBox<GenericClientScriptRegistry.Script> scripts =
@@ -39,10 +39,10 @@ final class GenericClientScriptsPanel extends JPanel
 	private String activeId = "none";
 	private String activeStatus = "IDLE";
 	private boolean refreshing;
-	private long manifestRevision = -1L;
+	private long catalogRevision = -1L;
 	private long descriptionRequest;
 
-	GenericClientScriptsPanel(GenericClientLuaHost host)
+	GenericClientScriptsPanel(GenericClientScriptHost host)
 	{
 		this.host = host;
 		setLayout(new BorderLayout());
@@ -63,7 +63,7 @@ final class GenericClientScriptsPanel extends JPanel
 		JButton reload = GenericClientDashboardStyle.ghostButton("Reload script");
 		reload.addActionListener(event -> host.reload());
 		JButton refresh = GenericClientDashboardStyle.ghostButton("Reload list");
-		refresh.addActionListener(event -> host.catalog.reloadManifest()
+		refresh.addActionListener(event -> host.reloadCatalog()
 			.whenComplete((result, error) -> SwingUtilities.invokeLater(this::refreshScripts)));
 
 		run.addActionListener(event -> start());
@@ -105,7 +105,7 @@ final class GenericClientScriptsPanel extends JPanel
 			logs.setText(text);
 			logs.setCaretPosition(logs.getDocument().getLength());
 		}
-		if (manifestRevision != host.catalog.getManifestRevision())
+		if (catalogRevision != host.getCatalogRevision())
 		{
 			refreshScripts();
 		}
@@ -169,7 +169,7 @@ final class GenericClientScriptsPanel extends JPanel
 		try
 		{
 			scripts.removeAllItems();
-			for (GenericClientScriptRegistry.Script script : host.catalog.listScripts())
+			for (GenericClientScriptRegistry.Script script : host.listScripts())
 			{
 				scripts.addItem(script);
 			}
@@ -190,7 +190,7 @@ final class GenericClientScriptsPanel extends JPanel
 		{
 			refreshing = false;
 		}
-		manifestRevision = host.catalog.getManifestRevision();
+		catalogRevision = host.getCatalogRevision();
 		updateStatus();
 		updateDescription();
 	}
@@ -216,7 +216,7 @@ final class GenericClientScriptsPanel extends JPanel
 		}
 
 		String scriptId = selected.getId();
-		host.catalog.describe(scriptId).whenComplete((scriptInputs, error) ->
+		host.describe(scriptId).whenComplete((scriptInputs, error) ->
 			SwingUtilities.invokeLater(() -> showInputs(request, scriptId, scriptInputs, error)));
 	}
 

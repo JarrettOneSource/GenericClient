@@ -1,5 +1,7 @@
 # Multi-instance memory optimization research
 
+This research predates the Java scripting cutover. References to interpreter memory/loading describe that measured baseline; the current Java runtime requires fresh measurements before carrying those performance conclusions forward.
+
 Status: research only. No runtime or Harness implementation is included here.
 
 ## Goal

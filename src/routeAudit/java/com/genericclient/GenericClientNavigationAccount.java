@@ -24,7 +24,7 @@ enum GenericClientNavigationAccount
 	GenericClientSnapshot snapshot(WorldPoint point)
 	{
 		return new GenericClientSnapshot(0, "LOGGED_IN", GenericClientCollisionMap.SOURCE_GAME_REVISION,
-			new GenericClientWorldSnapshot.PlayerSnapshot("navigation-audit", point.getX(), point.getY(), point.getPlane(), 0),
+			new GenericClientPlayerSnapshot(1L,"navigation-audit", point.getX(), point.getY(), point.getPlane(), 0),
 			List.of(), account, quest);
 	}
 

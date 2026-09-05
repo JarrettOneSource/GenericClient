@@ -16,7 +16,7 @@ function status({ script = "route", state = "RUNNING", result = "", hp = 50,
   recovering = false, safety = "idle", attention = false, deathTick = -1 } = {}) {
   return {
     game_state: "LOGGED_IN",
-    lua: { active_script: script, run_id: 7, script_status: state,
+    scripts: { active_script: script, run_id: 7, script_status: state,
       script_state: "travel", active: { result: { status: result } } },
     player: { current_hitpoints: hp, max_hitpoints: 75, world: { x: 3200, y: 3400 } },
     safety: { recovering, last_event: safety },
@@ -90,6 +90,7 @@ for (const [name, observations, code, fatal] of [
   ["failed result", [status({ state: "COMPLETED", result: "supplies_required" })], 4, "script_result_failed"],
   ["faulted run", [status({ state: "FAULTED" })], 4],
   ["stopped run", [status({ state: "COMPLETED", result: "stopped" })], 5],
+  ["manual stop", [status({ state: "STOPPED" })], 5],
   ["vanished run", [status(), status({ script: "none", state: "IDLE" })], 5],
   ["death before attention", [status({ hp: 0, attention: true })], 6, "death_detected"],
   ["attention before vanished run", [status(), status({ script: "none", state: "IDLE", attention: true })], 3],

@@ -1,7 +1,8 @@
 package com.genericclient;
 
 import static org.junit.Assert.*;
-import java.util.Collections;
+import static com.genericclient.GenericClientScriptHostTest.await;
+import static com.genericclient.GenericClientScriptHostTest.snapshot;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -14,126 +15,121 @@ import org.junit.rules.TemporaryFolder;
 
 public class GenericClientActionLifetimeTest
 {
-	@Rule public TemporaryFolder temporary = new TemporaryFolder();
+    @Rule public TemporaryFolder temporary = new TemporaryFolder();
 
-	@Test
-	public void luaWalkHelperPassesViaAndTimeoutWithoutChangingTheOptionsTable() throws Exception
-	{
-		AtomicReference<GenericClientWalkRequest> request = new AtomicReference<>();
-		GenericClientLuaHost host = host((journeyRequest, routeClickBoundary) ->
-		{
-			request.set(journeyRequest);
-			return CompletableFuture.completedFuture(Collections.singletonMap("status", "arrived"));
-		});
-		try
-		{
-			host.publishGameTick(snapshot(1));
-			Map<String, Object> result = host.evaluate("local options = { destination={x=3210,y=3200,plane=0}, " +
-				"via={{x=3200,y=3210,plane=0}}, arrival_tiles={{x=3209,y=3200,plane=0}}, ticks=123 }; local receipt=gc.walk.to(options); " +
-				"return options.type == nil and receipt.status == 'arrived'").get(2, TimeUnit.SECONDS);
-			assertEquals(true, result.get("value"));
-			assertEquals(123, request.get().timeoutTicks);
-			assertEquals(1, request.get().via.size());
-			assertEquals(1, request.get().arrivalTiles.size());
-		}
-		finally { host.close(); }
-	}
+    @Test public void passesJourneyConstraintsWithoutChangingCallerOptions() throws Exception
+    {
+        AtomicReference<GenericClientWalkRequest> request = new AtomicReference<>();
+        try (GenericClientScriptHost host = host((input, boundary) -> {
+            request.set(input); return CompletableFuture.completedFuture(Map.of("status","arrived"));
+        }))
+        {
+            Map<String, Object> result = host.evaluate("Map<String,Object> options=Map.of(\"destination\",Map.of(\"x\",3210,\"y\",3200,\"plane\",0)," +
+                "\"via\",List.of(Map.of(\"x\",3200,\"y\",3210,\"plane\",0)),\"arrival_tiles\",List.of(Map.of(\"x\",3209,\"y\",3200,\"plane\",0)),\"timeout_ticks\",123);" +
+                "Map<String,Object> receipt=ScriptScope.current().execute(\"walk.to\",options,5000); return options.size()==4 && receipt.get(\"status\").equals(\"arrived\");")
+                .get(10, TimeUnit.SECONDS);
+            assertEquals(true, result.get("value"));
+            assertEquals(123, request.get().timeoutTicks);
+            assertEquals(1, request.get().via.size());
+            assertEquals(1, request.get().arrivalTiles.size());
+        }
+    }
 
-	@Test
-	public void invalidationDiscardsSnapshotsAlreadyQueuedBeforeLogout() throws Exception
-	{
-		GenericClientLuaHost host = host((journeyRequest, routeClickBoundary) -> CompletableFuture.completedFuture(Collections.emptyMap()));
-		CompletableFuture<Void> release = new CompletableFuture<>();
-		try
-		{
-			host.publishGameTick(snapshot(1));
-			assertNotNull(host.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS));
-			host.catalog.saveScript("waiting", "Waiting", "Snapshot test", script("gc.await { event = 'game.tick' }"))
-				.get(2, TimeUnit.SECONDS);
-			CountDownLatch entered = new CountDownLatch(1);
-			host.setScriptStartListener((id, owner) -> { entered.countDown(); release.join(); });
-			CompletableFuture<String> started = host.start("waiting");
-			assertTrue(entered.await(2, TimeUnit.SECONDS));
-			host.publishGameTick(snapshot(2));
-			host.clearSnapshot();
-			release.complete(null);
-			started.get(2, TimeUnit.SECONDS);
-			assertNull(host.readCurrentSnapshot("account").get(2, TimeUnit.SECONDS));
-			host.publishGameTick(snapshot(3));
-			assertNotNull(host.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS));
-		}
-		finally { release.complete(null); host.close(); }
-	}
+    @Test public void invalidationDiscardsStateWhileScriptStartupIsQueued() throws Exception
+    {
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        try (GenericClientScriptHost host = host((input, boundary) -> CompletableFuture.completedFuture(Map.of())))
+        {
+            host.publishGameTick(snapshot(1));
+            host.compile("Waiting", GenericClientTestSupport.javaScript("Waiting", "", "public int onLoop(){sleep(60000);return -1;}")).get();
+            CountDownLatch entered = new CountDownLatch(1);
+            host.setScriptStartListener((id, owner, context) -> { entered.countDown(); release.join(); });
+            CompletableFuture<String> started = host.start("Waiting");
+            try
+            {
+                assertTrue(entered.await(5, TimeUnit.SECONDS));
+                host.publishGameTick(snapshot(2));
+                host.clearSnapshot();
+            }
+            finally { release.complete(null); }
+            started.get(5, TimeUnit.SECONDS);
+            assertNull(host.readCurrentSnapshot("account").get());
+            host.publishGameTick(snapshot(3));
+            assertNotNull(host.readCurrentSnapshot("player").get());
+        }
+    }
 
-	@Test
-	public void lateCompletionFromTimedOutReplCannotCompleteItsNextAwait() throws Exception
-	{
-		CompletableFuture<Map<String, Object>> first = new CompletableFuture<>();
-		CompletableFuture<Map<String, Object>> second = new CompletableFuture<>();
-		AtomicInteger dispatches = new AtomicInteger();
-		GenericClientLuaHost host = host((journeyRequest, routeClickBoundary) -> dispatches.incrementAndGet() == 1 ? first : second);
-		try
-		{
-			host.publishGameTick(snapshot(1));
-			CompletableFuture<Map<String, Object>> oldEval = host.evaluate(walk(1));
-			host.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS);
-			host.publishGameTick(snapshot(2));
-			assertEquals("timed_out", ((Map<?, ?>) oldEval.get(2, TimeUnit.SECONDS).get("value")).get("status"));
-			CompletableFuture<Map<String, Object>> newEval = host.evaluate(walk(20));
-			host.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS);
-			first.complete(Collections.singletonMap("status", "arrived"));
-			host.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS);
-			assertFalse(newEval.isDone());
-			second.complete(Collections.singletonMap("status", "arrived"));
-			assertEquals("arrived", ((Map<?, ?>) newEval.get(2, TimeUnit.SECONDS).get("value")).get("status"));
-		}
-		finally { host.close(); }
-	}
+    @Test public void lateCompletionFromTimedOutConsoleCannotCompleteTheNextInvocation() throws Exception
+    {
+        CompletableFuture<Map<String,Object>> first = new CompletableFuture<>();
+        CompletableFuture<Map<String,Object>> second = new CompletableFuture<>();
+        AtomicInteger dispatches = new AtomicInteger();
+        try (GenericClientScriptHost host = host((input,boundary) -> dispatches.incrementAndGet()==1 ? first : second))
+        {
+            CompletableFuture<Map<String,Object>> oldEval = host.evaluate("return " + walk(60) + ";");
+            await(() -> dispatches.get()==1);
+            Map<?,?> expired = (Map<?,?>) oldEval.get(5, TimeUnit.SECONDS).get("value");
+            assertEquals("timed_out", expired.get("status"));
+            CompletableFuture<Map<String,Object>> next = host.evaluate("return " + walk(5000) + ";");
+            await(() -> dispatches.get()==2);
+            first.complete(Map.of("status","arrived"));
+            assertFalse(next.isDone());
+            second.complete(Map.of("status","arrived"));
+            assertEquals("arrived", ((Map<?,?>)next.get(5,TimeUnit.SECONDS).get("value")).get("status"));
+        }
+    }
 
-	@Test
-	public void pauseRevokesInputAuthorityWithoutChangingTheCapturedPolicy() throws Exception
-	{
-		CompletableFuture<Map<String, Object>> action = new CompletableFuture<>();
-		AtomicReference<GenericClientActivityContext> captured = new AtomicReference<>();
-		GenericClientLuaHost host = host((journeyRequest, routeClickBoundary) -> {
-			captured.set(journeyRequest.activityContext);
-			return action;
-		});
-		try
-		{
-			host.publishGameTick(snapshot(1));
-			host.catalog.saveScript("owned", "Owned", "Authority test", script(walk(20))).get(2, TimeUnit.SECONDS);
-			host.start("owned").get(2, TimeUnit.SECONDS);
-			assertTrue(captured.get().isInputAllowed());
-			host.actions.pauseForEmergency("manual_mouse_preemption").get(2, TimeUnit.SECONDS);
-			assertFalse(captured.get().isInputAllowed());
-			assertTrue(captured.get().allowsBreaks());
-			host.actions.resumeAfterEmergency("manual_mouse_idle").get(2, TimeUnit.SECONDS);
-			assertTrue(captured.get().isInputAllowed());
-			action.complete(Collections.singletonMap("status", "arrived"));
-			host.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS);
-			assertEquals("COMPLETED", host.getStatus());
-			assertFalse(captured.get().isInputAllowed());
-		}
-		finally { host.close(); }
-	}
+    @Test public void pauseTemporarilyRevokesAuthorityAndStopRevokesItPermanently() throws Exception
+    {
+        CompletableFuture<Map<String,Object>> action = new CompletableFuture<>();
+        AtomicReference<GenericClientActivityContext> captured = new AtomicReference<>();
+        try (GenericClientScriptHost host = host((input,boundary) -> { captured.set(input.activityContext); return action; }))
+        {
+            host.compile("Owned", GenericClientTestSupport.javaScript("Owned", "", "public int onLoop(){"+walk(5000)+";return -1;}")).get();
+            host.start("Owned").get();
+            await(() -> captured.get()!=null);
+            assertTrue(captured.get().isInputAllowed());
+            host.pauseForManualInput("mouse").get();
+            assertFalse(captured.get().isInputAllowed());
+            assertTrue(captured.get().humanize);
+            host.resumeAfterManualInput("idle").get();
+            assertTrue(captured.get().isInputAllowed());
+            action.complete(Map.of("status","arrived"));
+            await(() -> host.getStatus().equals("COMPLETED"));
+            assertFalse(captured.get().isInputAllowed());
+        }
+    }
 
-	private GenericClientLuaHost host(GenericClientLuaActions.WalkToAction walk) throws Exception
-	{
-		return GenericClientTestSupport.luaHost(temporary.newFolder("scripts").toPath(), GenericClientTestSupport.behavior(temporary.newFolder("behavior").toPath()))
-			.walkRandom(context -> CompletableFuture.completedFuture(GenericClientTestSupport.interaction("unused")))
-			.walkTo(walk).build();
-	}
+    @Test public void completedOrFailedInputCannotKeepAuthorityDuringTheNextSleep() throws Exception
+    {
+        for (boolean fail : new boolean[]{false,true})
+        {
+            AtomicReference<GenericClientActivityContext> captured = new AtomicReference<>();
+            try (GenericClientScriptHost host = GenericClientTestSupport.scriptHost(temporary,"released-"+fail).walkTo((request,boundary) -> {
+                captured.set(request.activityContext);
+                return fail ? CompletableFuture.failedFuture(new IllegalStateException("native input failed"))
+                    : CompletableFuture.completedFuture(Map.of("status","arrived"));
+            }).build())
+            {
+                host.compile("Released",GenericClientTestSupport.javaScript("Released","",
+                    "public int onLoop(){try{" + walk(5000) + ";}catch(RuntimeException failure){log(\"handled\");}" +
+                    "log(\"waiting\");sleep(60000);return -1;}" )).get(5,TimeUnit.SECONDS);
+                host.start("Released").get(5,TimeUnit.SECONDS);
+                await(() -> host.getRecentLogs().contains("waiting") && host.quietMillis(null,0)>0);
+                assertTrue(host.getRunState().isRunning());
+                assertTrue(host.getBehaviorContext().isInputAllowed());
+                assertFalse(captured.get().applyIfCurrent(() -> fail("A completed input applied a late update")));
+                assertEquals(fail,host.getRecentLogs().contains("handled"));
+            }
+        }
+    }
 
-	private static String script(String body) { return "return { run = function() " + body + " end }"; }
-	private static String walk(int timeout)
-	{
-		return "return gc.await { action = { type = 'walk.to', destination = { x=3210, y=3200, plane=0 } }, " +
-			"timeout = { game_ticks = " + timeout + " } }";
-	}
-	private static GenericClientSnapshot snapshot(long tick)
-	{
-		return new GenericClientSnapshot(tick, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("lifetime-test", 3200, 3200, 0, -1), Collections.emptyList());
-	}
+    private GenericClientScriptHost host(GenericClientScriptActions.WalkToAction walk) throws Exception
+    {
+        return GenericClientTestSupport.scriptHost(temporary, "runtime").walkTo(walk).build();
+    }
+    private static String walk(int millis)
+    {
+        return "ScriptScope.current().execute(\"walk.to\",Map.of(\"destination\",Map.of(\"x\",3210,\"y\",3200,\"plane\",0))," + millis + ")";
+    }
 }

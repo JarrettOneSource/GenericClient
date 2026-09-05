@@ -21,6 +21,31 @@ import org.junit.Test;
 public class GenericClientWalkerTest
 {
 	@Test
+	public void dreamBotStepFinishesAfterOneClickWithoutClaimingArrival() throws Exception
+	{
+		FakeWalkInput input = new FakeWalkInput();
+		try (GenericClientWalker walker = GenericClientTestSupport.walker(input, new FakeObstacleInput(),
+			GenericClientCollisionMap.loadBundled(), message -> {}))
+		{
+			WorldPoint start = new WorldPoint(3202, 3428, 0);
+			WorldPoint destination = new WorldPoint(3230, 3428, 0);
+			walker.publishGameTick(snapshot(0, start));
+			CompletableFuture<Map<String, Object>> step = walker.walkTo(new GenericClientWalkRequest(destination, 0, 60,
+				context(false), false, Collections.emptyList(), GenericClientWalkInterrupts.NONE, List.of(), null), new GenericClientWalker.ClickBoundary()
+				{
+					@Override public CompletableFuture<GenericClientInteractionResult> execute(
+						GenericClientActivityContext scope, java.util.function.Supplier<CompletableFuture<GenericClientInteractionResult>> action) { return action.get(); }
+					@Override public boolean singleStep() { return true; }
+				});
+			waitForFirstClick(walker, input, start);
+			assertEquals("stepped", step.get(3, TimeUnit.SECONDS).get("status"));
+			for (int tick = 20; tick < 30; tick++) walker.publishGameTick(snapshot(tick, start));
+			assertEquals(1, input.targets.size());
+			org.junit.Assert.assertNotEquals(step.get().get("reached"),step.get().get("requested"));
+		}
+	}
+
+	@Test
 	public void excludesRequestedAvoidTilesFromThePlannedRoute() throws Exception
 	{
 		FakeWalkInput input = new FakeWalkInput();
@@ -35,8 +60,7 @@ public class GenericClientWalkerTest
 			WorldPoint avoided = new WorldPoint(3204, 3428, 0);
 			walker.publishGameTick(snapshot(0, start));
 			WorldPoint destination = new WorldPoint(3207, 3428, 0);
-			CompletableFuture<Map<String, Object>> completion = walker.walkTo(new GenericClientWalkRequest(destination, 0, 60, context(false),
-				true, Collections.singletonList(avoided), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null));
+			CompletableFuture<Map<String, Object>> completion = walker.walkTo(new GenericClientWalkRequest(destination, 0, 60, context(false), true, Collections.singletonList(avoided), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null), (scope, action) -> action.get());
 
 			waitForFirstClick(walker, input, start);
 			for (WorldPoint candidate : input.candidateBatches.get(0))
@@ -68,8 +92,7 @@ public class GenericClientWalkerTest
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			WorldPoint destination = new WorldPoint(3205, 3428, 0);
 			walker.publishGameTick(snapshot(0, start));
-			walker.walkTo(new GenericClientWalkRequest(destination, 0, 60, context(false),
-				true, Collections.singletonList(start), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null));
+			walker.walkTo(new GenericClientWalkRequest(destination, 0, 60, context(false), true, Collections.singletonList(start), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null), (scope, action) -> action.get());
 
 			waitForFirstClick(walker, input, start);
 			assertEquals(destination, input.candidateBatches.get(0).get(0));
@@ -338,6 +361,7 @@ public class GenericClientWalkerTest
 	}
 
 
+
 	@Test
 	public void backsOffAfterTheFarthestAcceptedClickProducesNoMovement() throws Exception
 	{
@@ -391,7 +415,7 @@ public class GenericClientWalkerTest
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			WorldPoint blocked = new WorldPoint(3203, 3428, 0);
 			WorldPoint destination = new WorldPoint(3207, 3428, 0);
-			List<GenericClientWorldSnapshot.NpcSnapshot> npcs = Collections.singletonList(
+			List<GenericClientNpcSnapshot> npcs = Collections.singletonList(
 				npc(1, blocked));
 			walker.publishGameTick(snapshot(0, start));
 			walker.walkTo(new GenericClientWalkRequest(destination, 0, 60, hazardousContext(),
@@ -442,7 +466,7 @@ public class GenericClientWalkerTest
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			WorldPoint blocked = new WorldPoint(3205, 3428, 0);
 			WorldPoint destination = new WorldPoint(3207, 3428, 0);
-			List<GenericClientWorldSnapshot.NpcSnapshot> npcs = Collections.singletonList(
+			List<GenericClientNpcSnapshot> npcs = Collections.singletonList(
 				npc(1, blocked));
 			walker.publishGameTick(snapshot(0, start));
 			walker.walkTo(new GenericClientWalkRequest(destination, 0, 60, context(false),
@@ -493,7 +517,7 @@ public class GenericClientWalkerTest
 		{
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			WorldPoint destination = new WorldPoint(3204, 3428, 0);
-			List<GenericClientWorldSnapshot.NpcSnapshot> blockers = new ArrayList<>();
+			List<GenericClientNpcSnapshot> blockers = new ArrayList<>();
 			int index = 1;
 			for (int dx = -1; dx <= 1; dx++)
 			{
@@ -563,8 +587,7 @@ public class GenericClientWalkerTest
 		{
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			walker.publishGameTick(runSnapshot(0, start, 10_000, false));
-			walker.walkTo(new GenericClientWalkRequest(new WorldPoint(3210, 3428, 0), 0, 60, context(false),
-				true, Collections.emptyList(), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null));
+			walker.walkTo(new GenericClientWalkRequest(new WorldPoint(3210, 3428, 0), 0, 60, context(false), true, Collections.emptyList(), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null), (scope, action) -> action.get());
 			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
 			long tick = 1;
 			while (runToggles.get() == 0 && System.nanoTime() < deadline)
@@ -601,8 +624,7 @@ public class GenericClientWalkerTest
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			WorldPoint destination = new WorldPoint(3210, 3428, 0);
 			walker.publishGameTick(snapshot(0, start));
-			CompletableFuture<Map<String, Object>> completion = walker.walkTo(new GenericClientWalkRequest(destination, 0, 60, context(false),
-				true, Collections.emptyList(), GenericClientWalkInterrupts.parse(java.util.Map.of("dialogue", true)), Collections.emptyList(), null));
+			CompletableFuture<Map<String, Object>> completion = walker.walkTo(new GenericClientWalkRequest(destination, 0, 60, context(false), true, Collections.emptyList(), GenericClientWalkInterrupts.parse(Map.of("dialogue", true)), Collections.emptyList(), null), (scope, action) -> action.get());
 
 			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
 			long tick = 1;
@@ -648,8 +670,7 @@ public class GenericClientWalkerTest
 		{
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			walker.publishGameTick(runSnapshot(0, start, 10_000, false));
-			walker.walkTo(new GenericClientWalkRequest(new WorldPoint(3210, 3428, 0), 0, 60, context(false),
-				false, Collections.emptyList(), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null));
+			walker.walkTo(new GenericClientWalkRequest(new WorldPoint(3210, 3428, 0), 0, 60, context(false), false, Collections.emptyList(), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null), (scope, action) -> action.get());
 			waitForFirstClick(walker, input, start);
 
 			assertEquals(0, runToggles.get());
@@ -685,8 +706,7 @@ public class GenericClientWalkerTest
 		{
 			WorldPoint start = new WorldPoint(3202, 3428, 0);
 			walker.publishGameTick(runSnapshot(0, start, 10_000, true));
-			walker.walkTo(new GenericClientWalkRequest(new WorldPoint(3210, 3428, 0), 0, 60, context(false),
-				false, Collections.emptyList(), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null));
+			walker.walkTo(new GenericClientWalkRequest(new WorldPoint(3210, 3428, 0), 0, 60, context(false), false, Collections.emptyList(), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null), (scope, action) -> action.get());
 			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
 			long tick = 1;
 			while (runToggles.get() == 0 && System.nanoTime() < deadline)

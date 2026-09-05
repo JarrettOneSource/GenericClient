@@ -33,11 +33,14 @@ import net.runelite.client.callback.ClientThread;
 /** Actual mouse/menu dispatch against controlled native scene objects and widgets. */
 final class GenericClientNativeInputFixture implements AutoCloseable
 {
+	final GenericClientEntityIds identities = new GenericClientEntityIds();
 	final Map<Integer, Widget> roots = new LinkedHashMap<>();
 	final AtomicInteger clicks = new AtomicInteger();
 	final List<Point> pressed = new ArrayList<>();
+	final List<Integer> continuedWidgetIndices = new ArrayList<>();
 	final Client client;
 	final GenericClientNativeInputs inputs;
+	final GenericClientBehaviorController behavior;
 	final Map<Integer, ObjectComposition> objects = new LinkedHashMap<>();
 	final Map<Integer, ItemComposition> items = new LinkedHashMap<>();
 	Widget selectedWidget;
@@ -78,6 +81,9 @@ final class GenericClientNativeInputFixture implements AutoCloseable
 				switch (method.getName())
 				{
 					case "getGameState": return GameState.LOGGED_IN;
+					case "menuAction":
+						continuedWidgetIndices.add((Integer) arguments[0]);
+						return null;
 					case "getLocalPlayer": return player;
 					case "getObjectDefinition": return objects.get((Integer) arguments[0]);
 					case "getItemDefinition": return items.get((Integer) arguments[0]);
@@ -106,7 +112,7 @@ final class GenericClientNativeInputFixture implements AutoCloseable
 			@Override public void invoke(java.util.function.BooleanSupplier action) { action.getAsBoolean(); }
 		};
 		GenericClientMouseProfile profile = GenericClientMouseProfile.load(GenericClientMouseProfile.installDefault(directory));
-		GenericClientBehaviorController behavior = GenericClientTestSupport.behavior(directory, edge -> { });
+		behavior = GenericClientTestSupport.behavior(directory, edge -> { });
 		SwingUtilities.invokeAndWait(() -> {
 			frame.add(canvas);
 			frame.setSize(800, 600);
@@ -119,7 +125,7 @@ final class GenericClientNativeInputFixture implements AutoCloseable
 		inputs = new GenericClientNativeInputs(client, clientThread, executor, mouse, keyboard,
 			behavior, () -> null, message -> {
 				if (message.startsWith("MENU_INTERACTION_TARGET")) onTarget.run();
-			});
+			}, identities);
 	}
 
 	void offerMenu(Rectangle bounds, MenuEntry entry)

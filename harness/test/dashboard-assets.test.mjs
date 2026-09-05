@@ -44,7 +44,7 @@ test("browser adapter uses only dashboard routes and the controller command allo
   assert.match(javascript, /api\("\/api\/launcher\/requests"/);
   assert.match(javascript, /\/commands/);
   assert.match(javascript, /\/screenshot/);
-  assert.doesNotMatch(javascript, /control_url|\/rpc|lua\.eval/);
+  assert.doesNotMatch(javascript, /control_url|\/rpc|scripts\.eval/);
   assert.match(html, /Normal Jagex Launcher RuneLite is the default path/);
   assert.match(html, /id="jagex-launch-form"/);
 

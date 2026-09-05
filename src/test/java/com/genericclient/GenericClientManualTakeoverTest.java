@@ -130,7 +130,7 @@ public class GenericClientManualTakeoverTest
 			pauses++;
 			inputActive = false;
 			events.add("pause");
-			return CompletableFuture.completedFuture("LUA_PAUSED");
+			return CompletableFuture.completedFuture("SCRIPT_PAUSED");
 		}
 
 		@Override
@@ -139,7 +139,7 @@ public class GenericClientManualTakeoverTest
 			resumes++;
 			inputActive = true;
 			events.add("resume");
-			return CompletableFuture.completedFuture("LUA_RESUMED");
+			return CompletableFuture.completedFuture("SCRIPT_RESUMED");
 		}
 
 		@Override
@@ -155,7 +155,7 @@ public class GenericClientManualTakeoverTest
 			automationActive = false;
 			inputActive = false;
 			events.add("stop");
-			return CompletableFuture.completedFuture("LUA_STOPPED");
+			return CompletableFuture.completedFuture("SCRIPT_STOPPED");
 		}
 
 		@Override

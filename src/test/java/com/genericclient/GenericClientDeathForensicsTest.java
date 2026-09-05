@@ -54,8 +54,7 @@ public class GenericClientDeathForensicsTest
 
 	private static GenericClientSnapshot snapshot(long tick, int hitpoints)
 	{
-		GenericClientWorldSnapshot.NpcSnapshot wolf = new GenericClientWorldSnapshot.NpcSnapshot(
-			42,
+		GenericClientNpcSnapshot wolf = new GenericClientNpcSnapshot(142L, 42,
 			107,
 			"White wolf",
 			2850,
@@ -70,7 +69,7 @@ public class GenericClientDeathForensicsTest
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientWorldSnapshot.PlayerSnapshot(
+			new GenericClientPlayerSnapshot(1L,
 				"Player", 2850, 3509, 0, 0, -1, "White wolf",
 				hitpoints, 28, 5000, true, null),
 			Collections.singletonList(wolf));

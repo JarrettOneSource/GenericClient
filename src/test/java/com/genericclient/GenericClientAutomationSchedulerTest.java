@@ -351,7 +351,7 @@ public class GenericClientAutomationSchedulerTest
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
+			new GenericClientPlayerSnapshot(1L, "Player", 3200, 3200, 0, -1),
 			Collections.emptyList(),
 			account);
 	}
@@ -428,7 +428,7 @@ public class GenericClientAutomationSchedulerTest
 		private final AtomicInteger stops = new AtomicInteger();
 		private final List<String> stopReasons = new ArrayList<>();
 		private long nextId;
-		private volatile GenericClientLuaRun.State state = GenericClientLuaRun.State.none();
+		private volatile GenericClientScriptHost.RunState state = GenericClientScriptHost.RunState.none();
 		private volatile Runnable manualStopListener = () -> { };
 
 		private FakeRuntime(String... scriptIds)
@@ -443,18 +443,18 @@ public class GenericClientAutomationSchedulerTest
 
 		private void startManual(String scriptId)
 		{
-			state = new GenericClientLuaRun.State(++nextId, "manual", scriptId, "WAITING", true);
+			state = new GenericClientScriptHost.RunState(++nextId, "manual", scriptId, "WAITING", true);
 		}
 
 		private void manualStop()
 		{
 			manualStopListener.run();
-			state = GenericClientLuaRun.State.none();
+			state = GenericClientScriptHost.RunState.none();
 		}
 
 		private void complete(String status)
 		{
-			state = new GenericClientLuaRun.State(
+			state = new GenericClientScriptHost.RunState(
 				state.getRunId(), state.getOwner(), state.getScriptId(), status, false);
 		}
 
@@ -478,12 +478,12 @@ public class GenericClientAutomationSchedulerTest
 		{
 			if (state.isRunning())
 			{
-				return CompletableFuture.completedFuture("LUA_START_SKIPPED");
+				return CompletableFuture.completedFuture("SCRIPT_START_SKIPPED");
 			}
 			starts.incrementAndGet();
-			state = new GenericClientLuaRun.State(
+			state = new GenericClientScriptHost.RunState(
 				++nextId, "rule:" + ruleId, scriptId, "WAITING", true);
-			return CompletableFuture.completedFuture("LUA_STARTED owner=rule:" + ruleId);
+			return CompletableFuture.completedFuture("SCRIPT_STARTED owner=rule:" + ruleId);
 		}
 
 		@Override
@@ -493,14 +493,14 @@ public class GenericClientAutomationSchedulerTest
 			{
 				stops.incrementAndGet();
 				stopReasons.add(reason);
-				state = GenericClientLuaRun.State.none();
-				return CompletableFuture.completedFuture("LUA_STOPPED");
+				state = GenericClientScriptHost.RunState.none();
+				return CompletableFuture.completedFuture("SCRIPT_STOPPED");
 			}
-			return CompletableFuture.completedFuture("LUA_STOP_SKIPPED");
+			return CompletableFuture.completedFuture("SCRIPT_STOP_SKIPPED");
 		}
 
 		@Override
-		public GenericClientLuaRun.State getRunState()
+		public GenericClientScriptHost.RunState getRunState()
 		{
 			return state;
 		}

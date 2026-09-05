@@ -316,8 +316,6 @@ implements AutoCloseable {
             });
     }
 
-
-
     private CompletableFuture<Map<String, Object>> finishExistingOffer(int slot, int itemId, String itemName, int quantity, int maximumUnitPrice, long minimumCashReserve, String collectMode, GenericClientActivityContext activityContext) {
         return this.clientRead(() -> this.view.offerAt(slot)).thenCompose(existing -> {
             if (existing != null && existing.getState() == GrandExchangeOfferState.CANCELLED_BUY) {
@@ -439,8 +437,6 @@ implements AutoCloseable {
         });
     }
 
-
-
     private CompletableFuture<Map<String, Object>> collectRemainingRefund(int slot, GenericClientActivityContext activityContext,
         Map<String, Object> itemCollected) {
         return this.clientRead(() -> this.view.offerEmpty(slot)).thenCompose(empty -> {
@@ -503,8 +499,6 @@ implements AutoCloseable {
         });
     }
 
-
-
     private CompletableFuture<Map<String, Object>> clickWidgetAction(int rootId, String action, Integer itemId, String description, GenericClientActivityContext activityContext) {
         return this.menuInput.interact(() -> {
             Widget root = this.view.visibleWidget(rootId);
@@ -543,8 +537,6 @@ implements AutoCloseable {
         }, activityContext);
     }
 
-
-
     private CompletableFuture<Map<String, Object>> clickAndType(int rootId, String action,
         String text, String description, GenericClientActivityContext activityContext) {
         return menuInput.interact(() -> {
@@ -580,16 +572,6 @@ implements AutoCloseable {
             return receipt;
         });
     }
-
-
-
-
-
-
-
-
-
-
 
     private CompletableFuture<Map<String, Object>> waitForPurchase(int slot, int itemId, int attempts) {
         CompletableFuture<Map<String, Object>> result = new CompletableFuture<Map<String, Object>>();
@@ -682,22 +664,10 @@ implements AutoCloseable {
         return result;
     }
 
-
-
-
-
-
-
-
-
     static boolean isCancellationSettled(GrandExchangeOffer offer) {
         return offer != null && (offer.getState() == GrandExchangeOfferState.CANCELLED_BUY ||
             offer.getState() == GrandExchangeOfferState.BOUGHT);
     }
-
-
-
-
 
     private static CompletableFuture<List<Map<String, Object>>> append(CompletableFuture<List<Map<String, Object>>> flow, Supplier<CompletableFuture<Map<String, Object>>> step) {
         return flow.thenCompose(receipts -> step.get().thenApply(receipt -> {

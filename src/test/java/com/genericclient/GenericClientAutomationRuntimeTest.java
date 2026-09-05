@@ -47,11 +47,12 @@ public class GenericClientAutomationRuntimeTest
 				fixture.gameState.set(GameState.LOGGED_IN);
 				fixture.player = player();
 				GenericClientSnapshot baseline = GenericClientDamageTrackerTest.snapshot(10, 80, 6);
-				runtime.luaHost.publishGameTick(baseline);
-				runtime.luaHost.catalog.saveScript("damage", "Damage", "Hold an explicit policy while resting",
-					GenericClientTestSupport.script("gc.activity('" + activity + "', {breaks=true}); gc.await {ticks=100}"))
+				runtime.scriptHost.publishGameTick(baseline);
+				runtime.scriptHost.compile("Damage", GenericClientTestSupport.javaScript("Damage", "",
+					"public int onLoop(){Automation.activity(\"" + activity + "\", Map.of(\"breaks\",true));log(\"waiting\");org.dreambot.api.utilities.Sleep.sleepTicks(100);return -1;}"))
 					.get(2, TimeUnit.SECONDS);
-				runtime.luaHost.start("damage").get(2, TimeUnit.SECONDS);
+				runtime.scriptHost.start("Damage").get(2, TimeUnit.SECONDS);
+				GenericClientScriptHostTest.await(() -> runtime.scriptHost.getRecentLogs().contains("waiting"));
 				runtime.behaviorController.activateAccount(42);
 				runtime.publishGameTick(baseline);
 				runtime.recordHitsplat(hit(fixture.player, new int[]{HitsplatID.POISON, 2}));
@@ -61,7 +62,7 @@ public class GenericClientAutomationRuntimeTest
 				runtime.recordHitsplat(hit(fixture.player, new int[]{HitsplatID.DAMAGE_ME, 3}));
 				runtime.recordHitsplat(hit(fixture.player, new int[]{HitsplatID.HEAL, 3}));
 				runtime.publishGameTick(GenericClientDamageTrackerTest.snapshot(12, 78, 5));
-				assertEquals(activity, runtime.luaHost.getActivity());
+				assertEquals(activity, runtime.scriptHost.getActivity());
 				if ("combat".equals(activity))
 				{
 					assertTrue(runtime.behaviorController.isPaused());
@@ -133,7 +134,7 @@ public class GenericClientAutomationRuntimeTest
 	@Test
 	public void failedStartupReleasesCanvasListenersBeforeRetry() throws Exception
 	{
-		for (String failedPath : new String[]{"behavior", "navigation", "scripts/manifest.json", "automation"})
+		for (String failedPath : new String[]{"behavior", "navigation", "scripts", "automation"})
 		{
 			Path directory = temporary.newFolder().toPath();
 			Path broken = directory.resolve(failedPath);
@@ -147,7 +148,7 @@ public class GenericClientAutomationRuntimeTest
 				Files.delete(broken);
 				try (GenericClientAutomationRuntime runtime = fixture.start())
 				{
-					assertEquals("idle", runtime.luaHost.getActivity());
+					assertEquals("idle", runtime.scriptHost.getActivity());
 					assertFalse(runtime.automationInputOwned());
 				}
 				assertEquals(0, fixture.canvas.getMouseListeners().length);
@@ -163,14 +164,14 @@ public class GenericClientAutomationRuntimeTest
 			GenericClientAutomationRuntime runtime = fixture.start())
 		{
 			GenericClientSnapshot snapshot = new GenericClientSnapshot(1, "LOGGED_IN", 225,
-				new GenericClientWorldSnapshot.PlayerSnapshot("runtime-test", 3200, 3200, 0, -1), Collections.emptyList());
+				new GenericClientPlayerSnapshot(1L, "runtime-test", 3200, 3200, 0, -1), Collections.emptyList());
 			runtime.latestSnapshot = snapshot;
-			runtime.luaHost.publishGameTick(snapshot);
+			runtime.scriptHost.publishGameTick(snapshot);
 			runtime.walker.publishGameTick(snapshot);
-			assertNotNull(runtime.luaHost.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS));
+			assertNotNull(runtime.scriptHost.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS));
 			runtime.onGameStateChanged(GameState.LOGIN_SCREEN);
 			assertNull(runtime.latestSnapshot);
-			assertNull(runtime.luaHost.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS));
+			assertNull(runtime.scriptHost.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS));
 			Map<String, Object> stale = runtime.walker.walkTo(new GenericClientWalkRequest(
 				new net.runelite.api.coords.WorldPoint(3200, 3200, 0), 0, 100, GenericClientActivityContext.none(),
 				false, Collections.emptyList(), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null))
@@ -179,9 +180,9 @@ public class GenericClientAutomationRuntimeTest
 			fixture.gameState.set(GameState.LOGGED_IN);
 			fixture.accountHash.set(42);
 			runtime.onGameStateChanged(GameState.LOGGED_IN);
-			runtime.luaHost.publishGameTick(snapshot);
+			runtime.scriptHost.publishGameTick(snapshot);
 			runtime.walker.publishGameTick(snapshot);
-			assertNotNull(runtime.luaHost.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS));
+			assertNotNull(runtime.scriptHost.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS));
 			java.util.concurrent.CompletableFuture<Map<String, Object>> fresh = runtime.walker.walkTo(new GenericClientWalkRequest(
 				new net.runelite.api.coords.WorldPoint(3200, 3200, 0), 0, 100, GenericClientActivityContext.none(),
 				false, Collections.emptyList(), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null));
@@ -221,11 +222,11 @@ public class GenericClientAutomationRuntimeTest
 			fixture.accountHash.set(42);
 			runtime.activateBehaviorProfile();
 			GenericClientSnapshot snapshot = new GenericClientSnapshot(1, "LOGGED_IN", 240,
-				new GenericClientWorldSnapshot.PlayerSnapshot("first-account", 3200, 3200, 0, -1), Collections.emptyList());
+				new GenericClientPlayerSnapshot(1L,"first-account", 3200, 3200, 0, -1), Collections.emptyList());
 			runtime.latestSnapshot = snapshot;
-			runtime.luaHost.publishGameTick(snapshot);
+			runtime.scriptHost.publishGameTick(snapshot);
 			runtime.walker.publishGameTick(snapshot);
-			assertNotNull(runtime.luaHost.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS));
+			assertNotNull(runtime.scriptHost.read("player", Map.of()));
 			GenericClientWalkRequest request = new GenericClientWalkRequest(
 				new net.runelite.api.coords.WorldPoint(3201, 3200, 0), 0, 100, GenericClientActivityContext.none(),
 				false, Collections.emptyList(), GenericClientWalkInterrupts.NONE, Collections.emptyList(), null);
@@ -234,7 +235,7 @@ public class GenericClientAutomationRuntimeTest
 			runtime.onAccountHashChanged();
 			assertEquals("account_changed", old.get(2, TimeUnit.SECONDS).get("reason"));
 			assertNull(runtime.latestSnapshot);
-			assertNull(runtime.luaHost.readCurrentSnapshot("player").get(2, TimeUnit.SECONDS));
+			assertNull(runtime.scriptHost.read("player", Map.of()));
 			assertEquals("unavailable", runtime.walker.walkTo(request).get(2, TimeUnit.SECONDS).get("status"));
 		}
 	}
@@ -246,13 +247,14 @@ public class GenericClientAutomationRuntimeTest
 			GenericClientAutomationRuntime runtime = fixture.start())
 		{
 			fixture.gameState.set(GameState.LOGGED_IN);
-			runtime.luaHost.publishGameTick(new GenericClientSnapshot(1, "LOGGED_IN", 225,
-				new GenericClientWorldSnapshot.PlayerSnapshot("runtime-test", 3200, 3200, 0, -1), Collections.emptyList()));
-			runtime.luaHost.catalog.saveScript("combat", "Combat", "Wait under an explicit combat activity",
-				GenericClientTestSupport.script("gc.activity('combat'); gc.await {ticks=10}"))
+			runtime.scriptHost.publishGameTick(new GenericClientSnapshot(1, "LOGGED_IN", 225,
+				new GenericClientPlayerSnapshot(1L, "runtime-test", 3200, 3200, 0, -1), Collections.emptyList()));
+			runtime.scriptHost.compile("Combat", GenericClientTestSupport.javaScript("Combat", "",
+				"public int onLoop(){Automation.activity(\"combat\");log(\"waiting\");org.dreambot.api.utilities.Sleep.sleepTicks(10);return -1;}"))
 				.get(2, TimeUnit.SECONDS);
-			runtime.luaHost.start("combat").get(2, TimeUnit.SECONDS);
-			assertEquals("combat", runtime.luaHost.getActivity());
+			runtime.scriptHost.start("Combat").get(2, TimeUnit.SECONDS);
+			GenericClientScriptHostTest.await(() -> runtime.scriptHost.getRecentLogs().contains("waiting"));
+			assertEquals("combat", runtime.scriptHost.getActivity());
 			assertEquals(runtime.behaviorController.mouseMoveDurationMillis(),
 				GenericClientActivityContext.none().mouseMoveDurationMillis(runtime.mouseMoveDurationMillis()));
 			assertEquals(180, GenericClientActivityContext.preset(GenericClientActivityContext.Activity.COMBAT)
@@ -306,7 +308,7 @@ public class GenericClientAutomationRuntimeTest
 				GenericClientCollisionMap.loadBundled(), () -> profile,
 				new GenericClientMouseEffectOverlay(() -> GenericClientMouseEffect.OFF,
 					canvas::getWidth, canvas::getHeight, System::currentTimeMillis), message -> { },
-				message -> { if (message.startsWith("BEHAVIOR_BREAK_COMPLETED")) breakEnded.countDown(); });
+				message -> { if (message.startsWith("BEHAVIOR_BREAK_COMPLETED")) breakEnded.countDown(); }, new GenericClientEntityIds());
 		}
 
 		@Override public void close() { executor.shutdownNow(); }

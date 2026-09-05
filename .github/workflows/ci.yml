@@ -23,7 +23,7 @@ jobs:
           java-version: 21
       - uses: gradle/actions/setup-gradle@v6
       - name: Test, analyze, and package
-        run: ./gradlew test pmdMain pmdTest shadowJar --no-daemon
+        run: xvfb-run -a ./gradlew test pmdMain pmdTest cpdMain shadowJar sdkJar --no-daemon
 
   mcp:
     runs-on: ubuntu-latest

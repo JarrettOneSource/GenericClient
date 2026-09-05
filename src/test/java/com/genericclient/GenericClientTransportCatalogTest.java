@@ -65,7 +65,7 @@ public class GenericClientTransportCatalogTest
 	private static Set<String> stageIds(int puzzle, int intervention)
 	{
 		return ids(new GenericClientSnapshot(1, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("transport-test", 2649, 4518, 0, 0), List.of(),
+			new GenericClientPlayerSnapshot(1L,"transport-test", 2649, 4518, 0, 0), List.of(),
 			GenericClientAccountSnapshot.empty(), new GenericClientQuestSnapshot(true, new int[0], Map.of(123, puzzle, 125, intervention),
 				List.of(), GenericClientQuestSnapshot.DialogueSnapshot.closed())));
 	}
@@ -98,6 +98,6 @@ public class GenericClientTransportCatalogTest
 				questStates.entrySet().stream().map(entry -> new GenericClientAccountSnapshot.QuestSnapshot(
 					entry.getKey(), entry.getKey().hashCode(), entry.getKey(), entry.getValue(), 0)).collect(Collectors.toList())));
 		return new GenericClientSnapshot(1, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("transport-test", 3184, 3508, 0, 0), List.of(), account);
+			new GenericClientPlayerSnapshot(1L,"transport-test", 3184, 3508, 0, 0), List.of(), account);
 	}
 }

@@ -37,7 +37,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 	final GenericClientWalker walker;
 	final GenericClientEmergencyController emergencyController;
 	final GenericClientQuestActions questActions;
-	final GenericClientLuaHost luaHost;
+	final GenericClientScriptHost scriptHost;
 	final GenericClientAutomationScheduler automationScheduler;
 	final GenericClientRandomEventController randomEventController;
 	volatile GenericClientSnapshot latestSnapshot;
@@ -55,7 +55,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 		Supplier<GenericClientMouseProfile> mouseProfile,
 		GenericClientMouseEffectOverlay mouseEffectOverlay,
 		Consumer<String> notifyRandomEvent,
-		Consumer<String> reporter) throws IOException
+		Consumer<String> reporter, GenericClientEntityIds entityIds) throws IOException
 	{
 		this.client = client;
 		this.keyManager = keyManager;
@@ -90,10 +90,10 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 					if (emergencyRecoveryActive())
 					{
 						return CompletableFuture.completedFuture(
-							"LUA_PAUSE_SKIPPED reason=emergency_recovery");
+							"SCRIPT_PAUSE_SKIPPED reason=emergency_recovery");
 					}
 					return pauseInput("manual_mouse_preemption", false)
-						.thenApply(ignored -> "LUA_PAUSED reason=manual_mouse_preemption");
+						.thenApply(ignored -> "SCRIPT_PAUSED reason=manual_mouse_preemption");
 				}
 
 				@Override
@@ -102,10 +102,10 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 					if (emergencyRecoveryActive())
 					{
 						return CompletableFuture.completedFuture(
-							"LUA_RESUME_DEFERRED reason=emergency_recovery");
+							"SCRIPT_RESUME_DEFERRED reason=emergency_recovery");
 					}
-					return resumeAfterEmergency("manual_mouse_preemption")
-						.thenApply(ignored -> "LUA_RESUMED reason=manual_mouse_preemption");
+					return resumeInput("manual_mouse_preemption", false)
+						.thenApply(ignored -> "SCRIPT_RESUMED reason=manual_mouse_preemption");
 				}
 
 				@Override
@@ -123,7 +123,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 				{
 					emergencyController.disarmForManualEscape();
 					combatGuard.reset();
-					return luaHost.stopForManualEscape();
+					return scriptHost.stopForManualEscape();
 				}
 			},
 			reporter);
@@ -172,7 +172,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 			this::policySignals,
 			reporter);
 		inputs = new GenericClientNativeInputs(client, clientThread, executor,
-			syntheticMouse, syntheticKeyboard, behaviorController, () -> latestSnapshot, reporter);
+			syntheticMouse, syntheticKeyboard, behaviorController, () -> latestSnapshot, reporter, entityIds);
 		combatGuard = new GenericClientCombatGuard(
 			new GenericClientCombatGuard.Runtime()
 			{
@@ -263,10 +263,10 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 			inputs.combatInput,
 			emergencyController,
 			combatGuard);
-		GenericClientLuaHost openedHost = null;
+		GenericClientScriptHost openedHost = null;
 		try
 		{
-			luaHost = new GenericClientLuaHost(
+			scriptHost = new GenericClientScriptHost(
 				directory.resolve("scripts"),
 				inputs.gameInput::walkToRandomTile,
 				(destination, activity) -> inputs.gameInput.walkToFarthest(
@@ -274,28 +274,31 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 				walker::walkTo,
 				inputs.npcInput::interact,
 				inputs.combatInput::setMode,
-				questActions::execute,
+				(type,arguments,context) -> type.equals("player.interact")
+					? inputs.playerInput.interact(arguments,context) : questActions.execute(type,arguments,context),
 				this::cancelActiveActions,
 				behaviorController,
-				reporter, System::nanoTime);
-			openedHost = luaHost;
-			luaHost.setScriptStartListener((scriptId, owner) ->
+				System::nanoTime,
+				reporter);
+			openedHost = scriptHost;
+			scriptHost.setScriptStartListener((scriptId, owner, context) ->
 			{
+				if (!context.isInputAllowed()) return;
 				manualTakeover.resetForAutomationStart();
-				resetScriptBehaviors("start", scriptId);
+				resetScriptBehaviors("start", scriptId, context);
 				if (!"safety-net".equals(scriptId))
 				{
 					emergencyController.disarmForScriptStart(scriptId);
 				}
 			});
-			luaHost.setScriptEndListener((scriptId, owner) ->
-				resetScriptBehaviors("end", scriptId));
+			scriptHost.setScriptEndListener((scriptId, owner) ->
+				resetScriptBehaviors("end", scriptId, GenericClientActivityContext.none()));
 			automationScheduler = new GenericClientAutomationScheduler(
 				directory.resolve("automation"),
-				luaHost,
+				scriptHost,
 				reporter);
 			randomEventController = createRandomEventController(notifyRandomEvent);
-			luaHost.setRandomEventHooks(
+			scriptHost.setRandomEventHooks(
 				randomEventController::status,
 				randomEventController::solverFinished);
 			cursor = new GenericClientCursorBehavior(syntheticMouse, () -> System.nanoTime() / 1_000_000,
@@ -319,7 +322,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 		{
 			cursor.cancel();
 			latestSnapshot = null;
-			luaHost.clearSnapshot();
+			scriptHost.clearSnapshot();
 			walker.clearSnapshot();
 			combatGuard.reset();
 			automationScheduler.clearSnapshot();
@@ -331,7 +334,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 	void onAccountHashChanged()
 	{
 		latestSnapshot = null;
-		luaHost.clearSnapshot();
+		scriptHost.clearSnapshot();
 		walker.clearAccount();
 		automationScheduler.clearSnapshot();
 		if (client.getGameState() == GameState.LOGGED_IN) activateBehaviorProfile();
@@ -342,7 +345,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 	void publishGameTick(GenericClientSnapshot snapshot)
 	{
 		latestSnapshot = snapshot;
-		GenericClientActivityContext context = luaHost.getBehaviorContext();
+		GenericClientActivityContext context = scriptHost.getBehaviorContext();
 		boolean inputOwned = automationInputOwned();
 		emergencyController.publishGameTick(snapshot, inputOwned);
 		combatGuard.publishGameTick(snapshot, context.declaredPolicy,
@@ -357,9 +360,9 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 				if (error != null) reporter.accept("BEHAVIOR_BREAK_INTERRUPTION_FAILED message=" + error.getMessage());
 			});
 		}
-		behaviorController.publishActiveTick(luaHost.getRunState().isRunning(), luaHost.ownedBehaviorContext());
+		behaviorController.publishActiveTick(scriptHost.getRunState().isRunning(), scriptHost.ownedBehaviorContext());
 		walker.publishGameTick(snapshot);
-		luaHost.publishGameTick(snapshot);
+		scriptHost.publishGameTick(snapshot);
 		automationScheduler.publishGameTick(snapshot);
 		publishCursor();
 	}
@@ -374,12 +377,12 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 
 	Map<String, Object> status()
 	{
-		behaviorController.policies.resolve(luaHost.getBehaviorContext());
+		behaviorController.policies.resolve(scriptHost.getBehaviorContext());
 		Map<String, Object> value = new LinkedHashMap<>();
-		Map<String, Object> lua = new LinkedHashMap<>(luaHost.controlState());
-		lua.put("declared_activity", luaHost.getActivity());
-		lua.put("activity", luaHost.getActivity());
-		value.put("lua", lua);
+		Map<String, Object> scripts = new LinkedHashMap<>(scriptHost.controlState());
+		scripts.put("declared_activity", scriptHost.getActivity());
+		scripts.put("activity", scriptHost.getActivity());
+		value.put("scripts", scripts);
 		value.put("behavior", behaviorController.status());
 		value.put("automation", automationScheduler.status());
 		value.put("safety", emergencyController.status());
@@ -392,7 +395,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 	{
 		GenericClientSnapshot snapshot = latestSnapshot;
 		GenericClientBehaviorProfile profile = behaviorController.currentProfile();
-		GenericClientActivityContext context = luaHost.getBehaviorContext();
+		GenericClientActivityContext context = scriptHost.getBehaviorContext();
 		boolean idle = !automationInputOwned();
 		boolean blocked = snapshot == null || !snapshot.isLoggedIn() || snapshot.getPlayer() == null ||
 			profile == null || behaviorController.isPaused() || inputs.isActive() || syntheticKeyboard.isTyping() ||
@@ -401,7 +404,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 		GenericClientWalkJourney.InputWindow window = walker.inputWindow();
 		long walkQuiet = snapshot == null ? 0 : Math.max(0, window.nextTick - snapshot.getGameTick()) * 600;
 		boolean readAnchors = !blocked && !idle && context.policy().fidget != GenericClientBehaviorPolicy.Fidget.NONE;
-		cursor.publish(new GenericClientCursorBehavior.Frame(context, profile, behaviorController.totalActiveMillis(), luaHost.quietMillis(window.owner, walkQuiet),
+		cursor.publish(new GenericClientCursorBehavior.Frame(context, profile, behaviorController.totalActiveMillis(), scriptHost.quietMillis(window.owner, walkQuiet),
 			idle, blocked, readAnchors ? cursorAnchors.read(context.getActivity(), syntheticMouse.getLastClick()) : java.util.List.of(),
 			readAnchors ? cursorAnchors.anticipate(window.waypoint) : null,
 			new java.awt.Rectangle(0, 0, client.getCanvas().getWidth(), client.getCanvas().getHeight())));
@@ -423,13 +426,13 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 	private CompletableFuture<?> stopForEmergency(String reason)
 	{
 		cancelActiveActions(reason);
-		return luaHost.stop();
+		return scriptHost.stop();
 	}
 
 	private CompletableFuture<?> pauseInput(String reason, boolean pressEscape)
 	{
 		combatGuard.reset();
-		return luaHost.actions.pauseForEmergency(reason).thenCompose(ignored ->
+		return (pressEscape ? scriptHost.pauseForEmergency(reason) : scriptHost.pauseForManualInput(reason)).thenCompose(ignored ->
 		{
 			walker.pauseActiveInput(reason);
 			inputs.pause(reason);
@@ -443,16 +446,21 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 
 	private CompletableFuture<?> resumeAfterEmergency(String reason)
 	{
-		return luaHost.actions.resumeAfterEmergency(reason).thenRun(() ->
-			walker.resumeActiveInput(reason));
+		return resumeInput(reason, true);
+	}
+
+	private CompletableFuture<?> resumeInput(String reason, boolean emergency)
+	{
+		CompletableFuture<?> resumed = emergency ? scriptHost.resumeAfterEmergency(reason) : scriptHost.resumeAfterManualInput(reason);
+		return resumed.thenRun(() -> { if (!scriptHost.isInputPaused()) walker.resumeActiveInput(reason); });
 	}
 
 	@Override
 	public void close()
 	{
 		automationScheduler.close();
-		luaHost.setRandomEventHooks(null, null);
-		luaHost.close();
+		scriptHost.setRandomEventHooks(null, null);
+		scriptHost.close();
 		closeInputs();
 	}
 
@@ -474,14 +482,14 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 	private GenericClientRandomEventController createRandomEventController(Consumer<String> notifyRandomEvent)
 	{
 		return new GenericClientRandomEventController(
-			luaHost.catalog::findRandomEventSolver,
+			scriptHost::findRandomEventSolver,
 			new GenericClientRandomEventController.Runtime()
 			{
 				@Override
 				public String randomEventDeferralActivity()
 				{
-					String activity = luaHost.getActivity();
-					if (behaviorController.policies.resolve(luaHost.getBehaviorContext()).unexpectedCombat)
+					String activity = scriptHost.getActivity();
+					if (behaviorController.policies.resolve(scriptHost.getBehaviorContext()).unexpectedCombat)
 						return "unexpected_combat";
 					return "combat".equalsIgnoreCase(activity) ||
 						"hazardous_travel".equalsIgnoreCase(activity)
@@ -502,7 +510,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 				{
 					automationScheduler.setAttentionRequired(true, "random_event:" + eventKey);
 					CompletableFuture<String> interrupted =
-						luaHost.interruptForRandomEvent(eventKey);
+						scriptHost.interruptForRandomEvent(eventKey);
 					syntheticMouse.cancel("random_event_detected");
 					syntheticKeyboard.cancel("random_event_detected");
 					CompletableFuture<String> breakEnded;
@@ -526,7 +534,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 					return interrupted.thenCombine(breakEnded, (result, ignored) -> result)
 						.thenCompose(result -> solverScript == null
 							? CompletableFuture.completedFuture(result)
-							: luaHost.startRandomEventSolver(eventKey, solverScript));
+							: scriptHost.startRandomEventSolver(eventKey, solverScript));
 				}
 
 				@Override
@@ -534,7 +542,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 					String eventKey,
 					boolean resumeInterrupted)
 				{
-					return luaHost.releaseRandomEvent(eventKey, resumeInterrupted).whenComplete(
+					return scriptHost.releaseRandomEvent(eventKey, resumeInterrupted).whenComplete(
 						(result, error) ->
 						{
 							if (error == null)
@@ -546,7 +554,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 				}
 			},
 			npcId -> inputs.npcInput.interact(
-				npcId,
+				npcId, null, null,
 				null,
 				"Talk-to",
 				12,
@@ -583,10 +591,11 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 		automationScheduler.activateProfile(GenericClientBehaviorProfile.fromAccountHash(accountHash).getId());
 	}
 
-	private void resetScriptBehaviors(String boundary, String scriptId)
+	private void resetScriptBehaviors(String boundary, String scriptId, GenericClientActivityContext context)
 	{
 		emergencyController.resetScriptBehavior();
 		combatGuard.resetScriptBehavior();
+		if (client.getGameState() != GameState.LOGGED_IN) return;
 		if ("end".equals(boundary) && manualTakeover.isActive())
 		{
 			reporter.accept("SCRIPT_BEHAVIOR_RESET_DEFERRED boundary=end script=" + scriptId +
@@ -595,7 +604,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 		}
 		try
 		{
-			Map<String, Object> prayerReceipt = questActions.releaseScriptPrayer()
+			Map<String, Object> prayerReceipt = questActions.releaseScriptPrayer(context)
 				.get(3L, TimeUnit.SECONDS);
 			String prayerStatus = String.valueOf(prayerReceipt.get("status"));
 			if (!("set".equals(prayerStatus) || "unchanged".equals(prayerStatus)))
@@ -611,7 +620,7 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 				}
 			}
 			Map<String, Object> receipt = inputs.combatInput.setAutoRetaliate(
-				true, GenericClientActivityContext.none()).get(3L, TimeUnit.SECONDS);
+				true, context).get(3L, TimeUnit.SECONDS);
 			String status = String.valueOf(receipt.get("status"));
 			if ("set".equals(status) || "unchanged".equals(status))
 			{
@@ -683,8 +692,8 @@ final class GenericClientAutomationRuntime implements AutoCloseable
 
 	boolean automationInputOwned()
 	{
-		return luaHost.getRunState().isRunning() || luaHost.isReplBusy() ||
-			luaHost.hasPendingFailureFallback() || emergencyRecoveryActive();
+		return scriptHost.getRunState().isRunning() ||
+			scriptHost.hasPendingFailureFallback() || emergencyRecoveryActive();
 	}
 
 	private boolean randomEventActive()

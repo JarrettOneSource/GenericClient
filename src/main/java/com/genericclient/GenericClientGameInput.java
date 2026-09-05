@@ -45,6 +45,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 
 	private final Client client;
 	private final ClientThread clientThread;
+	private final ScheduledExecutorService executor;
 	private final Consumer<String> reporter;
 	private final GenericClientSyntheticMouse syntheticMouse;
 	private final AtomicBoolean running = new AtomicBoolean();
@@ -63,7 +64,8 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 	private volatile SelectionMode selectionMode;
 	private volatile List<WorldPoint> requestedWorldPoints = Collections.emptyList();
 	private volatile CompletableFuture<RawWalkResult> activeResult;
-	private final GenericClientInputCallbacks callbacks;
+	private final GenericClientInputCallbacks callbacks = new GenericClientInputCallbacks(this, () -> this.activeResult,
+		() -> finish(selectionMode == SelectionMode.ROUTE ? "WALK_TILE_CLICK_CANCELLED" : "WALK_CLICK_STOPPED"));
 	private volatile boolean clickDispatched;
 	private volatile boolean cameraPrepared;
 	private volatile double activeReachFraction = 1.0;
@@ -82,7 +84,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 	{
 		this.client = client;
 		this.clientThread = clientThread;
-		this.callbacks = new GenericClientInputCallbacks(this, () -> this.activeResult, executor);
+		this.executor = executor;
 		this.syntheticMouse = syntheticMouse;
 		this.reporter = reporter;
 	}
@@ -92,14 +94,13 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 		return performWalkInteraction(SelectionMode.RANDOM, Collections.emptyList(), activityContext, 0L, 1.0);
 	}
 
-	CompletableFuture<GenericClientInteractionResult> walkToFarthest(
+	public CompletableFuture<GenericClientInteractionResult> walkToFarthest(
 		List<WorldPoint> candidates,
 		GenericClientActivityContext activityContext)
 	{
 		return walkToFarthest(candidates, activityContext, 1.0);
 	}
 
-	@Override
 	public CompletableFuture<GenericClientInteractionResult> walkToFarthest(
 		List<WorldPoint> candidates, GenericClientActivityContext activityContext, double reachFraction)
 	{
@@ -198,7 +199,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 		reporter.accept(mode == SelectionMode.RANDOM
 			? "WALK_CLICK_SELECTING_TILE"
 			: "WALK_ROUTE_SELECTING candidates=" + candidates.size());
-		invokeCurrent(this::selectTargetOnClientThread);
+		callbacks.invoke(clientThread, activeActivityContext, this::selectTargetOnClientThread);
 		return result;
 	}
 
@@ -240,7 +241,6 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 		finishCanvasClickIfReady();
 	}
 
-	@Override
 	public synchronized void cancelWalkToTile(GenericClientActivityContext owner)
 	{
 		if (!activeActivityContext.ownsSameInput(owner)) return;
@@ -386,7 +386,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 		client.setCameraYawTarget(cameraTargetYaw);
 		reporter.accept("CAMERA_TURN_STARTED from=" + currentYaw + " target=" + cameraTargetYaw +
 			" tile=" + target);
-		callbacks.schedule(() -> invokeCurrent(this::checkCameraTurnOnClientThread), CAMERA_POLL_MILLIS);
+		callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activeActivityContext, this::checkCameraTurnOnClientThread), CAMERA_POLL_MILLIS);
 		return true;
 	}
 
@@ -406,7 +406,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 			selectTargetOnClientThread();
 			return;
 		}
-		callbacks.schedule(() -> invokeCurrent(this::checkCameraTurnOnClientThread), CAMERA_POLL_MILLIS);
+		callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activeActivityContext, this::checkCameraTurnOnClientThread), CAMERA_POLL_MILLIS);
 	}
 
 	static int yawToward(WorldPoint origin, WorldPoint target)
@@ -558,7 +558,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 		{
 			reporter.accept("WALK_CURSOR_RETAINED surface=" + target.surface +
 				" canvas=" + mouse.getX() + "," + mouse.getY());
-			callbacks.schedule(() -> invokeCurrent(() -> verifyHoverAndClick(target)), hoverSettleMillis());
+			callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activeActivityContext, () -> verifyHoverAndClick(target)), hoverSettleMillis());
 			return;
 		}
 		syntheticMouse.move(destination, activeActivityContext).whenComplete(callbacks.bind((result, error) ->
@@ -568,7 +568,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 				finish("WALK_CLICK_FAILED reason=synthetic_mouse_move message=" + error.getMessage());
 				return;
 			}
-			callbacks.schedule(() -> invokeCurrent(() -> verifyHoverAndClick(target)), hoverSettleMillis());
+			callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activeActivityContext, () -> verifyHoverAndClick(target)), hoverSettleMillis());
 		}));
 	}
 
@@ -586,7 +586,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 				reporter.accept("WALK_MINIMAP_POINT_REJECTED canvas=" +
 					mouse.getX() + "," + mouse.getY() +
 					" attemptsRemaining=" + targetAttemptsRemaining);
-				invokeCurrent(this::selectTargetOnClientThread);
+				callbacks.invoke(clientThread, activeActivityContext, this::selectTargetOnClientThread);
 			}
 			else
 			{
@@ -646,7 +646,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 					reporter.accept("WALK_TILE_POINT_RETRY action=" + topEntry.getType() +
 						" option=" + topEntry.getOption() + " tile=" + target.worldPoint +
 						" attemptsRemaining=" + targetAttemptsRemaining);
-					invokeCurrent(this::selectTargetOnClientThread);
+					callbacks.invoke(clientThread, activeActivityContext, this::selectTargetOnClientThread);
 				}
 				else
 				{
@@ -661,7 +661,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 			{
 				reporter.accept("WALK_CLICK_RETRY action=" + topEntry.getType() +
 					" option=" + topEntry.getOption() + " attemptsRemaining=" + targetAttemptsRemaining);
-				invokeCurrent(this::selectTargetOnClientThread);
+				callbacks.invoke(clientThread, activeActivityContext, this::selectTargetOnClientThread);
 			}
 			else
 			{
@@ -713,7 +713,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 			clickFinished = true;
 			finishCanvasClickIfReady();
 		}));
-		callbacks.schedule(() ->
+		callbacks.schedule(executor, () ->
 		{
 			if (awaitingMenuResult || !clickFinished)
 			{
@@ -752,7 +752,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 				finish("WALK_TILE_CLICK_FAILED reason=synthetic_context_open message=" + error.getMessage());
 				return;
 			}
-			callbacks.schedule(() -> invokeCurrent(() -> moveToContextMenuWalk(target)),
+			callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activeActivityContext, () -> moveToContextMenuWalk(target)),
 				contextMenuSettleMillis());
 		}));
 	}
@@ -796,7 +796,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 				finish("WALK_TILE_CLICK_FAILED reason=synthetic_context_move message=" + error.getMessage());
 				return;
 			}
-			callbacks.schedule(() -> invokeCurrent(() -> clickContextMenuWalk(target)), hoverSettleMillis());
+			callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activeActivityContext, () -> clickContextMenuWalk(target)), hoverSettleMillis());
 		}));
 	}
 
@@ -834,14 +834,6 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 		return -1;
 	}
 
-	private void invokeCurrent(Runnable action)
-	{
-		clientThread.invoke(callbacks.bind(() -> {
-			if (activeActivityContext.isInputAllowed()) action.run();
-			else finish(selectionMode == SelectionMode.ROUTE ? "WALK_TILE_CLICK_CANCELLED" : "WALK_CLICK_STOPPED");
-		}));
-	}
-
 	private long hoverSettleMillis()
 	{
 		return activeActivityContext.refreshesWalkClicks() ? 50L : HOVER_SETTLE_MILLIS;
@@ -862,7 +854,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 		clickFinished = false;
 		observedWalkResult = null;
 		activeActivityContext = GenericClientActivityContext.none();
-		callbacks.cancelPending();
+		callbacks.cancelScheduled();
 		reporter.accept(result);
 		CompletableFuture<RawWalkResult> completion = activeResult;
 		activeResult = null;
@@ -885,7 +877,7 @@ final class GenericClientGameInput implements AutoCloseable, GenericClientWalker
 		}
 		else
 		{
-			callbacks.cancelPending();
+			callbacks.cancelScheduled();
 		}
 	}
 

@@ -16,10 +16,8 @@ import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemLayer;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Player;
-import net.runelite.api.Scene;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
-import net.runelite.api.WorldView;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.client.callback.ClientThread;
@@ -216,31 +214,8 @@ final class GenericClientGroundItemInput
 		WorldPoint requestedWorld,
 		int within)
 	{
-		WorldView worldView = player.getWorldView();
-		Scene scene = worldView.getScene();
-		Tile[][][] tiles = scene == null ? null : scene.getTiles();
-		if (tiles == null || tiles.length == 0)
-		{
-			return new ArrayList<>();
-		}
-		int plane = Math.max(0, Math.min(tiles.length - 1, player.getWorldLocation().getPlane()));
-		if (tiles[plane].length == 0 || tiles[plane][0].length == 0)
-		{
-			return new ArrayList<>();
-		}
-		int minX = Math.max(0, player.getLocalLocation().getSceneX() - within);
-		int maxX = Math.min(tiles[plane].length - 1, player.getLocalLocation().getSceneX() + within);
-		int minY = Math.max(0, player.getLocalLocation().getSceneY() - within);
-		int maxY = Math.min(tiles[plane][0].length - 1, player.getLocalLocation().getSceneY() + within);
 		List<GroundTarget> result = new ArrayList<>();
-		for (int sceneX = minX; sceneX <= maxX; sceneX++)
-		{
-			for (int sceneY = minY; sceneY <= maxY; sceneY++)
-			{
-				addGroundTargets(
-					tiles[plane][sceneX][sceneY], itemId, requestedWorld, result);
-			}
-		}
+		GenericClientSceneTiles.visitNearby(player, within, tile -> addGroundTargets(tile, itemId, requestedWorld, result));
 		WorldPoint playerWorld = player.getWorldLocation();
 		result.sort(Comparator.comparingInt(target ->
 			playerWorld.distanceTo(target.tile.getWorldLocation())));
@@ -253,7 +228,7 @@ final class GenericClientGroundItemInput
 		WorldPoint requestedWorld,
 		List<GroundTarget> result)
 	{
-		if (tile == null || tile.getItemLayer() == null || tile.getWorldLocation() == null ||
+		if (tile.getItemLayer() == null || tile.getWorldLocation() == null ||
 			(requestedWorld != null && !requestedWorld.equals(tile.getWorldLocation())))
 		{
 			return;
@@ -279,10 +254,19 @@ final class GenericClientGroundItemInput
 		int sceneY,
 		int worldViewId)
 	{
-		return entry.getIdentifier() == itemId &&
-			entry.getParam0() == sceneX &&
-			entry.getParam1() == sceneY &&
-			entry.getWorldViewId() == worldViewId;
+		switch (entry.getType())
+		{
+			case GROUND_ITEM_FIRST_OPTION:
+			case GROUND_ITEM_SECOND_OPTION:
+			case GROUND_ITEM_THIRD_OPTION:
+			case GROUND_ITEM_FOURTH_OPTION:
+			case GROUND_ITEM_FIFTH_OPTION:
+			case WIDGET_TARGET_ON_GROUND_ITEM:
+			case EXAMINE_ITEM_GROUND:
+				return entry.getIdentifier() == itemId && entry.getParam0() == sceneX &&
+					entry.getParam1() == sceneY && entry.getWorldViewId() == worldViewId;
+			default: return false;
+		}
 	}
 
 	private static final class GroundTarget

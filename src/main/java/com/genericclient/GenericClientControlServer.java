@@ -26,10 +26,10 @@ import java.util.function.Supplier;
 final class GenericClientControlServer implements AutoCloseable
 {
 	private static final int MAX_REQUEST_BYTES = 1_048_576;
-	private static final int LUA_TIMEOUT_SECONDS = 420;
+	private static final int SCRIPT_TIMEOUT_SECONDS = 420;
 
 	private final int requestedPort;
-	private final GenericClientLuaHost luaHost;
+	private final GenericClientScriptHost scriptHost;
 	private final GenericClientAutomationScheduler automationScheduler;
 	private final GenericClientRandomEventController randomEventController;
 	private final Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction;
@@ -49,7 +49,7 @@ final class GenericClientControlServer implements AutoCloseable
 
 	GenericClientControlServer(
 		int port,
-		GenericClientLuaHost luaHost,
+		GenericClientScriptHost scriptHost,
 		GenericClientAutomationScheduler automationScheduler,
 		GenericClientRandomEventController randomEventController,
 		Supplier<java.util.concurrent.CompletableFuture<String>> logoutAction,
@@ -63,7 +63,7 @@ final class GenericClientControlServer implements AutoCloseable
 		Consumer<String> reporter)
 	{
 		this.requestedPort = port;
-		this.luaHost = luaHost;
+		this.scriptHost = scriptHost;
 		this.automationScheduler = automationScheduler;
 		this.randomEventController = randomEventController;
 		this.logoutAction = logoutAction;
@@ -149,6 +149,11 @@ final class GenericClientControlServer implements AutoCloseable
 
 	private void handleRpc(HttpExchange exchange) throws IOException
 	{
+		if (exchange.getRequestHeaders().containsKey("Origin"))
+		{
+			write(exchange, 403, error("Browser-originated control requests are not accepted"));
+			return;
+		}
 		if (!"POST".equals(exchange.getRequestMethod()))
 		{
 			write(exchange, 405, error("RPC requires POST"));
@@ -193,7 +198,7 @@ final class GenericClientControlServer implements AutoCloseable
 		}
 		catch (TimeoutException exception)
 		{
-			write(exchange, 504, error("Lua execution exceeded " + LUA_TIMEOUT_SECONDS + " seconds"));
+			write(exchange, 504, error("Script execution exceeded " + SCRIPT_TIMEOUT_SECONDS + " seconds"));
 		}
 		catch (InterruptedException exception)
 		{
@@ -251,29 +256,24 @@ final class GenericClientControlServer implements AutoCloseable
 			automation().setPaused(false, "control"), 10));
 		values.put("automation.reload", parameters -> await(automation().reload(), 10));
 		values.put("account.snapshot", parameters -> await(
-			luaHost.readCurrentSnapshot("account"), 10));
+			scriptHost.readCurrentSnapshot("account"), 10));
 		values.put("account.note.get", parameters -> noteSupplier.get());
 		values.put("account.note.set", parameters -> await(
 			noteSetter.apply(noteParameter(parameters)), 10));
 		values.put("session.logout", parameters -> await(logoutAction.get(), 30));
 		values.put("session.login", parameters -> await(loginAction.get(), 30));
-		values.put("lua.eval", parameters -> await(
-			luaHost.evaluate(stringParameter(parameters, "code")), LUA_TIMEOUT_SECONDS));
-		values.put("lua.reset", parameters -> await(luaHost.resetRepl(), 10));
-		values.put("scripts.list", parameters -> luaHost.catalog.listScriptValues());
+		values.put("java.eval", parameters -> await(
+			scriptHost.evaluate(stringParameter(parameters, "code")), SCRIPT_TIMEOUT_SECONDS));
+		values.put("scripts.list", parameters -> scriptHost.listScriptValues());
 		values.put("scripts.get", this::scriptDetails);
-		values.put("scripts.save", parameters -> await(luaHost.catalog.saveScript(
-			stringParameter(parameters, "id"),
-			stringParameter(parameters, "name"),
-			stringParameter(parameters, "description"),
-			stringParameter(parameters, "source"),
-			integerListParameter(parameters, "random_events")), 10));
-		values.put("scripts.run", parameters -> await(luaHost.start(
+		values.put("scripts.compile", parameters -> await(scriptHost.compile(
+			stringParameter(parameters, "class_name"), stringParameter(parameters, "source")), 30));
+		values.put("scripts.run", parameters -> await(scriptHost.start(
 			stringParameter(parameters, "id"), inputParameters(parameters)), 10));
 		values.put("scripts.action", parameters -> await(
-			luaHost.triggerAction(stringParameter(parameters, "action")), 10));
-		values.put("scripts.stop", parameters -> await(luaHost.stop(), 10));
-		values.put("scripts.reload", parameters -> await(luaHost.catalog.reloadManifest(), 10));
+			scriptHost.triggerAction(stringParameter(parameters, "action")), 10));
+		values.put("scripts.stop", parameters -> await(scriptHost.stop(), 10));
+		values.put("scripts.reload", parameters -> await(scriptHost.reloadCatalog(), 10));
 		return Collections.unmodifiableMap(values);
 	}
 
@@ -287,15 +287,15 @@ final class GenericClientControlServer implements AutoCloseable
 		throws IOException, ExecutionException, InterruptedException, TimeoutException
 	{
 		String id = stringParameter(parameters, "id");
-		Map<String, Object> script = new LinkedHashMap<>(luaHost.catalog.getScriptValue(id));
+		Map<String, Object> script = new LinkedHashMap<>(scriptHost.getScriptValue(id));
 		List<Map<String, Object>> inputs = new ArrayList<>();
-		for (GenericClientScriptInput input : await(luaHost.catalog.describe(id), 10))
+		for (GenericClientScriptInput input : await(scriptHost.describe(id), 10))
 		{
 			inputs.add(input.toMap());
 		}
 		script.put("inputs", inputs);
 		List<Map<String, Object>> actions = new ArrayList<>();
-		for (GenericClientScriptAction action : await(luaHost.catalog.describeActions(id), 10))
+		for (GenericClientScriptAction action : await(scriptHost.describeActions(id), 10))
 		{
 			actions.add(action.toMap());
 		}
@@ -398,37 +398,6 @@ final class GenericClientControlServer implements AutoCloseable
 			throw new IllegalArgumentException("RPC parameter " + name + " must be a non-empty string");
 		}
 		return ((String) value).trim();
-	}
-
-	private static List<Integer> integerListParameter(Map<String, Object> parameters, String name)
-	{
-		Object value = parameters.get(name);
-		if (value == null)
-		{
-			return Collections.emptyList();
-		}
-		if (!(value instanceof List))
-		{
-			throw new IllegalArgumentException("RPC parameter " + name + " must be an array of integers");
-		}
-		List<Integer> result = new ArrayList<>();
-		for (Object item : (List<?>) value)
-		{
-			if (!(item instanceof Number))
-			{
-				throw new IllegalArgumentException(
-					"RPC parameter " + name + " must contain only integers");
-			}
-			double numeric = ((Number) item).doubleValue();
-			int integer = ((Number) item).intValue();
-			if (numeric != integer || integer <= 0)
-			{
-				throw new IllegalArgumentException(
-					"RPC parameter " + name + " must contain only positive integers");
-			}
-			result.add(integer);
-		}
-		return result;
 	}
 
 	private static Map<String, Object> objectParameter(Map<String, Object> parameters, String name)

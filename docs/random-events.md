@@ -34,16 +34,14 @@ critical activity owned the deferral.
 
 Outside combat and hazardous travel, detection immediately cancels in-flight
 walker, menu, combat, bank, and Grand Exchange input, stops the active
-standalone Lua coroutine, and blocks scheduled automation. A busy REPL call is
-interrupted too. Once that
-cleanup barrier finishes, a fresh REPL remains available for event inspection
-and manual solving. A manually owned script is retained as a restart descriptor:
+Java run, and blocks scheduled automation. A busy Java diagnostic is interrupted too. After input cleanup, operator
+diagnostics remain available for event inspection and manual solving. A manually owned script is retained as a restart descriptor:
 script ID plus its validated input values.
 
 The state is available in both places:
 
-```lua
-local event = gc.read("random_event")
+```java
+Map<?, ?> event = SnapshotData.read("random_event");
 ```
 
 ```text
@@ -88,63 +86,18 @@ the interrupted Grand Tree route.
 
 ## Registering a standalone solver
 
-A solver is an ordinary standalone Lua script. Add the NPC IDs it owns to the
-optional `random_events` manifest field:
+A solver is an annotated Java entry point with event IDs declared in
+`@ScriptSettings(randomEvents = {...})`. Compile it into the external catalog and
+reload the catalog. Each initiating NPC ID has one solver owner.
 
-```json
-{
-  "id": "miles-solver",
-  "name": "Miles Solver",
-  "description": "Solve Miles from observed dialogue and item state.",
-  "file": "miles-solver.lua",
-  "random_events": [5437, 5440]
-}
-```
+The event solver checks the latched event, operates through the same SDK as other
+scripts, and returns only after its specific outcome is observed. Reward messages,
+item changes, puzzle completion, and return location are meaningful outcomes;
+an accepted click alone does not complete the event. A solver failure leaves the
+latch awaiting operator attention.
 
-`script_save` accepts the same `random_events` array. Registry validation rejects
-unsupported IDs, duplicate IDs in one entry, and two scripts claiming the same
-event NPC.
-
-Keep the solver explicit and state-driven:
-
-```lua
-return {
-  run = function()
-    local event = gc.read("random_event")
-    if not event.active then
-      error("Miles solver started without a pending random event")
-    end
-
-    local talked = gc.await {
-      action = {
-        type = "npc.interact",
-        id = event.npc_id,
-        action = "Talk-to",
-        within = 12,
-      },
-      breaks = false,
-    }
-    if talked.status ~= "dispatched" then
-      error("Miles interaction failed: " .. tostring(talked.result))
-    end
-
-    -- Continue from observed dialogue/widgets and return only after a concrete
-    -- completion receipt, such as the reward message or event NPC despawn.
-    return { status = "solved", npc_id = event.npc_id }
-  end,
-}
-```
-
-When a registered solver starts, the normal script and schedule remain blocked.
-It starts only after old Lua/input cancellation and active-break cleanup have
-finished. Only the solver's `COMPLETED` terminal state releases the event. A `FAULTED` or
-stopped solver changes the latch to `attention_required`; it does not resume the
-interrupted script. Once released, a manual script restarts with its prior inputs
-when requested, while the schedule engine simply evaluates its rules again.
-
-This intentionally does not provide a blanket solver. Add one standalone script
-per event family as real event behavior is observed, keeping any reusable
-dialogue/widget mechanics in normal GenericClient framework APIs.
+The historical live receipts below describe the earlier catalog revision. They
+supply game-behavior evidence; they are not live acceptance of the Java ports.
 
 ## Capt' Arnav evidence
 

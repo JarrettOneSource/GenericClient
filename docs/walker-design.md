@@ -1,26 +1,28 @@
 # Journey planning and execution
 
-GenericClient plans a complete destination journey over bundled terrain, captured live collision and eligible directed transports. Lua supplies the destination, required corridor points, forbidden tiles and interruption conditions. Lua owns quest choices, supply handling and recovery decisions.
+GenericClient plans a complete destination journey over bundled terrain, captured live collision and eligible directed transports. Java scripts supplies the destination, required corridor points, forbidden tiles and interruption conditions. Java scripts owns quest choices, supply handling and recovery decisions.
 
-This describes scripting API 3. [Navigation map revisions](navigation-map-revisions.md) records artifact provenance, [navigation transitions](navigation-transitions.md) records the transport evidence, and [planner performance](planner-performance.md) records controlled measurements. Current source/test acceptance and pending live work are tracked in [behavior-framework-implementation.md](behavior-framework-implementation.md).
+This describes scripting API 3. [Navigation map revisions](navigation-map-revisions.md) records artifact provenance, [navigation transitions](navigation-transitions.md) records the transport evidence, and [planner performance](planner-performance.md) records controlled measurements. Current source/test acceptance and pending live work are tracked in [java-scripting-migration.md](java-scripting-migration.md).
 
-## Lua contract
+## Java contract
 
-```lua
-return gc.walk.to {
-  destination = { x = 3210, y = 3424, plane = 0 },
-  within = 3,
-  ticks = 600,
-  run = true,
-  via = { { x = 3205, y = 3420, plane = 0 } },
-  avoid_tiles = { { x = 3208, y = 3423, plane = 0 } },
-  interrupt_on = { dialogue = true },
-}
+```java
+Automation.activity("travel");
+Navigation.Journey trip = new Navigation.Journey(new Tile(3210, 3424), 3)
+    .via(new Tile(3205, 3420))
+    .avoiding(List.of(new Tile(3208, 3423)))
+    .timeout(600);
+return Navigation.walk(trip, Map.of("dialogue", true), null);
 ```
 
-The equivalent semantic action is `gc.await { action = { type = "walk.to", ... }, timeout = { game_ticks = ... } }`. `gc.walk.to` moves `activity`, `policy`, `humanize`, `ticks` and `timeout` onto the await envelope. Ordinary REPL calls are plain; an explicit `humanize = true` enables discretionary behavior.
+`Navigation.walk` submits the semantic `walk.to` operation. Native request fields
+are shown below; direct operations use `ScriptScope.current().execute`.
+`Navigation.Journey` defaults to 1,200 ticks and enables run. DreamBot's
+`Walking.walk()` returns after one route click and must be repeated from the
+script loop when a complete journey is required. Operator diagnostics are plain
+unless the operation explicitly sets `humanize = true`.
 
-| Field | Contract |
+| Native request field | Contract |
 | --- | --- |
 | `destination` | Required integer WorldPoint; coordinates 0–32767 and plane 0–3 |
 | `within` | Chebyshev arrival radius, 0–10; native default 1 |
@@ -30,9 +32,9 @@ The equivalent semantic action is `gc.await { action = { type = "walk.to", ... }
 | `arrival_tiles` | Optional nonempty allowed arrival set, up to 512 points on the destination plane inside its radius |
 | `interrupt_on` | Typed predicates evaluated against each fresh frame |
 | `resume` | Single-use continuation from an interrupted or unavailable journey |
-| `ticks`, `timeout` | Await time budget; native walk default 600 game ticks |
+| `timeout_ticks` | Active game-tick budget; native walk default 600 game ticks |
 
-The catalog's `shared_movement.walk(destination, within, options)` defaults to radius 3 and 900 ticks. Its `approach` helper checks the current distance before issuing the same journey API. These are script helper defaults, separate from the native defaults.
+The catalog's `Travel.to` checks the current distance before issuing a journey. Callers choose their arrival radius; native defaults and script helper defaults are separate contracts.
 
 An avoided start tile can be left, but the route cannot enter avoided tiles. `arrival_tiles` restricts the entire final-target selection, including alternate targets during hazardous refresh. It represents alternatives to one another; `via` represents required progress in order. The retired `interrupt_on_dialogue` alias and unknown walk fields are rejected.
 
@@ -51,28 +53,23 @@ Interrupts run before arrival, route matching, recovery and input dispatch. The 
 7. Varbit equality.
 8. Run-energy threshold.
 
-```lua
-local areas = gc.require("monkey_madness_areas")
-local interrupts = {
-  area = {
-    name = "prison",
-    bounds = areas.prison_bounds(),
-  },
-  dialogue = true,
-  poisoned = true,
-  missing_item = { "Antipoison" },
-  inventory_below = { { id = 379, quantity = 4 } },
-  skill_below = { prayer = 12 },
-  varbit_equals = { { id = 25, value = 0 } },
-  run_energy_below = 60,
-}
+```java
+Map<String, Object> interrupts = Map.of(
+    "dialogue", true,
+    "poisoned", true,
+    "missing_item", List.of("Antipoison"),
+    "inventory_below", List.of(Map.of("id", 379, "quantity", 4)),
+    "skill_below", Map.of("prayer", 12),
+    "varbit_equals", List.of(Map.of("id", 25, "value", 0)),
+    "run_energy_below", 60);
+Map<String, Object> result = Navigation.walk(trip, interrupts, null);
 ```
 
-The quest runner passes this table as `interrupt_on = interrupts`. Its declared area module supplies the actual prison rectangles with the safe exit removed. Areas may also be an ordered list of named areas, each containing rectangles. Area bounds and inventory names are supplied by Lua; the walker contains no prison or potion decisions. Numeric-ID conditions use arrays of rows, preserving IDs such as 0 or 1 through Lua table conversion. Skill thresholds use boosted values. Energy thresholds use percent, while `player.run_energy` remains hundredths of a percent.
+The quest runner passes the predicate map to `Navigation.walk`. Its area definitions supply the actual prison rectangles with the safe exit removed. Areas may also be an ordered list of named areas, each containing rectangles. Area bounds and inventory names are supplied by Java scripts; the walker contains no prison or potion decisions. Numeric-ID conditions use lists of maps, preserving IDs such as 0 or 1. Skill thresholds use boosted values. Energy thresholds use percent, while `player.run_energy` remains hundredths of a percent.
 
 A match returns `status = "interrupted"`, its predicate name as `reason`, and observed `detail`. A dialogue interruption includes the triggering dialogue frame. Required data that is unavailable returns `status = "unavailable"` with a specific snapshot reason. Input owned by the journey is revoked before either receipt returns.
 
-Those receipts include a `continuation`. Resumption must keep the original destination, radius, ordered via list and allowed arrival set. It preserves observed via progress, an attempted transport's remaining steps and active-time budget, and failed transport groups. Lua may refresh avoids and interrupt conditions from current observations. The token binds the account and original request, is consumed once, and comes from a bounded cache of the latest 64 continuations. Unknown, changed and replayed tokens are rejected. A new request without a token starts fresh.
+Those receipts include a `continuation`. Resumption must keep the original destination, radius, ordered via list and allowed arrival set. It preserves observed via progress, an attempted transport's remaining steps and active-time budget, and failed transport groups. Java scripts may refresh avoids and interrupt conditions from current observations. The token binds the account and original request, is consumed once, and comes from a bounded cache of the latest 64 continuations. Unknown, changed and replayed tokens are rejected. A new request without a token starts fresh.
 
 A supply handler should re-read state and rebuild its predicate before resuming. For example, an active stamina effect should first wait for effect expiry; an inactive effect should interrupt for the energy threshold only when the handler would actually drink. Reissuing a predicate that is already true creates an immediate interruption loop.
 
@@ -90,7 +87,7 @@ A local rejoin searches at most 4,096 nodes for nearby retained route points, wi
 
 A queued plan captures its start, via progress, edge-memory view and eligible transports. Acceptance checks those observations again, including failed search results. A moved start, changed quest requirement, expired memory entry or changed via progress cannot install a stale result. A bounded connection from the latest start may reuse a valid suffix.
 
-The planner operates on supplied world coordinates with a one-tile player footprint. `gc.read("instance", ...)` provides explicit template-to-scene mapping when a quest needs it; the walker does not infer arbitrary instance destinations or transport requirements.
+The planner operates on supplied world coordinates with a one-tile player footprint. `ScriptScope.current().read("instance", query)` provides explicit template-to-scene mapping when a quest needs it; the walker does not infer arbitrary instance destinations or transport requirements.
 
 ## Route input and pacing
 
@@ -130,7 +127,7 @@ The catalog currently contains 56 directed entries, including alternative standi
 
 Each entry owns a standing origin, representative destination, arrival region, interaction cost, ordered steps and observed requirements. The planner's 80-unit penalty per semantic step is a route preference, not a measured duration. Some seed restrictions deliberately match the supported quest phase; their evidence and limits are recorded in [navigation-transitions.md](navigation-transitions.md).
 
-An entry executes only after the player reaches its exact standing origin. The selected object/NPC action is re-resolved from the frame. Widget selection is scoped to the specified menu and expected destination label, and visible ancestors and labels are checked again before dispatch. A transport conversation advances only an expected speaker or permitted choice; foreign dialogue returns to Lua even if the request did not ask for ordinary dialogue interruption.
+An entry executes only after the player reaches its exact standing origin. The selected object/NPC action is re-resolved from the frame. Widget selection is scoped to the specified menu and expected destination label, and visible ancestors and labels are checked again before dispatch. A transport conversation advances only an expected speaker or permitted choice; foreign dialogue returns to Java scripts even if the request did not ask for ordinary dialogue interruption.
 
 Dispatch does not complete a transport. It waits for the observed landing, and conversation services also require closed dialogue across successive frames. Native input time is excluded from the 60-active-tick transition budget. Missing targets, changed requirements, rejected input or unverified arrival block that service group for the journey and trigger replanning. Scene-loading snapshot gaps preserve completed input until a fresh landing frame is available.
 
@@ -159,10 +156,10 @@ Receipts include requested/reached positions, arrival constraints, via progress,
 ## Verification
 
 ```bash
-./gradlew --offline routeAudit
+./gradlew --offline routeAudit -PscriptCatalog=../GenericClientScripts
 ./gradlew --offline plannerBenchmark
 ```
 
-The current audit plans 34 authored journeys across 59 account-profile checks and selects all 56 catalog entries with passable standing endpoints. It includes constrained corridors, landing transitions and failed-quest eligibility. Pure optimality checks compare transport searches against exhaustive small graphs; native-input tests cover menu identity, queued cancellation, hidden widgets and conversation ownership.
+The current audit plans 38 authored journeys across 66 account-profile checks and selects all 56 catalog entries with passable standing endpoints. It includes constrained corridors, landing transitions and failed-quest eligibility. Pure optimality checks compare transport searches against exhaustive small graphs; native-input tests cover menu identity, queued cancellation, hidden widgets and conversation ownership.
 
 Historical builds were exercised around Port Sarim doors and the Varrock/Grand Exchange route. Those receipts predate the current journey, transport and behavior cutover. Source tests and historical routes do not establish a loaded artifact or fresh live acceptance. Installation and safe live receipts are separate gates; hazardous routes require the user watching.

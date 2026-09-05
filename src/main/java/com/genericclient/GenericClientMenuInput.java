@@ -30,12 +30,14 @@ final class GenericClientMenuInput implements AutoCloseable
 
 	private final Client client;
 	private final ClientThread clientThread;
+	private final ScheduledExecutorService executor;
 	private final GenericClientSyntheticMouse syntheticMouse;
 	private final Consumer<String> reporter;
 	private final AtomicBoolean running = new AtomicBoolean();
 
 	private volatile CompletableFuture<Map<String, Object>> activeResult;
-	private final GenericClientInputCallbacks callbacks;
+	private final GenericClientInputCallbacks callbacks = new GenericClientInputCallbacks(this, () -> this.activeResult,
+		() -> finishRejected("action_cancelled"));
 	private volatile TargetResolver resolver;
 	private volatile Target target;
 	private volatile GenericClientActivityContext activityContext;
@@ -61,7 +63,7 @@ final class GenericClientMenuInput implements AutoCloseable
 	{
 		this.client = client;
 		this.clientThread = clientThread;
-		this.callbacks = new GenericClientInputCallbacks(this, () -> this.activeResult, executor);
+		this.executor = executor;
 		this.syntheticMouse = syntheticMouse;
 		this.reporter = reporter;
 	}
@@ -124,7 +126,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		dispatch = null;
 		cursorRetained = false;
 
-		invokeCurrent(() -> prepareOnClientThread(preInteractionResolver));
+		callbacks.invoke(clientThread, activityContext, () -> prepareOnClientThread(preInteractionResolver));
 		return result;
 	}
 
@@ -158,8 +160,8 @@ final class GenericClientMenuInput implements AutoCloseable
 		}
 		else
 		{
-			callbacks.schedule(
-				() -> invokeCurrent(this::resolveTargetOnClientThread),
+			callbacks.schedule(executor,
+				() -> callbacks.invoke(clientThread, activityContext, this::resolveTargetOnClientThread),
 				preInteraction.delayMillis);
 		}
 	}
@@ -242,7 +244,7 @@ final class GenericClientMenuInput implements AutoCloseable
 			cursorRetained = true;
 			reporter.accept("MENU_INTERACTION_CURSOR_RETAINED description=" + target.description +
 				" action=" + target.action + " canvas=" + mouse.getX() + "," + mouse.getY());
-			callbacks.schedule(() -> invokeCurrent(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+			callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activityContext, this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
 			return;
 		}
 		syntheticMouse.move(target.point, activityContext).whenComplete(callbacks.bind((ignored, error) ->
@@ -252,11 +254,9 @@ final class GenericClientMenuInput implements AutoCloseable
 				finishRejected("synthetic_mouse_move: " + rootMessage(error));
 				return;
 			}
-			callbacks.schedule(() -> invokeCurrent(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+			callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activityContext, this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
 		}));
 	}
-
-
 
 	private void verifyHoverAndClick()
 	{
@@ -303,7 +303,7 @@ final class GenericClientMenuInput implements AutoCloseable
 				selectedWidgetMenuSettleRetries++;
 				reporter.accept("MENU_INTERACTION_SELECTED_WIDGET_SETTLE description=" +
 					current.description + " attempt=" + selectedWidgetMenuSettleRetries);
-				callbacks.schedule(() -> invokeCurrent(this::verifyHoverAndClick),
+				callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activityContext, this::verifyHoverAndClick),
 					HOVER_SETTLE_MILLIS);
 				return;
 			}
@@ -366,7 +366,7 @@ final class GenericClientMenuInput implements AutoCloseable
 			}
 			if (target == destination)
 			{
-				callbacks.schedule(() -> invokeCurrent(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+				callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activityContext, this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
 			}
 		}));
 		return null;
@@ -388,7 +388,7 @@ final class GenericClientMenuInput implements AutoCloseable
 				finishRejected("synthetic_mouse_move: " + rootMessage(error));
 				return;
 			}
-			callbacks.schedule(() -> invokeCurrent(this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
+			callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activityContext, this::verifyHoverAndClick), HOVER_SETTLE_MILLIS);
 		}));
 		return true;
 	}
@@ -450,7 +450,7 @@ final class GenericClientMenuInput implements AutoCloseable
 			}
 			// Opening the menu and selecting its entry are one composite interaction.
 			// Moving offscreen between those clicks closes the menu before it can be used.
-			callbacks.schedule(() -> invokeCurrent(this::moveToContextEntry), CONTEXT_MENU_SETTLE_MILLIS);
+			callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activityContext, this::moveToContextEntry), CONTEXT_MENU_SETTLE_MILLIS);
 		}));
 	}
 
@@ -495,7 +495,7 @@ final class GenericClientMenuInput implements AutoCloseable
 				finishRejected("synthetic_context_move: " + rootMessage(error));
 				return;
 			}
-			callbacks.schedule(() -> invokeCurrent(this::clickContextEntry), HOVER_SETTLE_MILLIS);
+			callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activityContext, this::clickContextEntry), HOVER_SETTLE_MILLIS);
 		}));
 	}
 
@@ -533,7 +533,7 @@ final class GenericClientMenuInput implements AutoCloseable
 			clickFinished = true;
 			finishLeftClickIfReady();
 		}));
-		callbacks.schedule(() ->
+		callbacks.schedule(executor, () ->
 		{
 			if (awaitingMenuResult || !clickFinished)
 			{
@@ -699,7 +699,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		awaitingMenuResult = false;
 		clickFinished = false;
 		observedMenuResult = null;
-		callbacks.cancelPending();
+		callbacks.cancelScheduled();
 		reporter.accept("MENU_INTERACTION_COMPLETED status=" + receipt.get("status") +
 			" result=" + receipt.get("result") + " clicks=" + receipt.get("click_count"));
 		CompletableFuture<Map<String, Object>> completion = activeResult;
@@ -713,15 +713,6 @@ final class GenericClientMenuInput implements AutoCloseable
 		}
 	}
 
-	private void invokeCurrent(Runnable action)
-	{
-		clientThread.invoke(callbacks.bind(() -> {
-			if (activityContext.isInputAllowed()) action.run();
-			else finishRejected("action_cancelled");
-		}));
-	}
-
-
 	@Override
 	public synchronized void close()
 	{
@@ -732,7 +723,7 @@ final class GenericClientMenuInput implements AutoCloseable
 		}
 		else
 		{
-			callbacks.cancelPending();
+			callbacks.cancelScheduled();
 		}
 	}
 

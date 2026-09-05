@@ -55,13 +55,13 @@ final class GenericClientWalkTestFixtures
 	static GenericClientSnapshot snapshot(
 		long tick,
 		WorldPoint player,
-		List<GenericClientWorldSnapshot.NpcSnapshot> npcs)
+		List<GenericClientNpcSnapshot> npcs)
 	{
 		return new GenericClientSnapshot(
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientWorldSnapshot.PlayerSnapshot(
+			new GenericClientPlayerSnapshot(1L,
 				"walker-test",
 				player.getX(),
 				player.getY(),
@@ -83,16 +83,16 @@ final class GenericClientWalkTestFixtures
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientWorldSnapshot.PlayerSnapshot(
+			new GenericClientPlayerSnapshot(1L,
 				"walker-test", player.getX(), player.getY(), player.getPlane(), 0),
 			Collections.emptyList(),
 			GenericClientAccountSnapshot.empty(),
 			quest);
 	}
 
-	static GenericClientWorldSnapshot.NpcSnapshot npc(int index, WorldPoint world)
+	static GenericClientNpcSnapshot npc(int index, WorldPoint world)
 	{
-		return new GenericClientWorldSnapshot.NpcSnapshot(
+		return new GenericClientNpcSnapshot(2L,
 			index,
 			5237,
 			"Blocking NPC",
@@ -116,7 +116,7 @@ final class GenericClientWalkTestFixtures
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientWorldSnapshot.PlayerSnapshot(
+			new GenericClientPlayerSnapshot(1L,
 				"walker-test",
 				player.getX(),
 				player.getY(),
@@ -138,7 +138,7 @@ final class GenericClientWalkTestFixtures
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientWorldSnapshot.PlayerSnapshot(
+			new GenericClientPlayerSnapshot(1L,
 				"walker-test", player.getX(), player.getY(), player.getPlane(), 0),
 			Collections.emptyList(),
 			GenericClientAccountSnapshot.empty(),
@@ -183,7 +183,7 @@ final class GenericClientWalkTestFixtures
 		GenericClientQuestSnapshot quest = new GenericClientQuestSnapshot(
 			true,
 			new int[0],
-			Collections.singletonList(new GenericClientQuestSnapshot.ObjectSnapshot(
+			Collections.singletonList(new GenericClientQuestSnapshot.ObjectSnapshot(3L,
 				11767,
 				"Gate",
 				"wall",
@@ -199,7 +199,7 @@ final class GenericClientWalkTestFixtures
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientWorldSnapshot.PlayerSnapshot(
+			new GenericClientPlayerSnapshot(1L,
 				"walker-test", player.getX(), player.getY(), player.getPlane(), 0),
 			Collections.emptyList(),
 			GenericClientAccountSnapshot.empty(),
@@ -223,7 +223,7 @@ final class GenericClientWalkTestFixtures
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientWorldSnapshot.PlayerSnapshot(
+			new GenericClientPlayerSnapshot(1L,
 				"walker-test", player.getX(), player.getY(), player.getPlane(), 0),
 			Collections.emptyList(),
 			GenericClientAccountSnapshot.empty(),
@@ -250,7 +250,7 @@ final class GenericClientWalkTestFixtures
 		GenericClientQuestSnapshot quest = new GenericClientQuestSnapshot(
 			true,
 			new int[0],
-			Collections.singletonList(new GenericClientQuestSnapshot.ObjectSnapshot(
+			Collections.singletonList(new GenericClientQuestSnapshot.ObjectSnapshot(3L,
 				2000,
 				"Test door",
 				"wall",
@@ -264,7 +264,7 @@ final class GenericClientWalkTestFixtures
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientWorldSnapshot.PlayerSnapshot(
+			new GenericClientPlayerSnapshot(1L,
 				"walker-test", player.getX(), player.getY(), player.getPlane(), 0),
 			Collections.emptyList(),
 			GenericClientAccountSnapshot.empty(),

@@ -42,10 +42,10 @@ final class GenericClientDashboard implements AutoCloseable
 	private final GenericClientAutomationPanel automations;
 	private final GenericClientConsolePanel console;
 	private final GenericClientSettingsPanel settings;
-	private final List<JButton> navigation;
+	private final List<GenericClientDashboardNavigationButton> navigation;
 	private JDialog window;
 
-	GenericClientDashboard(Window owner, GenericClientDashboardActions actions, GenericClientLuaHost host)
+	GenericClientDashboard(Window owner, GenericClientDashboardActions actions, GenericClientScriptHost host)
 	{
 		this(owner, actions, host, null);
 	}
@@ -53,7 +53,7 @@ final class GenericClientDashboard implements AutoCloseable
 	GenericClientDashboard(
 		Window owner,
 		GenericClientDashboardActions actions,
-		GenericClientLuaHost host,
+		GenericClientScriptHost host,
 		GenericClientAutomationScheduler scheduler)
 	{
 		this.owner = owner;
@@ -71,11 +71,11 @@ final class GenericClientDashboard implements AutoCloseable
 		cards.add(settings, SETTINGS);
 
 		navigation = Arrays.asList(
-			nav(ACTIVE_SCRIPT, GenericClientDashboardStyle.NavGlyph.ACTIVE),
-			nav(AUTOMATIONS, GenericClientDashboardStyle.NavGlyph.PLAY),
-			nav(SCHEDULES, GenericClientDashboardStyle.NavGlyph.ACTIVE),
-			nav(CONSOLE, GenericClientDashboardStyle.NavGlyph.CONSOLE),
-			nav(SETTINGS, GenericClientDashboardStyle.NavGlyph.SLIDERS));
+			nav(ACTIVE_SCRIPT, GenericClientDashboardNavigationButton.Glyph.ACTIVE),
+			nav(AUTOMATIONS, GenericClientDashboardNavigationButton.Glyph.PLAY),
+			nav(SCHEDULES, GenericClientDashboardNavigationButton.Glyph.ACTIVE),
+			nav(CONSOLE, GenericClientDashboardNavigationButton.Glyph.CONSOLE),
+			nav(SETTINGS, GenericClientDashboardNavigationButton.Glyph.SLIDERS));
 		content.setBackground(GenericClientDashboardStyle.BACKGROUND);
 		content.add(createSidebar(), BorderLayout.WEST);
 		content.add(cards, BorderLayout.CENTER);
@@ -121,7 +121,7 @@ final class GenericClientDashboard implements AutoCloseable
 		});
 	}
 
-	void updateLuaState(String activeScript, String scriptStatus, String logs)
+	void updateScriptState(String activeScript, String scriptStatus, String logs)
 	{
 		runOnEdt(() ->
 		{
@@ -204,9 +204,9 @@ final class GenericClientDashboard implements AutoCloseable
 		return footer;
 	}
 
-	private JButton nav(String name, GenericClientDashboardStyle.NavGlyph glyph)
+	private GenericClientDashboardNavigationButton nav(String name, GenericClientDashboardNavigationButton.Glyph glyph)
 	{
-		JButton button = GenericClientDashboardStyle.navButton(name, glyph);
+		GenericClientDashboardNavigationButton button = new GenericClientDashboardNavigationButton(name, glyph);
 		button.setActionCommand(name);
 		button.addActionListener(event -> show(event.getActionCommand()));
 		return button;
@@ -215,9 +215,9 @@ final class GenericClientDashboard implements AutoCloseable
 	private void show(String name)
 	{
 		((CardLayout) cards.getLayout()).show(cards, name);
-		for (JButton button : navigation)
+		for (GenericClientDashboardNavigationButton button : navigation)
 		{
-			GenericClientDashboardStyle.selectNav(button, name.equals(button.getActionCommand()));
+			button.setActive(name.equals(button.getActionCommand()));
 		}
 	}
 

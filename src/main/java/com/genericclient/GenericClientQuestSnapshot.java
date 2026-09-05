@@ -16,13 +16,10 @@ import net.runelite.api.Client;
 import net.runelite.api.GameObject;
 import net.runelite.api.ObjectComposition;
 import net.runelite.api.Player;
-import net.runelite.api.Scene;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
 import net.runelite.api.TileObject;
 import net.runelite.api.WallObject;
-import net.runelite.api.WorldView;
-import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.coords.WorldArea;
 import net.runelite.api.gameval.InterfaceID;
@@ -32,8 +29,7 @@ import net.runelite.client.util.Text;
 
 final class GenericClientQuestSnapshot
 {
-	private static final int OBJECT_RADIUS = 32;
-	private static final int MAX_QUERY_RESULTS = 100;
+	private static final int OBJECT_RADIUS = 104;
 	private static final int MAX_VAR_QUERY = 32;
 	private static final int[] CAPTURED_VARBITS =
 	{
@@ -134,13 +130,13 @@ final class GenericClientQuestSnapshot
 			DialogueSnapshot.closed());
 	}
 
-	static GenericClientQuestSnapshot capture(Client client, Player player)
+	static GenericClientQuestSnapshot capture(Client client, Player player, GenericClientEntityIds identities)
 	{
 		if (player == null || player.getWorldLocation() == null || player.getLocalLocation() == null)
 		{
 			return empty();
 		}
-		SceneCapture scene = captureScene(client, player);
+		SceneCapture scene = captureScene(client, player, identities);
 		return new GenericClientQuestSnapshot(
 			true,
 			client.getVarps(),
@@ -290,40 +286,14 @@ final class GenericClientQuestSnapshot
 		return result;
 	}
 
-	private static SceneCapture captureScene(Client client, Player player)
+	private static SceneCapture captureScene(Client client, Player player, GenericClientEntityIds identities)
 	{
-		WorldView worldView = player.getWorldView();
-		Scene scene = worldView.getScene();
-		Tile[][][] tiles = scene == null ? null : scene.getTiles();
-		LocalPoint local = player.getLocalLocation();
 		WorldPoint playerWorld = player.getWorldLocation();
-		if (tiles == null || local == null || playerWorld == null)
-		{
-			return SceneCapture.empty();
-		}
-
-		int plane = Math.max(0, Math.min(tiles.length - 1, playerWorld.getPlane()));
-		int minX = Math.max(0, local.getSceneX() - OBJECT_RADIUS);
-		int maxX = Math.min(tiles[plane].length - 1, local.getSceneX() + OBJECT_RADIUS);
-		int minY = Math.max(0, local.getSceneY() - OBJECT_RADIUS);
-		int maxY = Math.min(tiles[plane][0].length - 1, local.getSceneY() + OBJECT_RADIUS);
 		Set<TileObject> seen = Collections.newSetFromMap(new IdentityHashMap<>());
 		List<ObjectSnapshot> result = new ArrayList<>();
 		List<GroundItemSnapshot> groundItems = new ArrayList<>();
-
-		for (int sceneX = minX; sceneX <= maxX; sceneX++)
-		{
-			for (int sceneY = minY; sceneY <= maxY; sceneY++)
-			{
-				captureTile(
-					client,
-					playerWorld,
-					tiles[plane][sceneX][sceneY],
-					seen,
-					result,
-					groundItems);
-			}
-		}
+		GenericClientSceneTiles.visitNearby(player, OBJECT_RADIUS,
+			tile -> captureTile(client, playerWorld, tile, seen, result, groundItems, identities));
 		result.sort(Comparator
 			.comparingInt(ObjectSnapshot::getDistance)
 			.thenComparingInt(ObjectSnapshot::getId)
@@ -341,21 +311,17 @@ final class GenericClientQuestSnapshot
 		Tile tile,
 		Set<TileObject> seen,
 		List<ObjectSnapshot> objects,
-		List<GroundItemSnapshot> groundItems)
+		List<GroundItemSnapshot> groundItems, GenericClientEntityIds identities)
 	{
-		if (tile == null)
-		{
-			return;
-		}
-		addObject(client, player, tile.getWallObject(), "wall", seen, objects);
-		addObject(client, player, tile.getGroundObject(), "ground", seen, objects);
-		addObject(client, player, tile.getDecorativeObject(), "decorative", seen, objects);
+		addObject(client, player, tile.getWallObject(), "wall", seen, objects, identities);
+		addObject(client, player, tile.getGroundObject(), "ground", seen, objects, identities);
+		addObject(client, player, tile.getDecorativeObject(), "decorative", seen, objects, identities);
 		GameObject[] gameObjects = tile.getGameObjects();
 		if (gameObjects != null)
 		{
 			for (GameObject gameObject : gameObjects)
 			{
-				addObject(client, player, gameObject, "game", seen, objects);
+				addObject(client, player, gameObject, "game", seen, objects, identities);
 			}
 		}
 		captureGroundItems(client, player, tile, groundItems);
@@ -399,7 +365,7 @@ final class GenericClientQuestSnapshot
 		TileObject object,
 		String kind,
 		Set<TileObject> seen,
-		List<ObjectSnapshot> result)
+		List<ObjectSnapshot> result, GenericClientEntityIds identities)
 	{
 		if (object == null || object.getId() < 0 || object.getWorldLocation() == null || !seen.add(object))
 		{
@@ -421,6 +387,7 @@ final class GenericClientQuestSnapshot
 				.collect(Collectors.toList());
 		WorldPoint world = object.getWorldLocation();
 		result.add(new ObjectSnapshot(
+			identities.identify(object),
 			object.getId(),
 			composition == null ? "<unknown>" : Objects.toString(composition.getName(), "<unknown>"),
 			kind,
@@ -449,11 +416,11 @@ final class GenericClientQuestSnapshot
 		{
 			return DialogueSnapshot.closed();
 		}
-		String speaker = firstText(client,
+		String speaker = cleanText(firstRawText(client,
 			InterfaceID.ChatLeft.NAME,
 			InterfaceID.ChatRight.NAME,
-			InterfaceID.ChatBoth.NAMES);
-		String text = firstText(client,
+			InterfaceID.ChatBoth.NAMES));
+		String text = firstRawText(client,
 			InterfaceID.ChatLeft.TEXT,
 			InterfaceID.ChatRight.TEXT,
 			InterfaceID.ChatBoth.TEXT,
@@ -461,7 +428,7 @@ final class GenericClientQuestSnapshot
 			InterfaceID.ObjectboxDouble.TEXT);
 		if (text == null || text.isEmpty())
 		{
-			text = cleanText(visibleContinue.getText());
+			text = visibleContinue.getText();
 		}
 		return DialogueSnapshot.continueDialogue(speaker, text);
 	}
@@ -472,7 +439,7 @@ final class GenericClientQuestSnapshot
 		return GenericClientWidgets.isVisible(widget) ? widget : null;
 	}
 
-	private static String firstText(Client client, int... ids)
+	private static String firstRawText(Client client, int... ids)
 	{
 		for (int id : ids)
 		{
@@ -480,7 +447,7 @@ final class GenericClientQuestSnapshot
 			String text = widget == null ? null : cleanText(widget.getText());
 			if (text != null && !text.isEmpty())
 			{
-				return text;
+				return widget.getText();
 			}
 		}
 		return null;
@@ -569,16 +536,14 @@ final class GenericClientQuestSnapshot
 		private final int within;
 		private final int limit;
 		private final String action;
-		private final String name;
-		private final Integer id;
+		private final GenericClientEntitySelector selector;
 
-		private SceneQuery(int within, int limit, String action, String name, Integer id)
+		private SceneQuery(int within, int limit, String action, GenericClientEntitySelector selector)
 		{
 			this.within = within;
 			this.limit = limit;
 			this.action = action;
-			this.name = name;
-			this.id = id;
+			this.selector = selector;
 		}
 
 		private static SceneQuery from(Map<?, ?> query)
@@ -586,32 +551,19 @@ final class GenericClientQuestSnapshot
 			int within = Math.min(
 				OBJECT_RADIUS,
 				Math.max(0, intValue(query == null ? null : query.get("within"), OBJECT_RADIUS)));
-			int limit = Math.min(
-				MAX_QUERY_RESULTS,
-				Math.max(0, intValue(query == null ? null : query.get("limit"), 50)));
-			Map<?, ?> where = query != null && query.get("where") instanceof Map
-				? (Map<?, ?>) query.get("where")
-				: Collections.emptyMap();
-			Integer id = where.get("id") instanceof Number
-				? ((Number) where.get("id")).intValue()
-				: null;
-			if (query != null && query.get("id") instanceof Number)
-			{
-				id = ((Number) query.get("id")).intValue();
-			}
+			int limit = Math.max(0, intValue(query == null ? null : query.get("limit"), 50));
+			GenericClientEntitySelector selector = new GenericClientEntitySelector(query);
 			return new SceneQuery(
 				within,
 				limit,
 				stringValue(query == null ? null : query.get("action")),
-				stringValue(where.get("name")),
-				id);
+				selector);
 		}
 
 		private boolean matches(ObjectSnapshot object)
 		{
 			return object.distance <= within &&
-				(id == null || object.id == id) &&
-				(name == null || object.name.equalsIgnoreCase(name)) &&
+				selector.matches(object.id, object.name) &&
 				(action == null || object.actions.stream()
 					.anyMatch(candidate -> candidate.equalsIgnoreCase(action)));
 		}
@@ -619,13 +571,13 @@ final class GenericClientQuestSnapshot
 		private boolean matches(GroundItemSnapshot item)
 		{
 			return item.distance <= within &&
-				(id == null || item.id == id) &&
-				(name == null || item.name.equalsIgnoreCase(name));
+				selector.matches(item.id, item.name);
 		}
 	}
 
 	static final class ObjectSnapshot
 	{
+		final long identity;
 		private final int id;
 		private final String name;
 		private final String kind;
@@ -639,6 +591,7 @@ final class GenericClientQuestSnapshot
 		private final WorldArea footprint;
 
 		ObjectSnapshot(
+			long identity,
 			int id,
 			String name,
 			String kind,
@@ -648,10 +601,11 @@ final class GenericClientQuestSnapshot
 			int distance,
 			List<String> actions)
 		{
-			this(id, name, kind, x, y, plane, distance, actions, 0, 0, 1, 1);
+			this(identity, id, name, kind, x, y, plane, distance, actions, 0, 0, 1, 1);
 		}
 
 		ObjectSnapshot(
+			long identity,
 			int id,
 			String name,
 			String kind,
@@ -665,6 +619,7 @@ final class GenericClientQuestSnapshot
 			int sizeX,
 			int sizeY)
 		{
+			this.identity = identity;
 			this.id = id;
 			this.name = name;
 			this.kind = kind;
@@ -739,6 +694,7 @@ final class GenericClientQuestSnapshot
 		Map<String, Object> toMap()
 		{
 			Map<String, Object> value = new LinkedHashMap<>();
+			value.put("identity",identity);
 			value.put("id", (long) id);
 			value.put("name", name);
 			value.put("kind", kind);
@@ -820,11 +776,6 @@ final class GenericClientQuestSnapshot
 			this.objects = objects;
 			this.groundItems = groundItems;
 		}
-
-		private static SceneCapture empty()
-		{
-			return new SceneCapture(Collections.emptyList(), Collections.emptyList());
-		}
 	}
 
 	static final class DialogueSnapshot
@@ -833,6 +784,7 @@ final class GenericClientQuestSnapshot
 		final String type;
 		final String speaker;
 		final String text;
+		final String rawText;
 		final List<DialogueOptionSnapshot> options;
 
 		DialogueSnapshot(
@@ -845,7 +797,8 @@ final class GenericClientQuestSnapshot
 			this.open = open;
 			this.type = type;
 			this.speaker = speaker;
-			this.text = text;
+			this.text = cleanText(text);
+			this.rawText = text == null ? "" : text;
 			this.options = Collections.unmodifiableList(new ArrayList<>(options));
 		}
 
@@ -893,6 +846,7 @@ final class GenericClientQuestSnapshot
 			value.put("type", type);
 			value.put("speaker", speaker);
 			value.put("text", text);
+			value.put("raw_text", rawText);
 			List<Map<String, Object>> optionValues = new ArrayList<>();
 			for (DialogueOptionSnapshot dialogueOption : options)
 			{

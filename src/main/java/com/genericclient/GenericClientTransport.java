@@ -77,7 +77,8 @@ final class GenericClientTransport
 		@Override CompletableFuture<Map<String, Object>> execute(GenericClientNativeInputs inputs,
 			GenericClientSnapshot snapshot, GenericClientActivityContext context)
 		{
-			return inputs.objectInput.interact(id, action, find(snapshot).getWorldPoint(), 8, context);
+			GenericClientQuestSnapshot.ObjectSnapshot object = find(snapshot);
+			return inputs.objectInput.interact(id, object.identity, action, object.getWorldPoint(), 8, context);
 		}
 	}
 
@@ -94,7 +95,7 @@ final class GenericClientTransport
 		@Override CompletableFuture<Map<String, Object>> execute(GenericClientNativeInputs inputs,
 			GenericClientSnapshot snapshot, GenericClientActivityContext context)
 		{
-			return label == null ? inputs.uiInput.click(id, null, context) : inputs.uiInput.selectDestination(id, label, context);
+			return label == null ? inputs.uiInput.click(id, null, null, context) : inputs.uiInput.selectDestination(id, label, context);
 		}
 	}
 
@@ -111,9 +112,9 @@ final class GenericClientTransport
 			this.target = target;
 		}
 
-		private GenericClientWorldSnapshot.NpcSnapshot find(GenericClientSnapshot snapshot)
+		private GenericClientNpcSnapshot find(GenericClientSnapshot snapshot)
 		{
-			for (GenericClientWorldSnapshot.NpcSnapshot npc : snapshot.getNpcs())
+			for (GenericClientNpcSnapshot npc : snapshot.getNpcs())
 				if (ids.contains(npc.getId()) && !npc.isDead() && target.contains(npc.getWorldPoint()) &&
 					npc.actions.stream().anyMatch(action::equalsIgnoreCase)) return npc;
 			return null;
@@ -124,7 +125,8 @@ final class GenericClientTransport
 		@Override CompletableFuture<Map<String, Object>> execute(GenericClientNativeInputs inputs,
 			GenericClientSnapshot snapshot, GenericClientActivityContext context)
 		{
-			return inputs.npcInput.interact(find(snapshot).getId(), null, action, 8, context);
+			GenericClientNpcSnapshot npc = find(snapshot);
+			return inputs.npcInput.interact(npc.getId(), npc.getIndex(), npc.identity, null, action, 8, context);
 		}
 	}
 

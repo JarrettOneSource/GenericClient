@@ -237,7 +237,7 @@ test("routes only allowlisted commands to one explicit instance", async () => {
   assert.deepEqual(calls[2].params, {});
 
   await assert.rejects(
-    () => controller.command("command-target", { command: "lua.eval", params: {} }),
+    () => controller.command("command-target", { command: "java.eval", params: {} }),
     /not allowed/,
   );
   await assert.rejects(
@@ -313,7 +313,7 @@ function status({
     player,
     runtime: { game_tick: 12 },
     recent_messages: [],
-    lua: {
+    scripts: {
       active_script: activeScript || "none",
       activity: activeScript ? "running" : "idle",
       script_state: activeScript ? "running" : "idle",

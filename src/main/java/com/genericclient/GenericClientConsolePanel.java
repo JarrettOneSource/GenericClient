@@ -22,16 +22,16 @@ final class GenericClientConsolePanel extends JPanel
 
 	private final JLabel lastResult = GenericClientDashboardStyle.mono("None yet");
 	private final JTextArea input = GenericClientDashboardStyle.textArea(
-		"return gc.read(\"player\")", true, false);
+		"return ScriptScope.current().read(\"player\", Map.of());", true, false);
 	private final JTextArea output = GenericClientDashboardStyle.textArea(
 		"Results print here as JSON.", false, true);
 
-	GenericClientConsolePanel(GenericClientDashboardActions actions, GenericClientLuaHost host)
+	GenericClientConsolePanel(GenericClientDashboardActions actions, GenericClientScriptHost host)
 	{
 		setLayout(new BorderLayout());
 		setBackground(GenericClientDashboardStyle.BACKGROUND);
 
-		input.setText("return gc.read(\"player\")");
+		input.setText("return ScriptScope.current().read(\"player\", Map.of());");
 		JButton run = GenericClientDashboardStyle.primaryButton("Run");
 		run.addActionListener(event ->
 		{
@@ -52,13 +52,8 @@ final class GenericClientConsolePanel extends JPanel
 				run.doClick();
 			}
 		});
-		JButton reset = GenericClientDashboardStyle.ghostButton("Reset");
-		reset.addActionListener(event -> host.resetRepl().whenComplete((result, error) ->
-			SwingUtilities.invokeLater(() -> output.setText(
-				error == null ? result : GenericClientDashboardStyle.message(error)))));
-
-		GenericClientDashboardStyle.Card lua = GenericClientDashboardStyle.card("Lua", reset);
-		lua.put(GenericClientDashboardStyle.inset(input, 84))
+		GenericClientDashboardStyle.Card java = GenericClientDashboardStyle.card("Java");
+		java.put(GenericClientDashboardStyle.inset(input, 84))
 			.gap(10)
 			.put(GenericClientDashboardStyle.inline(10, run, GenericClientDashboardStyle.small("Ctrl+Enter runs the snippet")))
 			.gap(10)
@@ -80,7 +75,7 @@ final class GenericClientConsolePanel extends JPanel
 		JPanel page = GenericClientDashboardStyle.page();
 		page.add(GenericClientDashboardStyle.stack(16,
 			GenericClientDashboardStyle.pageHeader("Console"),
-			lua,
+			java,
 			diagnostics), BorderLayout.NORTH);
 		add(GenericClientDashboardStyle.scroll(page), BorderLayout.CENTER);
 	}

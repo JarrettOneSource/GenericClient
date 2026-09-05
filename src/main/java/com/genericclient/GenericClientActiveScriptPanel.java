@@ -19,7 +19,7 @@ final class GenericClientActiveScriptPanel extends JPanel
 	private static final String EMPTY = "empty";
 	private static final String SCRIPT = "script";
 
-	private final GenericClientLuaHost host;
+	private final GenericClientScriptHost host;
 	private final GenericClientDashboardStyle.Chip status =
 		GenericClientDashboardStyle.chip("Idle", GenericClientDashboardStyle.MUTED);
 	private final JPanel cards = new JPanel(new CardLayout());
@@ -36,7 +36,7 @@ final class GenericClientActiveScriptPanel extends JPanel
 	private GenericClientActiveScript current = GenericClientActiveScript.none();
 	private String structureKey = "";
 
-	GenericClientActiveScriptPanel(GenericClientLuaHost host)
+	GenericClientActiveScriptPanel(GenericClientScriptHost host)
 	{
 		this.host = host;
 		setLayout(new BorderLayout());

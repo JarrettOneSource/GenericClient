@@ -32,14 +32,14 @@ test("bridge sends an RPC request and returns its result", async (context) => {
 test("bridge surfaces GenericClient errors", async (context) => {
   const server = createHttpServer((_request, response) => {
     response.writeHead(409, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ ok: false, error: "The Lua REPL is busy" }));
+    response.end(JSON.stringify({ ok: false, error: "A script is already running" }));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(() => server.close());
   const address = server.address();
   const bridge = new GenericClientBridge(`http://127.0.0.1:${address.port}`);
 
-  await assert.rejects(() => bridge.call("lua.eval", { code: "return 1" }), /Lua REPL is busy/);
+  await assert.rejects(() => bridge.call("java.eval", { code: "return 1;" }), /A script is already running/);
 });
 
 test("bridge resolves one selected Harness instance on every call", async (context) => {

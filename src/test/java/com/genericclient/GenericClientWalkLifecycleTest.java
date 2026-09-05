@@ -179,7 +179,7 @@ public class GenericClientWalkLifecycleTest
 	private static GenericClientSnapshot snapshot(long tick, WorldPoint point)
 	{
 		return new GenericClientSnapshot(tick, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("lifecycle-test", point.getX(), point.getY(), point.getPlane(), -1), List.of());
+			new GenericClientPlayerSnapshot(1L, "lifecycle-test", point.getX(), point.getY(), point.getPlane(), -1), List.of());
 	}
 
 	private static final class Inputs implements GenericClientWalker.WalkInput, GenericClientWalker.ObstacleInput, GenericClientWalker.RunInput

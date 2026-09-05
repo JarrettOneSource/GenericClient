@@ -1,5 +1,7 @@
 # Behavior framework implementation
 
+This log records the earlier behavior-framework work and its evidence. Runtime-specific paths in it have since been replaced; current cutover work and remaining validation are tracked in [the Java migration checklist](java-scripting-migration.md).
+
 Started 2026-09-04. Scope: P1-P13 from behavior-framework-review.md, with the source-review corrections below. Development used local branch `behavior-framework-20260904`. On September 5 the user requested publication to both main branches and explicitly waived the coverage gate. Publication uses consolidated commits based on current remote main so local checkpoint-only artifacts are not included in the published history.
 
 ## Baseline and reconciliation

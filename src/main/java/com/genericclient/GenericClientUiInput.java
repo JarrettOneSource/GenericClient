@@ -40,13 +40,16 @@ final class GenericClientUiInput
 	CompletableFuture<Map<String, Object>> click(
 		int widgetId,
 		Integer widgetIndex,
+		String action,
 		GenericClientActivityContext activityContext)
 	{
 		if (widgetId < 0)
 		{
 			throw new IllegalArgumentException("Widget id cannot be negative");
 		}
-		return menuInput.interactDirect(() -> resolve(widgetId, widgetIndex), activityContext);
+		return action == null
+			? menuInput.interactDirect(() -> resolve(widgetId, widgetIndex, null), activityContext)
+			: menuInput.interact(() -> resolve(widgetId, widgetIndex, action), activityContext);
 	}
 
 	CompletableFuture<Map<String, Object>> closeTopLevel(GenericClientActivityContext context)
@@ -136,7 +139,7 @@ final class GenericClientUiInput
 		return receipt;
 	}
 
-	private GenericClientMenuInput.Resolution resolve(int widgetId, Integer widgetIndex)
+	private GenericClientMenuInput.Resolution resolve(int widgetId, Integer widgetIndex, String action)
 	{
 		if (client.getGameState() != GameState.LOGGED_IN)
 		{
@@ -147,7 +150,7 @@ final class GenericClientUiInput
 		{
 			widget = indexedChild(widget.getDynamicChildren(), widgetIndex);
 		}
-		return resolveWidget(client, widget, "Click", "widget:" + widgetId);
+		return resolveWidget(client, widget, action, "widget:" + widgetId);
 	}
 
 	private GenericClientMenuInput.Resolution resolveDestination(int menuId, String label)
@@ -159,7 +162,7 @@ final class GenericClientUiInput
 			String[] actions = widget.getActions();
 			if (GenericClientWidgets.matchesLabel(label, widget.getText(), widget.getName(),
 				actions == null ? List.of() : Arrays.asList(actions)))
-				return resolveWidget(client, widget, "Click", "widget:" + widget.getId());
+				return resolveWidget(client, widget, null, "widget:" + widget.getId());
 		}
 		return GenericClientMenuInput.Resolution.rejected("destination_not_visible:" + label);
 	}
@@ -197,10 +200,10 @@ final class GenericClientUiInput
 			"width", (long) bounds.width, "height", (long) bounds.height));
 		return GenericClientMenuInput.Resolution.resolved(new GenericClientMenuInput.Target(
 			point,
-			action,
+			action == null ? "Click" : action,
 			description,
 			value,
-			entry -> matchesWidget(entry, widget), bounds));
+			entry -> matchesWidget(entry, widget) && (action == null || action.equalsIgnoreCase(entry.getOption())), bounds));
 	}
 
 	private static Widget indexedChild(Widget[] children, int index)

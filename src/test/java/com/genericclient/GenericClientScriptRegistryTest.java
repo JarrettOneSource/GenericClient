@@ -1,218 +1,89 @@
 package com.genericclient;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertThrows;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import net.runelite.api.gameval.NpcID;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
 public class GenericClientScriptRegistryTest
 {
-	@Rule
-	public TemporaryFolder temporaryFolder = new TemporaryFolder();
+	@Rule public TemporaryFolder temporary = new TemporaryFolder();
 
-	@Test
-	public void createsAnEmptyManifestForANewInstallation() throws Exception
+	@Test public void discoversManifestMetadataAndNativeControlsFromCompiledJava() throws Exception
 	{
-		Path directory = temporaryFolder.newFolder("scripts").toPath();
-		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(
-			directory);
-		JsonObject manifest = new Gson().fromJson(
-			Files.readString(directory.resolve("manifest.json")), JsonObject.class);
+		Path directory = temporary.newFolder().toPath();
+		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
+		registry.compile("CatalogScript", GenericClientTestSupport.javaScript("CatalogScript",
+			"@ScriptSettings(id=\"catalog\", randomEvents={5436,5437}, " +
+			"inputs=@ScriptSettings.Input(id=\"mode\",label=\"Mode\",choices={\"one\",\"two\"},defaultValue=\"two\"), " +
+			"actions=@ScriptSettings.Button(id=\"finish\",label=\"Finish\"))",
+			"public int onLoop() { return -1; }"));
+		GenericClientScriptRegistry reloaded = new GenericClientScriptRegistry(directory);
+		assertEquals("CatalogScript", reloaded.get("catalog").getName());
+		assertEquals(List.of(5436, 5437), reloaded.get("catalog").getRandomEvents());
+		assertEquals("catalog", reloaded.findRandomEventSolver(5437).getId());
+		assertEquals("two", reloaded.get("catalog").getInputs().get(0).getDefaultValue());
+		assertEquals("finish", reloaded.get("catalog").getActions().get(0).getId());
+	}
 
+	@Test public void conflictingSolversDoNotReplaceTheLoadedCatalog() throws Exception
+	{
+		Path directory = temporary.newFolder().toPath();
+		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
+		registry.compile("First", GenericClientTestSupport.javaScript("First",
+			"@ScriptSettings(id=\"first\",randomEvents={5436})", "public int onLoop() { return -1; }"));
+		try { registry.compile("Second", GenericClientTestSupport.javaScript("Second",
+			"@ScriptSettings(id=\"second\",randomEvents={5436})", "public int onLoop() { return -1; }")); fail("Conflicting solvers loaded"); }
+		catch (java.io.IOException expected) { assertTrue(expected.getMessage().contains("Duplicate random-event solver")); }
+		assertEquals("first", registry.findRandomEventSolver(5436).getId());
+		assertEquals(1, registry.list().size());
+		assertEquals("first", new GenericClientScriptRegistry(directory).findRandomEventSolver(5436).getId());
+	}
+
+	@Test public void duplicateButtonIdsAreRejectedBeforeInstallation() throws Exception
+	{
+		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(temporary.newFolder().toPath());
+		try
+		{
+			registry.compile("Buttons", GenericClientTestSupport.javaScript("Buttons",
+				"@ScriptSettings(id=\"buttons\",actions={@ScriptSettings.Button(id=\"stop\",label=\"Stop\"),@ScriptSettings.Button(id=\"stop\",label=\"Again\")})",
+				"public int onLoop(){return -1;}"));
+			fail("Duplicate controls installed");
+		}
+		catch (IllegalArgumentException expected) { assertEquals("Duplicate script action id: stop",expected.getMessage()); }
 		assertTrue(registry.list().isEmpty());
-		assertEquals("genericclient_scripts", manifest.get("schema").getAsString());
-		assertEquals(0, manifest.getAsJsonArray("scripts").size());
 	}
 
-	@Test
-	public void savesAStandaloneScriptAndRegistersItInTheManifest() throws Exception
+	@Test public void classNamesCannotWriteOutsideTheCompilationDirectory() throws Exception
 	{
-		Path directory = temporaryFolder.newFolder("saved-scripts").toPath();
-		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
-		long revision = registry.getRevision();
-
-		GenericClientScriptRegistry.Script saved = registry.save(
-			"where-am-i",
-			"Where am I?",
-			"Return the current player snapshot.",
-			"return { run = function(input) return gc.read('player') end }\n");
-		GenericClientScriptRegistry reloaded = new GenericClientScriptRegistry(directory);
-
-		assertEquals("where-am-i", saved.getId());
-		assertEquals(revision + 1, registry.getRevision());
-		assertEquals("Where am I?", reloaded.get("where-am-i").getName());
-		assertEquals("return { run = function(input) return gc.read('player') end }\n",
-			reloaded.readSource("where-am-i"));
-		assertTrue(Files.readString(directory.resolve("manifest.json"))
-			.contains("\"id\": \"where-am-i\""));
-	}
-
-	@Test
-	public void preservesExternalDefinitionsWhenLoadedAndEdited() throws Exception
-	{
-		Path directory = temporaryFolder.newFolder("external-scripts").toPath();
-		String manifest =
-			"{\n" +
-			"  \"schema\": \"genericclient_scripts\",\n" +
-			"  \"scripts\": [\n" +
-			"    { \"id\": \"custom\", \"name\": \"Custom\", " +
-				"\"description\": \"Keep me\", \"file\": \"external.lua\" }\n" +
-			"  ]\n" +
-			"}\n";
-		String source = "return { run = function(input) return 'custom' end }\n";
-		Files.writeString(directory.resolve("manifest.json"), manifest);
-		Files.writeString(directory.resolve("external.lua"), source);
-
-		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
-
-		assertEquals(1, registry.list().size());
-		assertEquals("Custom", registry.get("custom").getName());
-		assertEquals(source, registry.readSource("custom"));
-		assertEquals(manifest, Files.readString(directory.resolve("manifest.json")));
-		String updated = "return { run = function() return 'updated' end }\n";
-		registry.save("custom", "Updated", "Keep the declared filename", updated);
-		assertEquals(updated, Files.readString(directory.resolve("external.lua")));
-		assertFalse(Files.exists(directory.resolve("custom.lua")));
-		assertEquals(updated, new GenericClientScriptRegistry(directory).readSource("custom"));
-	}
-
-	@Test
-	public void aNewScriptCannotOverwriteAnotherRegisteredSourceFile() throws Exception
-	{
-		Path directory = temporaryFolder.newFolder("owned-source").toPath();
-		String manifest = "{\"schema\":\"genericclient_scripts\",\"scripts\":[{" +
-			"\"id\":\"custom\",\"name\":\"Custom\",\"description\":\"Existing\",\"file\":\"report.lua\"}]}";
-		String source = "return {run=function() return 'existing' end}";
-		Files.writeString(directory.resolve("manifest.json"), manifest);
-		Files.writeString(directory.resolve("report.lua"), source);
-		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
-
-		assertThrows(IllegalArgumentException.class, () -> registry.save(
-			"report", "Report", "New script", "return {run=function() end}"));
-
-		assertEquals(source, Files.readString(directory.resolve("report.lua")));
-		assertEquals(manifest, Files.readString(directory.resolve("manifest.json")));
-		assertEquals(1, registry.list().size());
-	}
-
-	@Test
-	public void composesOnlyManifestDeclaredModules() throws Exception
-	{
-		Path directory = temporaryFolder.newFolder("module-scripts").toPath();
-		Files.createDirectories(directory.resolve("example"));
-		Files.writeString(directory.resolve("manifest.json"),
-			"{\n" +
-			"  \"schema\": \"genericclient_scripts\",\n" +
-			"  \"scripts\": [{\n" +
-			"    \"id\": \"example\", \"name\": \"Example\",\n" +
-			"    \"description\": \"Modular example\", \"file\": \"example.lua\",\n" +
-			"    \"modules\": { \"maths\": \"example/maths.lua\" }\n" +
-			"  }]\n" +
-			"}\n");
-		Files.writeString(directory.resolve("example.lua"),
-			"local maths = gc.require('maths')\n" +
-			"return { run = function() return maths.answer end }\n");
-		Files.writeString(directory.resolve("example/maths.lua"),
-			"return { answer = 42 }\n");
-
-		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
-		String executable = registry.readExecutableSource("example");
-
-		assertTrue(executable.contains("gc.require = function(name)"));
-		assertTrue(executable.contains("__gc_module_loaders[\"maths\"]"));
-		assertTrue(executable.contains("return { answer = 42 }"));
-		assertEquals("return { answer = 42 }\n",
-			registry.readModuleSources("example").get("maths"));
-	}
-
-	@Test
-	public void registersAStandaloneSolverByRandomEventNpcId() throws Exception
-	{
-		Path directory = temporaryFolder.newFolder("random-event-solver").toPath();
-		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(directory);
-
-		registry.save(
-			"miles-solver",
-			"Miles Solver",
-			"Solve the Miles random event from observed dialogue state.",
-			"return { run = function() return gc.read('random_event') end }\n",
-			List.of(NpcID.MACRO_MILES, NpcID.MACRO_MILES_UNDERWATER));
-		GenericClientScriptRegistry reloaded = new GenericClientScriptRegistry(directory);
-
-		assertEquals("miles-solver", reloaded.findRandomEventSolver(NpcID.MACRO_MILES).getId());
-		assertEquals("miles-solver", reloaded.findRandomEventSolver(NpcID.MACRO_MILES_UNDERWATER).getId());
-		assertEquals(
-			List.of(NpcID.MACRO_MILES, NpcID.MACRO_MILES_UNDERWATER),
-			reloaded.get("miles-solver").getRandomEvents());
-		assertTrue(Files.readString(directory.resolve("manifest.json")).contains("\"random_events\""));
 		try
 		{
-			reloaded.save(
-				"another-miles-solver",
-				"Another Miles Solver",
-				"Conflicting registration.",
-				"return { run = function() end }\n",
-				List.of(NpcID.MACRO_MILES));
-			throw new AssertionError("Expected duplicate solver registration to fail");
+			new GenericClientScriptRegistry(temporary.newFolder().toPath()).compile("../Outside", "");
+			fail("Traversal accepted");
 		}
-		catch (IllegalArgumentException exception)
-		{
-			assertTrue(exception.getMessage().contains("already handled"));
-		}
+		catch (IllegalArgumentException expected) { assertEquals("A Java class name is required", expected.getMessage()); }
 	}
 
-	@Test
-	public void rejectsDuplicateOrUnknownRandomEventNpcIds() throws Exception
+	@Test public void invalidIdsAndUndetectableEventNpcsAreRejectedBeforeInstallation() throws Exception
 	{
-		Path directory = temporaryFolder.newFolder("duplicate-random-events").toPath();
-		Files.writeString(directory.resolve("manifest.json"),
-			"{\n" +
-			"  \"schema\": \"genericclient_scripts\",\n" +
-			"  \"scripts\": [\n" +
-			"    { \"id\": \"one\", \"name\": \"One\", \"description\": \"First\", " +
-				"\"file\": \"one.lua\", \"random_events\": [" + NpcID.MACRO_MILES + "] },\n" +
-			"    { \"id\": \"two\", \"name\": \"Two\", \"description\": \"Second\", " +
-				"\"file\": \"two.lua\", \"random_events\": [" + NpcID.MACRO_MILES + "] }\n" +
-			"  ]\n" +
-			"}\n");
-		Files.writeString(directory.resolve("one.lua"), "return { run = function() end }\n");
-		Files.writeString(directory.resolve("two.lua"), "return { run = function() end }\n");
-
-		try
+		for (String settings : List.of("@ScriptSettings(id=\" \" )", "@ScriptSettings(id=\"invalid\",randomEvents={-1})"))
 		{
-			new GenericClientScriptRegistry(directory);
-			throw new AssertionError("Expected duplicate random-event mapping to fail");
-		}
-		catch (java.io.IOException exception)
-		{
-			assertTrue(exception.getMessage().contains("already handled"));
-		}
-
-		GenericClientScriptRegistry registry = new GenericClientScriptRegistry(
-			temporaryFolder.newFolder("unknown-random-event").toPath());
-		try
-		{
-			registry.save(
-				"not-random",
-				"Not random",
-				"Invalid registration.",
-				"return { run = function() end }\n",
-				List.of(1));
-			throw new AssertionError("Expected unknown random-event NPC id to fail");
-		}
-		catch (IllegalArgumentException exception)
-		{
-			assertTrue(exception.getMessage().contains("not a supported random-event NPC"));
+			Path directory=temporary.newFolder().toPath();
+			GenericClientScriptRegistry registry=new GenericClientScriptRegistry(directory);
+			try
+			{
+				registry.compile("Invalid",GenericClientTestSupport.javaScript("Invalid",settings,"public int onLoop(){return -1;}"));
+				fail("Invalid entry installed: " + settings);
+			}
+			catch (java.io.IOException expected)
+			{
+				assertTrue(expected.getMessage(),expected.getMessage().contains("Script id must not be blank") ||
+					expected.getMessage().contains("Unsupported random-event NPC"));
+			}
+			assertTrue(new GenericClientScriptRegistry(directory).list().isEmpty());
 		}
 	}
 }

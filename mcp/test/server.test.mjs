@@ -23,8 +23,8 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
       reached: { x: 2906, y: 9876, plane: 0 },
     },
   };
-  const code = "return gc.walk.to { destination = {x=2906,y=9876,plane=0}, interrupt_on = {dialogue=true} }";
-  const intentCode = "return gc.intent('bank.open', function() return gc.await {action={type='npc.interact', name='Banker', action='Bank'}} end)";
+  const code = `return com.genericclient.script.Navigation.walk(new com.genericclient.script.Navigation.Journey(new org.dreambot.api.methods.map.Tile(2906,9876),0),Map.of("dialogue",true),null);`;
+  const intentCode = `return Automation.intent("bank.open",()->ScriptScope.current().execute("npc.interact",Map.of("name","Banker","action","Bank"),120000));`;
   const intentReceipt = {
     status: "completed",
     value: { status: "dispatched", intent: "bank.open", click_count: 1, behavior_before: {}, behavior_after: {} },
@@ -43,7 +43,7 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
           height: 503,
         };
       }
-      if (method === "lua.eval") return params.code === code ? journey : intentReceipt;
+      if (method === "java.eval") return params.code === code ? journey : intentReceipt;
       return "ok";
     },
   };
@@ -82,15 +82,14 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
     "automation_reload",
     "session_logout",
     "session_login",
-    "lua_eval",
-    "lua_repl_reset",
+    "java_eval",
     "script_list",
     "script_get",
-    "script_save",
+    "script_compile",
     "script_run",
     "script_stop",
     "script_action",
-    "script_reload_manifest",
+    "script_reload",
   ]);
 
   const response = await client.callTool({ name: "client_status", arguments: {} });
@@ -117,7 +116,7 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
   await client.callTool({ name: "random_event_acknowledge", arguments: {} });
   await client.callTool({
     name: "random_event_complete",
-    arguments: { reason: "solved_from_repl", resume_interrupted: false },
+    arguments: { reason: "solved_from_java", resume_interrupted: false },
   });
   await client.callTool({ name: "automation_status", arguments: {} });
   await client.callTool({ name: "automation_config_get", arguments: {} });
@@ -137,13 +136,10 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
   await client.callTool({ name: "automation_resume", arguments: {} });
   await client.callTool({ name: "automation_reload", arguments: {} });
   await client.callTool({
-    name: "script_save",
+    name: "script_compile",
     arguments: {
-      id: "miles-solver",
-      name: "Miles Solver",
-      description: "Solve the Miles random event.",
-      source: "return { run = function() return 'solved' end }",
-      random_events: [5437],
+      class_name: "MilesSolver",
+      source: "public class MilesSolver {}",
     },
   });
   await client.callTool({
@@ -151,9 +147,9 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
     arguments: { id: "walker", inputs: { destination: "varrock_center" } },
   });
   await client.callTool({ name: "script_action", arguments: { action: "snapshot_now" } });
-  const walked = await client.callTool({ name: "lua_eval", arguments: { code } });
+  const walked = await client.callTool({ name: "java_eval", arguments: { code } });
   assert.deepEqual(JSON.parse(walked.content[0].text), journey);
-  const opened = await client.callTool({ name: "lua_eval", arguments: { code: intentCode } });
+  const opened = await client.callTool({ name: "java_eval", arguments: { code: intentCode } });
   assert.deepEqual(JSON.parse(opened.content[0].text), intentReceipt);
   assert.deepEqual(calls, [
     { method: "status", params: {} },
@@ -168,7 +164,7 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
     { method: "random_event.acknowledge", params: {} },
     {
       method: "random_event.complete",
-      params: { reason: "solved_from_repl", resume_interrupted: false },
+      params: { reason: "solved_from_java", resume_interrupted: false },
     },
     { method: "automation.status", params: {} },
     { method: "automation.config.get", params: {} },
@@ -178,13 +174,10 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
     { method: "automation.resume", params: {} },
     { method: "automation.reload", params: {} },
     {
-      method: "scripts.save",
+      method: "scripts.compile",
       params: {
-        id: "miles-solver",
-        name: "Miles Solver",
-        description: "Solve the Miles random event.",
-        source: "return { run = function() return 'solved' end }",
-        random_events: [5437],
+        class_name: "MilesSolver",
+        source: "public class MilesSolver {}",
       },
     },
     {
@@ -192,7 +185,7 @@ test("MCP server exposes tools and forwards calls to GenericClient", async (cont
       params: { id: "walker", inputs: { destination: "varrock_center" } },
     },
     { method: "scripts.action", params: { action: "snapshot_now" } },
-    { method: "lua.eval", params: { code } },
-    { method: "lua.eval", params: { code: intentCode } },
+    { method: "java.eval", params: { code } },
+    { method: "java.eval", params: { code: intentCode } },
   ]);
 });

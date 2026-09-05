@@ -19,7 +19,7 @@ final class GenericClientEmergencyTestFixtures
 			1,
 			"LOGGED_IN",
 			231,
-			new GenericClientWorldSnapshot.PlayerSnapshot(
+			new GenericClientPlayerSnapshot(1L,
 				"Player", 3200, 3200, 0, 0, -1, null,
 				hitpoints, maximumHitpoints, 10_000, false, null),
 			Collections.emptyList());
@@ -54,7 +54,7 @@ final class GenericClientEmergencyTestFixtures
 			gameTick,
 			"LOGGED_IN",
 			231,
-			new GenericClientWorldSnapshot.PlayerSnapshot(
+			new GenericClientPlayerSnapshot(1L,
 				"Player", 3200, 3200, 0, 0, -1, null,
 				hitpoints, maximumHitpoints, 10_000, false, null),
 			Collections.emptyList(),

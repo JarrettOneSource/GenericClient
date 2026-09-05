@@ -12,7 +12,7 @@ import org.junit.Test;
 public class GenericClientSpellInputTest
 {
 	@Test
-	public void resolvesSupportedSpellNamesWithoutExposingWidgetIdsToLua()
+	public void resolvesSupportedSpellNamesWithoutExposingWidgetIdsToScripts()
 	{
 		assertEquals(GenericClientSpellInput.Spell.WIND_STRIKE,
 			GenericClientSpellInput.Spell.fromName("Wind Strike"));

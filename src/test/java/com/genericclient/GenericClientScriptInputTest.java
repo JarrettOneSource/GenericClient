@@ -2,9 +2,7 @@ package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
 
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.Test;
@@ -14,17 +12,8 @@ public class GenericClientScriptInputTest
 	@Test
 	public void parsesChoicesAndResolvesDefaultsOrSelections()
 	{
-		Map<String, Object> input = new LinkedHashMap<>();
-		input.put("id", "destination");
-		input.put("label", "Destination");
-		input.put("type", "choice");
-		input.put("default", "varrock");
-		input.put("choices", Arrays.asList(
-			choice("grand_exchange", "Grand Exchange"),
-			choice("varrock", "Varrock")));
-
-		List<GenericClientScriptInput> parsed =
-			GenericClientScriptInput.parse(Collections.singletonList(input));
+		List<GenericClientScriptInput> parsed = GenericClientScriptInput.from(
+			Configured.class.getAnnotation(com.genericclient.script.ScriptSettings.class).inputs());
 
 		assertEquals(1, parsed.size());
 		assertEquals("Destination", parsed.get(0).getLabel());
@@ -40,13 +29,8 @@ public class GenericClientScriptInputTest
 	@Test
 	public void rejectsUnknownInputsAndInvalidChoices()
 	{
-		Map<String, Object> input = new LinkedHashMap<>();
-		input.put("id", "destination");
-		input.put("label", "Destination");
-		input.put("type", "choice");
-		input.put("choices", Collections.singletonList(choice("varrock", "Varrock")));
-		List<GenericClientScriptInput> parsed =
-			GenericClientScriptInput.parse(Collections.singletonList(input));
+		List<GenericClientScriptInput> parsed = GenericClientScriptInput.from(
+			Configured.class.getAnnotation(com.genericclient.script.ScriptSettings.class).inputs());
 
 		assertFailure(parsed, Collections.singletonMap("destination", "falador"),
 			"Invalid value for script input destination: falador");
@@ -54,13 +38,9 @@ public class GenericClientScriptInputTest
 			"Unknown script input: extra");
 	}
 
-	private static Map<String, Object> choice(String value, String label)
-	{
-		Map<String, Object> choice = new LinkedHashMap<>();
-		choice.put("value", value);
-		choice.put("label", label);
-		return choice;
-	}
+	@com.genericclient.script.ScriptSettings(id="test",inputs=@com.genericclient.script.ScriptSettings.Input(
+		id="destination",label="Destination",choices={"grand_exchange","varrock"},labels={"Grand Exchange","Varrock"},defaultValue="varrock"))
+	private static final class Configured {}
 
 	private static void assertFailure(
 		List<GenericClientScriptInput> inputs,

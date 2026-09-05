@@ -1,10 +1,10 @@
 # Automation scheduling
 
-GenericClient can select one registered Lua script from declarative time and
-account-state rules. The scheduler sits above the Lua host:
+GenericClient can select one registered Java script from declarative time and
+account-state rules. The scheduler sits above the script host:
 
 ```text
-named schedule windows -> three-valued rule engine -> script lease -> Lua host
+named schedule windows -> three-valued rule engine -> script lease -> script host
 ```
 
 Schedules answer **when** a rule may operate. Conditions answer **whether** the
@@ -171,7 +171,7 @@ before cash-dependent work is eligible.
 
 ## Selection and lifecycle
 
-- The highest numeric priority wins when the Lua host is idle. Source order
+- The highest numeric priority wins when the script host is idle. Source order
   breaks equal-priority ties.
 - The winning rule receives a sticky `rule:<id>` script lease.
 - A running scheduled rule is not preempted merely because a higher-priority
@@ -190,7 +190,7 @@ before cash-dependent work is eligible.
 
 Rules are eligibility policy, not action authorization. Exact XP caps, cash
 reserves, item restrictions, and encounter safety remain enforced inside the
-selected Lua script.
+selected Java script.
 
 ## Control surfaces
 
@@ -216,3 +216,6 @@ GenericClient process is running. Starting RuneLite when it is completely
 closed is a separate operating-system responsibility, such as Windows Task
 Scheduler. That supervisor can launch GenericClient; the in-client rules remain
 the sole authority for script selection.
+
+Scheduled stops call the Java script's `onScheduledStop()` before revoking input.
+A false return defers that stop; manual and ESC stops remain unconditional.

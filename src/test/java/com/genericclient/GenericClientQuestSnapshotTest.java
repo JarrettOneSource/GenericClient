@@ -59,12 +59,12 @@ public class GenericClientQuestSnapshotTest
 			"getName".equals(method) ? "Tree door" : "getActions".equals(method) ? new String[]{"Open"} : null);
 		Client client = proxy(Client.class, (method, arguments) ->
 			"getVarps".equals(method) ? new int[0] : "getObjectDefinition".equals(method) ? definition : null);
-		GenericClientQuestSnapshot captured = GenericClientQuestSnapshot.capture(client, player);
+		GenericClientQuestSnapshot captured = GenericClientQuestSnapshot.capture(client, player, new GenericClientEntityIds());
 		width.set(1);
 		int[][] flags = new int[12][12];
 		for (int x = 2; x <= 6; x++) flags[x][5] = CollisionDataFlag.BLOCK_MOVEMENT_FULL;
 		GenericClientSnapshot snapshot = new GenericClientSnapshot(1, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 2465, 3491, 0, 0), List.of(),
+			new GenericClientPlayerSnapshot(1L, "Player", 2465, 3491, 0, 0), List.of(),
 			GenericClientAccountSnapshot.empty(), captured, List.of(),
 			new GenericClientSceneCollision(true, 2460, 3487, 0, flags));
 		assertTrue(snapshot.canPlanMove(2465, 3491, 0, 0, 1, false));
@@ -137,11 +137,11 @@ public class GenericClientQuestSnapshotTest
 			true,
 			new int[0],
 			Arrays.asList(
-				new GenericClientQuestSnapshot.ObjectSnapshot(
+				new GenericClientQuestSnapshot.ObjectSnapshot(3L,
 					2005, "Stone pillar", "game", 2562, 9910, 0, 2, Collections.singletonList("Use")),
-				new GenericClientQuestSnapshot.ObjectSnapshot(
+				new GenericClientQuestSnapshot.ObjectSnapshot(3L,
 					2005, "Stone pillar", "game", 2569, 9910, 0, 5, Collections.singletonList("Use")),
-				new GenericClientQuestSnapshot.ObjectSnapshot(
+				new GenericClientQuestSnapshot.ObjectSnapshot(3L,
 					2006, "Statue of Glarial", "game", 2603, 9915, 0, 8, Collections.singletonList("Use"))),
 			GenericClientQuestSnapshot.DialogueSnapshot.closed());
 		Map<String, Object> query = new LinkedHashMap<>();
@@ -222,6 +222,22 @@ public class GenericClientQuestSnapshotTest
 		});
 		Tile[][][] tiles = new Tile[1][104][104];
 		tiles[0][50][50] = tile;
+		GenericClientQuestSnapshot snapshot = capture(tiles);
+		assertEquals(Collections.emptyList(), snapshot.read("ground_items", Collections.emptyMap()));
+	}
+
+	@Test public void sceneUnloadingCanPublishAnEmptyTileGrid()
+	{
+		for (Tile[][][] tiles : List.of(new Tile[0][][], new Tile[1][0][], new Tile[1][1][0]))
+		{
+			GenericClientQuestSnapshot snapshot = capture(tiles);
+			assertEquals(List.of(), snapshot.read("objects", Map.of()));
+			assertEquals(List.of(), snapshot.read("ground_items", Map.of()));
+		}
+	}
+
+	private static GenericClientQuestSnapshot capture(Tile[][][] tiles)
+	{
 		Scene scene = proxy(Scene.class, (method, arguments) ->
 			"getTiles".equals(method) ? tiles : null);
 		WorldView worldView = proxy(WorldView.class, (method, arguments) ->
@@ -255,10 +271,7 @@ public class GenericClientQuestSnapshotTest
 		Client client = proxy(Client.class, (method, arguments) ->
 			"getVarps".equals(method) ? new int[0] : null);
 
-		GenericClientQuestSnapshot snapshot = GenericClientQuestSnapshot.capture(client, player);
-
-		assertEquals(Collections.emptyList(),
-			snapshot.read("ground_items", Collections.emptyMap()));
+		return GenericClientQuestSnapshot.capture(client, player, new GenericClientEntityIds());
 	}
 
 	private static <T> T proxy(Class<T> type, Invocation invocation)

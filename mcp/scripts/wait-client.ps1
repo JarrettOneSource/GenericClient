@@ -49,7 +49,7 @@ if ($StartScript) {
     }
     $beforeStart = Invoke-GenericClientStatus
     if ($RunId -eq 0) {
-        $minimumRunId = [int]$beforeStart.lua.run_id + 1
+        $minimumRunId = [int]$beforeStart.scripts.run_id + 1
     }
     if ($null -ne $beforeStart.death_forensics.last_death_tick) {
         $baselineDeathTick = [long]$beforeStart.death_forensics.last_death_tick
@@ -69,10 +69,10 @@ if ($StartScript) {
 while ([DateTimeOffset]::UtcNow -lt $deadline) {
     try {
         $status = Invoke-GenericClientStatus
-        $active = $status.lua.active
-        $activeScript = [string]$status.lua.active_script
-        $activeRunId = [int]$status.lua.run_id
-        $scriptStatus = [string]$status.lua.script_status
+        $active = $status.scripts.active
+        $activeScript = [string]$status.scripts.active_script
+        $activeRunId = [int]$status.scripts.run_id
+        $scriptStatus = [string]$status.scripts.script_status
         $resultStatus = [string]$active.result.status
 		$safetyLastEvent = [string]$status.safety.last_event
 		$safetyRecovering = [bool]$status.safety.recovering
@@ -106,7 +106,7 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
             $observedRun = $true
         }
 
-        $phase = [string]$status.lua.script_state
+        $phase = [string]$status.scripts.script_state
 
         $state = [ordered]@{
             game = [string]$status.game_state
@@ -209,7 +209,7 @@ while ([DateTimeOffset]::UtcNow -lt $deadline) {
 		$waitingForEmergency = $requestedRunDisappeared -and $disappearedDuringEmergency -and
 			($emergencyStillInFlight -or -not $emergencyGraceComplete)
 		if (($requestedRunDisappeared -and -not $waitingForEmergency) -or
-			($observedRun -and $requestedRunStillVisible -and $scriptStatus -eq "IDLE")) {
+			($observedRun -and $requestedRunStillVisible -and $scriptStatus -in @("IDLE", "STOPPED"))) {
 			exit 5
 		}
     }

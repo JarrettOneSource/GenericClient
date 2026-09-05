@@ -1,5 +1,7 @@
 # Behavior framework review
 
+Historical review of the pre-cutover runtime. Its source paths and measurements describe that revision; use [Java scripting](java-scripting.md) and the [migration checklist](java-scripting-migration.md) for the current implementation.
+
 Date: 2026-09-04
 
 Scope: `GenericClientBehaviorController`, `GenericClientActivityContext`,

@@ -41,7 +41,7 @@ final class GenericClientDamageTracker
 			return Damage.NONE;
 		}
 		if (previous != null && (!snapshot.getPlayer().getName().equals(previous.getPlayer().getName()) ||
-			snapshot.getPlayer().getWorldViewId() != previous.getPlayer().getWorldViewId())) previous = null;
+			snapshot.getPlayer().worldViewId != previous.getPlayer().worldViewId)) previous = null;
 		Damage result = classify(snapshot, threatsPresent);
 		previous = snapshot;
 		previousThreat = threatsPresent;

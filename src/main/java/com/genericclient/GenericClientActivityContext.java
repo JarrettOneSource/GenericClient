@@ -1,6 +1,7 @@
 package com.genericclient;
 
 import java.util.Locale;
+import java.util.Map;
 
 /** Declared behavior and input authority captured for one semantic action. */
 final class GenericClientActivityContext
@@ -34,6 +35,40 @@ final class GenericClientActivityContext
 	GenericClientActivityContext withPolicy(Object overrides)
 	{
 		return new GenericClientActivityContext(activity, declaredPolicy.withOverrides(overrides), humanize, intent, ticket, resolver);
+	}
+
+	static GenericClientActivityContext forOperation(String type, Map<String, Object> options,
+		GenericClientActivityContext declared, boolean operator)
+	{
+		if (options.containsKey("breaks")) throw new IllegalArgumentException("Unknown operation option: breaks");
+		GenericClientActivityContext context = declared;
+		if (options.containsKey("activity"))
+		{
+			if (!(options.get("activity") instanceof String))
+				throw new IllegalArgumentException("activity must be a string");
+			context = preset(Activity.fromName((String) options.get("activity")));
+		}
+		if (context == null) context = preset(actionActivity(type, options));
+		context = context.withPolicy(options.get("policy"));
+		return booleanOption(options, "humanize", !operator) ? context : context.plain();
+	}
+
+	private static boolean booleanOption(Map<String, Object> options, String key, boolean defaultValue)
+	{
+		if (!options.containsKey(key)) return defaultValue;
+		if (!(options.get(key) instanceof Boolean)) throw new IllegalArgumentException(key + " must be true or false");
+		return (Boolean) options.get(key);
+	}
+
+	private static Activity actionActivity(String type, Map<String, Object> options)
+	{
+		String action = type.equals("npc.interact") || type.equals("player.interact") ? String.valueOf(options.get("action")) : "";
+		if (type.startsWith("bank.") || action.equalsIgnoreCase("Bank")) return Activity.BANKING;
+		if (type.startsWith("ge.") || action.equalsIgnoreCase("Exchange") || action.equalsIgnoreCase("Trade with")) return Activity.TRADING;
+		if (type.startsWith("combat.") || action.equalsIgnoreCase("Attack")) return Activity.COMBAT;
+		if (type.startsWith("dialogue.") || action.equalsIgnoreCase("Talk-to")) return Activity.DIALOGUE;
+		if (type.startsWith("walk.") || type.startsWith("travel.")) return Activity.TRAVEL;
+		return Activity.GENERAL;
 	}
 
 	GenericClientActivityContext plain()

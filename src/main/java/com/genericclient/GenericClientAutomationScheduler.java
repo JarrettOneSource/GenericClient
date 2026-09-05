@@ -51,12 +51,12 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 
 	GenericClientAutomationScheduler(
 		Path directory,
-		GenericClientLuaHost luaHost,
+		GenericClientScriptHost scriptHost,
 		Consumer<String> reporter) throws IOException
 	{
 		this(
 			new GenericClientAutomationStore(directory, ZoneId.systemDefault().getId()),
-			new LuaRuntimeAdapter(luaHost),
+			new ScriptRuntimeAdapter(scriptHost),
 			new GenericClientRuleEngine(),
 			Clock.systemUTC(),
 			newExecutor(),
@@ -302,7 +302,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		Map<String, Object> account = accountSnapshot();
 		GenericClientRuleEngine.Evaluation decision = ruleEngine.evaluate(
 			config, scheduleSnapshot, account, state.getCooldowns(), now);
-		GenericClientLuaRun.State run = runtime.getRunState();
+		GenericClientScriptHost.RunState run = runtime.getRunState();
 		boolean attentionPending = attentionRequired;
 		String attentionDetail = attentionReason;
 		boolean pausePending = state.isPaused() || manualPauseRequested;
@@ -334,7 +334,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 	}
 
 	private AutomationMode selectMode(
-		GenericClientLuaRun.State run,
+		GenericClientScriptHost.RunState run,
 		GenericClientRuleEngine.Evaluation decision,
 		boolean attentionPending,
 		String attentionDetail,
@@ -404,7 +404,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		return new AutomationMode("running", "rule " + owner + " retains its script lease");
 	}
 
-	private void handleTerminalRun(GenericClientLuaRun.State run, long now)
+	private void handleTerminalRun(GenericClientScriptHost.RunState run, long now)
 	{
 		String ruleId = run.getRuleId();
 		GenericClientAutomationConfig.RuleSpec rule = config.getRule(ruleId);
@@ -438,7 +438,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 					reporter.accept("AUTOMATION_START_FAILED rule=" + rule.getId() +
 						" message=" + rootMessage(error));
 				}
-				else if (result.contains("LUA_START_SKIPPED"))
+				else if (result.contains("SCRIPT_START_SKIPPED"))
 				{
 					state.setActiveRule(null);
 					state.setLastEvent("start_skipped:" + rule.getId());
@@ -475,7 +475,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		}));
 	}
 
-	private void stopIfOwned(GenericClientLuaRun.State run, String reason)
+	private void stopIfOwned(GenericClientScriptHost.RunState run, String reason)
 	{
 		if (run.isRunning() && run.getRuleId() != null)
 		{
@@ -485,7 +485,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 
 	private void stopOwnedRun(String reason)
 	{
-		GenericClientLuaRun.State run = runtime.getRunState();
+		GenericClientScriptHost.RunState run = runtime.getRunState();
 		if (run.isRunning() && run.getRuleId() != null)
 		{
 			try
@@ -518,7 +518,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		String trigger,
 		GenericClientSchedule.Snapshot scheduleSnapshot,
 		GenericClientRuleEngine.Evaluation decision,
-		GenericClientLuaRun.State run,
+		GenericClientScriptHost.RunState run,
 		boolean pausePending,
 		boolean attentionPending)
 	{
@@ -710,16 +710,16 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 
 		CompletableFuture<String> stopScheduled(String ruleId, String reason);
 
-		GenericClientLuaRun.State getRunState();
+		GenericClientScriptHost.RunState getRunState();
 
 		void setManualStopListener(Runnable listener);
 	}
 
-	private static final class LuaRuntimeAdapter implements Runtime
+	private static final class ScriptRuntimeAdapter implements Runtime
 	{
-		private final GenericClientLuaHost host;
+		private final GenericClientScriptHost host;
 
-		private LuaRuntimeAdapter(GenericClientLuaHost host)
+		private ScriptRuntimeAdapter(GenericClientScriptHost host)
 		{
 			this.host = host;
 		}
@@ -727,13 +727,13 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		@Override
 		public List<Map<String, Object>> listScriptValues()
 		{
-			return host.catalog.listScriptValues();
+			return host.listScriptValues();
 		}
 
 		@Override
 		public CompletableFuture<List<GenericClientScriptInput>> describe(String scriptId)
 		{
-			return host.catalog.describe(scriptId);
+			return host.describe(scriptId);
 		}
 
 		@Override
@@ -752,7 +752,7 @@ final class GenericClientAutomationScheduler implements AutoCloseable
 		}
 
 		@Override
-		public GenericClientLuaRun.State getRunState()
+		public GenericClientScriptHost.RunState getRunState()
 		{
 			return host.getRunState();
 		}

@@ -37,6 +37,7 @@ final class GenericClientNpcInput
 	private final GenericClientMenuInput menuInput;
 	private final GenericClientCameraOwner cameraOwner;
 	private final Consumer<String> reporter;
+	private final GenericClientEntityIds identities;
 
 	GenericClientNpcInput(
 		Client client,
@@ -44,7 +45,7 @@ final class GenericClientNpcInput
 		ScheduledExecutorService executor,
 		GenericClientMenuInput menuInput,
 		GenericClientCameraOwner cameraOwner,
-		Consumer<String> reporter)
+		Consumer<String> reporter, GenericClientEntityIds identities)
 	{
 		this.client = client;
 		this.clientThread = clientThread;
@@ -52,19 +53,12 @@ final class GenericClientNpcInput
 		this.menuInput = menuInput;
 		this.cameraOwner = cameraOwner;
 		this.reporter = reporter;
-	}
-
-	CompletableFuture<Map<String, Object>> interact(
-		String name,
-		String action,
-		int within,
-		GenericClientActivityContext activityContext)
-	{
-		return interact(null, name, action, within, activityContext);
+		this.identities = identities;
 	}
 
 	CompletableFuture<Map<String, Object>> interact(
 		Integer id,
+		Integer index, Long identity,
 		String name,
 		String action,
 		int within,
@@ -82,11 +76,12 @@ final class GenericClientNpcInput
 		String cleanAction = requireText(action, "NPC action");
 		validateRadius(within);
 		return interactWithCamera(
-			cleanName, id, cleanAction, within, null, activityContext);
+			cleanName, id, index, identity, cleanAction, within, null, activityContext);
 	}
 
 	CompletableFuture<Map<String, Object>> useSelectedItemOnNpc(
 		Integer npcId,
+		Integer npcIndex, Long identity,
 		String npcName,
 		int within,
 		int itemId,
@@ -97,6 +92,7 @@ final class GenericClientNpcInput
 		return interactWithCamera(
 			npcName,
 			npcId,
+			npcIndex, identity,
 			"Use",
 			within,
 			SelectedWidget.item(itemId, itemName),
@@ -105,6 +101,7 @@ final class GenericClientNpcInput
 
 	CompletableFuture<Map<String, Object>> castSelectedSpellOnNpc(
 		Integer npcId,
+		Integer npcIndex, Long identity,
 		String npcName,
 		int within,
 		int spellWidgetId,
@@ -115,6 +112,7 @@ final class GenericClientNpcInput
 		return interactWithCamera(
 			npcName,
 			npcId,
+			npcIndex, identity,
 			"Cast",
 			within,
 			SelectedWidget.spell(spellWidgetId, spellName),
@@ -124,6 +122,7 @@ final class GenericClientNpcInput
 	private CompletableFuture<Map<String, Object>> interactWithCamera(
 		String name,
 		Integer id,
+		Integer index, Long identity,
 		String action,
 		int within,
 		SelectedWidget requestedSelection,
@@ -131,7 +130,7 @@ final class GenericClientNpcInput
 	{
 		GenericClientCameraOwner.Operation cameraOperation = cameraOwner.begin(activityContext);
 		GenericClientMenuInput.TargetResolver resolver = () -> resolveNpc(
-			name, id, action, within, requestedSelection);
+			name, id, index, identity, action, within, requestedSelection);
 		return menuInput.interact(resolver, activityContext).thenCompose(receipt ->
 		{
 			if (!cameraOperation.isActive())
@@ -139,7 +138,7 @@ final class GenericClientNpcInput
 				return CompletableFuture.completedFuture(receipt);
 			}
 			return retryWithCamera(
-				resolver, receipt, name, id, within, activityContext,
+				resolver, receipt, name, id, index, identity, within, activityContext,
 				cameraOperation, 0, 0);
 		});
 	}
@@ -149,6 +148,7 @@ final class GenericClientNpcInput
 		Map<String, Object> receipt,
 		String name,
 		Integer id,
+		Integer index, Long identity,
 		int within,
 		GenericClientActivityContext activityContext,
 		GenericClientCameraOwner.Operation cameraOperation,
@@ -165,7 +165,7 @@ final class GenericClientNpcInput
 			if (isSceneRetryable(result) && sceneAttempt < MAX_SCENE_RETRIES)
 			{
 				return retryAfterSceneSettles(
-					resolver, receipt, name, id, within, activityContext,
+					resolver, receipt, name, id, index, identity, within, activityContext,
 					cameraOperation, sceneAttempt);
 			}
 			return CompletableFuture.completedFuture(receipt);
@@ -174,14 +174,14 @@ final class GenericClientNpcInput
 		{
 			return CompletableFuture.completedFuture(receipt);
 		}
-		return faceNpc(name, id, within, cameraOperation).thenCompose(faced ->
+		return faceNpc(name, id, index, identity, within, cameraOperation).thenCompose(faced ->
 		{
 			if (!faced)
 			{
 				if (sceneAttempt < MAX_SCENE_RETRIES)
 				{
 					return retryAfterSceneSettles(
-						resolver, receipt, name, id, within, activityContext,
+						resolver, receipt, name, id, index, identity, within, activityContext,
 						cameraOperation, sceneAttempt);
 				}
 				return CompletableFuture.completedFuture(receipt);
@@ -192,7 +192,7 @@ final class GenericClientNpcInput
 			}
 			return menuInput.interact(resolver, activityContext)
 				.thenCompose(next -> retryWithCamera(
-					resolver, next, name, id, within, activityContext,
+					resolver, next, name, id, index, identity, within, activityContext,
 					cameraOperation, cameraAttempt + 1, sceneAttempt));
 		});
 	}
@@ -202,6 +202,7 @@ final class GenericClientNpcInput
 		Map<String, Object> previousReceipt,
 		String name,
 		Integer id,
+		Integer index, Long identity,
 		int within,
 		GenericClientActivityContext activityContext,
 		GenericClientCameraOwner.Operation cameraOperation,
@@ -220,7 +221,7 @@ final class GenericClientNpcInput
 			}
 			menuInput.interact(resolver, activityContext)
 				.thenCompose(next -> retryWithCamera(
-					resolver, next, name, id, within, activityContext,
+					resolver, next, name, id, index, identity, within, activityContext,
 					cameraOperation, 0, nextAttempt))
 				.whenComplete((receipt, error) ->
 				{
@@ -254,6 +255,7 @@ final class GenericClientNpcInput
 	private CompletableFuture<Boolean> faceNpc(
 		String name,
 		Integer id,
+		Integer index, Long identity,
 		int within,
 		GenericClientCameraOwner.Operation cameraOperation)
 	{
@@ -271,7 +273,7 @@ final class GenericClientNpcInput
 				result.complete(false);
 				return;
 			}
-			NPC target = closestNpc(player, name, id, within);
+			NPC target = closestNpc(player, name, id, index, identity, within);
 			if (target == null)
 			{
 				result.complete(false);
@@ -303,7 +305,7 @@ final class GenericClientNpcInput
 		return result;
 	}
 
-	private static NPC closestNpc(Player player, String name, Integer id, int within)
+	private NPC closestNpc(Player player, String name, Integer id, Integer index, Long identity, int within)
 	{
 		NPC closest = null;
 		int closestDistance = Integer.MAX_VALUE;
@@ -311,6 +313,8 @@ final class GenericClientNpcInput
 		{
 			if (npc == null || npc.getWorldLocation() == null ||
 				(id != null && npc.getId() != id) ||
+			(index != null && npc.getIndex() != index) ||
+			(identity != null && !identities.matches(npc,identity)) ||
 				(name != null && !name.equalsIgnoreCase(Objects.toString(npc.getName(), ""))))
 			{
 				continue;
@@ -366,6 +370,7 @@ final class GenericClientNpcInput
 	private GenericClientMenuInput.Resolution resolveNpc(
 		String name,
 		Integer id,
+		Integer index, Long identity,
 		String action,
 		int within,
 		SelectedWidget requestedSelection)
@@ -385,13 +390,14 @@ final class GenericClientNpcInput
 			return GenericClientMenuInput.Resolution.rejected("local_player_unavailable");
 		}
 
-		NpcSearch search = findNpc(player, name, id, action, within, requestedSelection);
+		NpcSearch search = findNpc(player, name, id, index, identity, action, within, requestedSelection);
 		if (search.npc == null)
 		{
 			return missingNpc(search, requestedSelection);
 		}
 
 		NPC targetNpc = search.npc;
+		long resolvedIdentity = identities.identify(targetNpc);
 		Map<String, Object> value = npcMap(targetNpc);
 		if (requestedSelection != null)
 		{
@@ -403,7 +409,7 @@ final class GenericClientNpcInput
 			action,
 			description,
 			value,
-			entry -> menuEntryMatches(entry, targetNpc, action, requestedSelection),
+			entry -> identities.matches(targetNpc,resolvedIdentity) && menuEntryMatches(entry, targetNpc, action, requestedSelection),
 			search.shape));
 	}
 
@@ -423,6 +429,7 @@ final class GenericClientNpcInput
 		Player player,
 		String name,
 		Integer id,
+		Integer index, Long identity,
 		String action,
 		int within,
 		SelectedWidget requestedSelection)
@@ -431,7 +438,7 @@ final class GenericClientNpcInput
 		WorldView worldView = player.getWorldView();
 		for (NPC npc : worldView.npcs())
 		{
-			if (!matchesRequest(npc, player, name, id, action, requestedSelection))
+			if (!matchesRequest(npc, player, name, id, index, identity, action, requestedSelection))
 			{
 				continue;
 			}
@@ -458,16 +465,19 @@ final class GenericClientNpcInput
 		return search;
 	}
 
-	private static boolean matchesRequest(
+	private boolean matchesRequest(
 		NPC npc,
 		Player player,
 		String name,
 		Integer id,
+		Integer index, Long identity,
 		String action,
 		SelectedWidget requestedSelection)
 	{
 		if (npc == null || npc.getWorldLocation() == null ||
 			(id != null && npc.getId() != id) ||
+			(index != null && npc.getIndex() != index) ||
+			(identity != null && !identities.matches(npc,identity)) ||
 			(name != null && !name.equalsIgnoreCase(Objects.toString(npc.getName(), ""))) ||
 			(requestedSelection == null && !hasAction(npc, action)))
 		{
@@ -496,7 +506,7 @@ final class GenericClientNpcInput
 		String action,
 		SelectedWidget requestedSelection)
 	{
-		return matchesNpc(entry, npc) && (requestedSelection == null
+		return entry.getNpc() == npc && (requestedSelection == null
 			? action.equalsIgnoreCase(entry.getOption())
 			: entry.getType() == MenuAction.WIDGET_TARGET_ON_NPC);
 	}
@@ -511,31 +521,6 @@ final class GenericClientNpcInput
 		return player != null && npc != null &&
 			player.getWorldArea() != null && npc.getWorldArea() != null &&
 			player.getWorldArea().hasLineOfSightTo(player.getWorldView(), npc.getWorldArea());
-	}
-
-	static int findNpcEntryIndex(MenuEntry[] entries, int npcIndex, String action)
-	{
-		for (int index = entries.length - 1; index >= 0; index--)
-		{
-			MenuEntry entry = entries[index];
-			NPC resolvedNpc = entry.getNpc();
-			boolean sameNpc = resolvedNpc == null
-				? entry.getIdentifier() == npcIndex
-				: resolvedNpc.getIndex() == npcIndex;
-			if (sameNpc && action.equalsIgnoreCase(entry.getOption()))
-			{
-				return index;
-			}
-		}
-		return -1;
-	}
-
-	private static boolean matchesNpc(MenuEntry entry, NPC npc)
-	{
-		NPC resolved = entry.getNpc();
-		return resolved == null
-			? entry.getIdentifier() == npc.getIndex()
-			: resolved.getIndex() == npc.getIndex();
 	}
 
 	private static boolean hasAction(NPC npc, String action)

@@ -2,8 +2,6 @@ package com.genericclient;
 
 import static com.genericclient.GenericClientWorldSnapshot.worldMap;
 
-import com.genericclient.GenericClientWorldSnapshot.PlayerSnapshot;
-import com.genericclient.GenericClientWorldSnapshot.NpcSnapshot;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -21,7 +19,6 @@ final class GenericClientSnapshot
 {
 	private static final java.util.regex.Pattern LOCKED_WORD =
 		java.util.regex.Pattern.compile("\\blocked\\b", java.util.regex.Pattern.CASE_INSENSITIVE);
-	private static final int MAX_QUERY_RESULTS = 100;
 	private static final Set<String> QUEST_SUBJECTS = Set.of(
 		"vars", "objects", "ground_items", "dialogue");
 	private static final Set<String> ACCOUNT_SUBJECTS = Set.of(
@@ -53,8 +50,8 @@ final class GenericClientSnapshot
 		long gameTick,
 		String gameState,
 		int gameRevision,
-		PlayerSnapshot player,
-		List<NpcSnapshot> npcs)
+		GenericClientPlayerSnapshot player,
+		List<GenericClientNpcSnapshot> npcs)
 	{
 		this(
 			gameTick,
@@ -72,8 +69,8 @@ final class GenericClientSnapshot
 		long gameTick,
 		String gameState,
 		int gameRevision,
-		PlayerSnapshot player,
-		List<NpcSnapshot> npcs,
+		GenericClientPlayerSnapshot player,
+		List<GenericClientNpcSnapshot> npcs,
 		GenericClientAccountSnapshot account)
 	{
 		this(
@@ -92,8 +89,8 @@ final class GenericClientSnapshot
 		long gameTick,
 		String gameState,
 		int gameRevision,
-		PlayerSnapshot player,
-		List<NpcSnapshot> npcs,
+		GenericClientPlayerSnapshot player,
+		List<GenericClientNpcSnapshot> npcs,
 		GenericClientAccountSnapshot account,
 		GenericClientQuestSnapshot quest)
 	{
@@ -105,8 +102,8 @@ final class GenericClientSnapshot
 		long gameTick,
 		String gameState,
 		int gameRevision,
-		PlayerSnapshot player,
-		List<NpcSnapshot> npcs,
+		GenericClientPlayerSnapshot player,
+		List<GenericClientNpcSnapshot> npcs,
 		GenericClientAccountSnapshot account,
 		GenericClientQuestSnapshot quest,
 		List<GenericClientGameMessageBuffer.Message> messages)
@@ -119,8 +116,8 @@ final class GenericClientSnapshot
 		long gameTick,
 		String gameState,
 		int gameRevision,
-		PlayerSnapshot player,
-		List<NpcSnapshot> npcs,
+		GenericClientPlayerSnapshot player,
+		List<GenericClientNpcSnapshot> npcs,
 		GenericClientAccountSnapshot account,
 		GenericClientQuestSnapshot quest,
 		List<GenericClientGameMessageBuffer.Message> messages,
@@ -134,8 +131,8 @@ final class GenericClientSnapshot
 		long gameTick,
 		String gameState,
 		int gameRevision,
-		PlayerSnapshot player,
-		List<NpcSnapshot> npcs,
+		GenericClientPlayerSnapshot player,
+		List<GenericClientNpcSnapshot> npcs,
 		GenericClientAccountSnapshot account,
 		GenericClientQuestSnapshot quest,
 		List<GenericClientGameMessageBuffer.Message> messages,
@@ -150,8 +147,8 @@ final class GenericClientSnapshot
 		long gameTick,
 		String gameState,
 		int gameRevision,
-		PlayerSnapshot player,
-		List<NpcSnapshot> npcs,
+		GenericClientPlayerSnapshot player,
+		List<GenericClientNpcSnapshot> npcs,
 		GenericClientAccountSnapshot account,
 		GenericClientQuestSnapshot quest,
 		List<GenericClientGameMessageBuffer.Message> messages,
@@ -163,7 +160,7 @@ final class GenericClientSnapshot
 			account, quest, messages, widgets, mouseTile);
 	}
 
-	private GenericClientSnapshot(
+	GenericClientSnapshot(
 		long gameTick,
 		String gameState,
 		int gameRevision,
@@ -185,34 +182,17 @@ final class GenericClientSnapshot
 		this.mouseTile = mouseTile;
 	}
 
-	String questStateKey()
-	{
-		return account.questStateKey();
-	}
-
-	static GenericClientSnapshot capture(Client client, long gameTick)
-	{
-		return capture(client, gameTick, null, null);
-	}
-
-	static GenericClientSnapshot capture(
-		Client client,
-		long gameTick,
-		GenericClientBankCache bankCache,
-		GenericClientQuestCache questCache)
-	{
-		return capture(client, gameTick, bankCache, questCache, Collections.emptyList());
-	}
+	String questStateKey() { return account.questStateKey(); }
 
 	static GenericClientSnapshot capture(
 		Client client,
 		long gameTick,
 		GenericClientBankCache bankCache,
 		GenericClientQuestCache questCache,
-		List<GenericClientGameMessageBuffer.Message> messages)
+		List<GenericClientGameMessageBuffer.Message> messages, GenericClientEntityIds identities)
 	{
 		Player localPlayer = client.getLocalPlayer();
-		GenericClientWorldSnapshot world = GenericClientWorldSnapshot.capture(client, localPlayer);
+		GenericClientWorldSnapshot world = GenericClientWorldSnapshot.capture(client, localPlayer, identities);
 
 		Tile selectedTile = localPlayer == null
 			? null
@@ -223,7 +203,7 @@ final class GenericClientSnapshot
 			client.getRevision(),
 			world,
 			GenericClientAccountSnapshot.capture(client, bankCache, questCache, gameTick),
-			GenericClientQuestSnapshot.capture(client, localPlayer),
+			GenericClientQuestSnapshot.capture(client, localPlayer, identities),
 			messages,
 			GenericClientWidgetSnapshot.capture(client),
 			selectedTile == null ? null : selectedTile.getWorldLocation());
@@ -241,10 +221,14 @@ final class GenericClientSnapshot
 		}
 		switch (subject)
 		{
+			case "entity":
+				return entity((String)query.get("kind"),((Number)query.get("identity")).longValue());
 			case "runtime":
 				return runtimeMap();
 			case "player":
 				return world.player == null ? null : world.player.toMap(gameState);
+			case "players":
+				return world.players.stream().map(player -> player.toMap(gameState)).collect(java.util.stream.Collectors.toList());
 			case "account":
 				return accountMap();
 			case "npcs":
@@ -271,12 +255,25 @@ final class GenericClientSnapshot
 		}
 	}
 
-	PlayerSnapshot getPlayer()
+	private Map<String,Object> entity(String kind, long identity)
+	{
+		switch (kind)
+		{
+			case "player": return world.players.stream().filter(player -> player.identity == identity).findFirst()
+				.map(player -> player.toMap(gameState)).orElse(null);
+			case "npc": return world.npcs.stream().filter(npc -> npc.identity == identity).findFirst().map(GenericClientNpcSnapshot::toMap).orElse(null);
+			case "object": return quest.getObjects().stream().filter(object -> object.identity == identity).findFirst()
+				.map(GenericClientQuestSnapshot.ObjectSnapshot::toMap).orElse(null);
+			default: throw new IllegalArgumentException("Unknown entity kind: " + kind);
+		}
+	}
+
+	GenericClientPlayerSnapshot getPlayer()
 	{
 		return world.player;
 	}
 
-	List<NpcSnapshot> getNpcs()
+	List<GenericClientNpcSnapshot> getNpcs()
 	{
 		return world.npcs;
 	}
@@ -569,7 +566,7 @@ final class GenericClientSnapshot
 		}
 
 		List<Map<String, Object>> result = new ArrayList<>();
-		for (NpcSnapshot npc : world.npcs)
+		for (GenericClientNpcSnapshot npc : world.npcs)
 		{
 			if (!criteria.matches(npc))
 			{
@@ -629,11 +626,6 @@ final class GenericClientSnapshot
 	private static long longValue(Object value, long defaultValue)
 	{
 		return value instanceof Number ? ((Number) value).longValue() : defaultValue;
-	}
-
-	private static Boolean booleanValue(Object value)
-	{
-		return value instanceof Boolean ? (Boolean) value : null;
 	}
 
 	private static String stringValue(Object value)
@@ -705,8 +697,7 @@ final class GenericClientSnapshot
 		private final int within;
 		private final int limit;
 		private final String action;
-		private final String name;
-		private final Integer id;
+		private final GenericClientEntitySelector selector;
 		private final Boolean clickable;
 		private final Boolean lineOfSight;
 		private final Boolean dead;
@@ -715,8 +706,7 @@ final class GenericClientSnapshot
 			int within,
 			int limit,
 			String action,
-			String name,
-			Integer id,
+			GenericClientEntitySelector selector,
 			Boolean clickable,
 			Boolean lineOfSight,
 			Boolean dead)
@@ -724,8 +714,7 @@ final class GenericClientSnapshot
 			this.within = within;
 			this.limit = limit;
 			this.action = action;
-			this.name = name;
-			this.id = id;
+			this.selector = selector;
 			this.clickable = clickable;
 			this.lineOfSight = lineOfSight;
 			this.dead = dead;
@@ -734,36 +723,23 @@ final class GenericClientSnapshot
 		private static NpcQuery from(Map<?, ?> query)
 		{
 			int within = intValue(query == null ? null : query.get("within"), Integer.MAX_VALUE);
-			int limit = Math.min(
-				MAX_QUERY_RESULTS,
-				Math.max(0, intValue(query == null ? null : query.get("limit"), 50)));
+			int limit = Math.max(0, intValue(query == null ? null : query.get("limit"), 50));
 			String action = stringValue(query == null ? null : query.get("action"));
-			Map<?, ?> where = query != null && query.get("where") instanceof Map
-				? (Map<?, ?>) query.get("where")
-				: Collections.emptyMap();
-			Integer id = where.get("id") instanceof Number
-				? ((Number) where.get("id")).intValue()
-				: null;
-			if (query != null && query.get("id") instanceof Number)
-			{
-				id = ((Number) query.get("id")).intValue();
-			}
+			GenericClientEntitySelector selector = new GenericClientEntitySelector(query);
 			return new NpcQuery(
 				within,
 				limit,
 				action,
-				stringValue(where.get("name")),
-				id,
-				booleanValue(where.get("clickable")),
-				booleanValue(where.get("line_of_sight")),
-				booleanValue(where.get("dead")));
+				selector,
+				selector.flag("clickable"),
+				selector.flag("line_of_sight"),
+				selector.flag("dead"));
 		}
 
-		private boolean matches(NpcSnapshot npc)
+		private boolean matches(GenericClientNpcSnapshot npc)
 		{
 			return npc.distance <= within &&
-				(id == null || npc.id == id) &&
-				(name == null || npc.name.equalsIgnoreCase(name)) &&
+				selector.matches(npc.id, npc.name) &&
 				(clickable == null || npc.clickable == clickable) &&
 				(lineOfSight == null || npc.lineOfSight == lineOfSight) &&
 				(dead == null || npc.dead == dead) &&

@@ -25,7 +25,7 @@ SHA-256 is
 
 ## Infinitay/Random-Event-Helper
 
-The Capt' Arnav Lua solver's dial model and RuneLite interface mapping were
+The Capt' Arnav solver's dial model and RuneLite interface mapping were
 cross-checked against
 [`Infinitay/Random-Event-Helper`](https://github.com/Infinitay/Random-Event-Helper)
 commit `43e578fd30f60ac765a32b7b99c82b6ca3791776`.

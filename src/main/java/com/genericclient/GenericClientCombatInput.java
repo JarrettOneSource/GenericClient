@@ -44,12 +44,14 @@ final class GenericClientCombatInput implements AutoCloseable
 
 	private final Client client;
 	private final ClientThread clientThread;
+	private final ScheduledExecutorService executor;
 	private final GenericClientSyntheticMouse syntheticMouse;
 	private final Consumer<String> reporter;
 	private final AtomicBoolean running = new AtomicBoolean();
 
 	private volatile CompletableFuture<Map<String, Object>> activeResult;
-	private final GenericClientInputCallbacks callbacks;
+	private final GenericClientInputCallbacks callbacks = new GenericClientInputCallbacks(this, () -> this.activeResult,
+		() -> finish("rejected", "action_cancelled"));
 	private volatile int requestedStyle;
 	private volatile boolean requestedAutoRetaliate;
 	private volatile Operation operation = Operation.STYLE;
@@ -67,7 +69,7 @@ final class GenericClientCombatInput implements AutoCloseable
 	{
 		this.client = client;
 		this.clientThread = clientThread;
-		this.callbacks = new GenericClientInputCallbacks(this, () -> this.activeResult, executor);
+		this.executor = executor;
 		this.syntheticMouse = syntheticMouse;
 		this.reporter = reporter;
 	}
@@ -129,7 +131,7 @@ final class GenericClientCombatInput implements AutoCloseable
 		reporter.accept(operation == Operation.STYLE
 			? "COMBAT_STYLE_SELECTING index=" + style
 			: "COMBAT_AUTO_RETALIATE_SELECTING enabled=" + autoRetaliate);
-		invokeCurrent(operation == Operation.STYLE
+		callbacks.invoke(clientThread, activityContext, operation == Operation.STYLE
 			? this::prepareStyleOnClientThread
 			: this::prepareAutoRetaliateOnClientThread);
 		return result;
@@ -193,8 +195,8 @@ final class GenericClientCombatInput implements AutoCloseable
 				finish("rejected", "combat_style_click: " + rootMessage(error));
 				return;
 			}
-			finishAction(() -> callbacks.schedule(
-				() -> invokeCurrent(this::checkSelectedStyle), UI_SETTLE_MILLIS));
+			callbacks.schedule(executor,
+				() -> callbacks.invoke(clientThread, activityContext, this::checkSelectedStyle), UI_SETTLE_MILLIS);
 		}));
 	}
 
@@ -210,7 +212,7 @@ final class GenericClientCombatInput implements AutoCloseable
 			finish("rejected", "combat_style_did_not_change");
 			return;
 		}
-		callbacks.schedule(() -> invokeCurrent(this::checkSelectedStyle), 50L);
+		callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activityContext, this::checkSelectedStyle), 50L);
 	}
 
 	private void prepareAutoRetaliateOnClientThread()
@@ -258,8 +260,8 @@ final class GenericClientCombatInput implements AutoCloseable
 				finish("rejected", "auto_retaliate_click: " + rootMessage(error));
 				return;
 			}
-			finishAction(() -> callbacks.schedule(
-				() -> invokeCurrent(this::checkAutoRetaliate), UI_SETTLE_MILLIS));
+			callbacks.schedule(executor,
+				() -> callbacks.invoke(clientThread, activityContext, this::checkAutoRetaliate), UI_SETTLE_MILLIS);
 		}));
 	}
 
@@ -275,7 +277,7 @@ final class GenericClientCombatInput implements AutoCloseable
 			finish("rejected", "auto_retaliate_did_not_change");
 			return;
 		}
-		callbacks.schedule(() -> invokeCurrent(this::checkAutoRetaliate), 50L);
+		callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activityContext, this::checkAutoRetaliate), 50L);
 	}
 
 	private boolean autoRetaliateEnabled()
@@ -297,8 +299,8 @@ final class GenericClientCombatInput implements AutoCloseable
 						finish("rejected", "autocast_cancel_click: " + rootMessage(error));
 						return;
 					}
-					finishAction(() -> callbacks.schedule(
-						() -> invokeCurrent(afterOpen), UI_SETTLE_MILLIS));
+					callbacks.schedule(executor,
+						() -> callbacks.invoke(clientThread, activityContext, afterOpen), UI_SETTLE_MILLIS);
 				})));
 			return;
 		}
@@ -321,7 +323,7 @@ final class GenericClientCombatInput implements AutoCloseable
 				finish("rejected", "combat_tab_click: " + rootMessage(error));
 				return;
 			}
-			finishAction(() -> callbacks.schedule(() -> invokeCurrent(afterOpen), UI_SETTLE_MILLIS));
+			callbacks.schedule(executor, () -> callbacks.invoke(clientThread, activityContext, afterOpen), UI_SETTLE_MILLIS);
 		})));
 	}
 
@@ -330,7 +332,7 @@ final class GenericClientCombatInput implements AutoCloseable
 		String unavailableReason,
 		Consumer<Widget> action)
 	{
-		beginAction(() ->
+		callbacks.invoke(clientThread, activityContext, () ->
 		{
 			Widget widget = visibleWidget(widgetIds);
 			if (widget == null)
@@ -340,16 +342,6 @@ final class GenericClientCombatInput implements AutoCloseable
 			}
 			action.accept(widget);
 		});
-	}
-
-	private void beginAction(Runnable action)
-	{
-		invokeCurrent(action);
-	}
-
-	private void finishAction(Runnable continuation)
-	{
-		continuation.run();
 	}
 
 	private CompletableFuture<String> clickWidget(Widget widget)
@@ -391,7 +383,7 @@ final class GenericClientCombatInput implements AutoCloseable
 		{
 			return;
 		}
-		callbacks.cancelPending();
+		callbacks.cancelScheduled();
 		Map<String, Object> receipt = receipt(status, result);
 		reporter.accept(operation == Operation.STYLE
 			? "COMBAT_STYLE_COMPLETED index=" + requestedStyle +
@@ -444,15 +436,6 @@ final class GenericClientCombatInput implements AutoCloseable
 		return receipt;
 	}
 
-	private void invokeCurrent(Runnable action)
-	{
-		clientThread.invoke(callbacks.bind(() -> {
-			if (activityContext.isInputAllowed()) action.run();
-			else finish("rejected", "action_cancelled");
-		}));
-	}
-
-
 	private enum Operation
 	{
 		STYLE,
@@ -469,7 +452,7 @@ final class GenericClientCombatInput implements AutoCloseable
 		}
 		else
 		{
-			callbacks.cancelPending();
+			callbacks.cancelScheduled();
 		}
 	}
 }

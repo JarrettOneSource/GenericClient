@@ -392,7 +392,7 @@ public class GenericClientCombatGuardTest
 
 	private static GenericClientSnapshot snapshot(
 		long tick,
-		GenericClientWorldSnapshot.NpcSnapshot... npcs)
+		GenericClientNpcSnapshot... npcs)
 	{
 		return snapshot(tick, 28, npcs);
 	}
@@ -400,9 +400,9 @@ public class GenericClientCombatGuardTest
 	private static GenericClientSnapshot snapshot(
 		long tick,
 		int hitpoints,
-		GenericClientWorldSnapshot.NpcSnapshot... npcs)
+		GenericClientNpcSnapshot... npcs)
 	{
-		GenericClientWorldSnapshot.PlayerSnapshot player = new GenericClientWorldSnapshot.PlayerSnapshot(
+		GenericClientPlayerSnapshot player = new GenericClientPlayerSnapshot(1L,
 			"genericBoss", 2762, 2805, 0, 0, -1, null,
 			hitpoints, 28, 10_000, true, null);
 		return new GenericClientSnapshot(
@@ -413,7 +413,7 @@ public class GenericClientCombatGuardTest
 			Arrays.asList(npcs));
 	}
 
-	private static GenericClientWorldSnapshot.NpcSnapshot npc(
+	private static GenericClientNpcSnapshot npc(
 		int index,
 		int id,
 		String name,
@@ -421,7 +421,7 @@ public class GenericClientCombatGuardTest
 		int distance,
 		int animation)
 	{
-		return new GenericClientWorldSnapshot.NpcSnapshot(
+		return new GenericClientNpcSnapshot(2L,
 			index,
 			id,
 			name,

@@ -9,7 +9,6 @@ import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.Test;
 
@@ -39,9 +38,7 @@ public class GenericClientScriptOverlayTest
 	@Test
 	public void rendersACompactHeaderRuntimeAndRows()
 	{
-		List<GenericClientOverlayRow> rows = GenericClientOverlayRow.parse(java.util.Arrays.asList(
-			row("Destination", "Varrock"),
-			row("State", "Walking")));
+		List<GenericClientOverlayRow> rows = List.of(new GenericClientOverlayRow("Destination", "Varrock"),new GenericClientOverlayRow("State", "Walking"));
 		AtomicReference<GenericClientActiveScript> script = new AtomicReference<>(
 			new GenericClientActiveScript(
 				"walker", "Walker", "Walk somewhere.", "WAITING", 65_000L,
@@ -96,14 +93,6 @@ public class GenericClientScriptOverlayTest
 		{
 			graphics.dispose();
 		}
-	}
-
-	private static Map<String, Object> row(String label, String value)
-	{
-		Map<String, Object> row = new java.util.LinkedHashMap<>();
-		row.put("label", label);
-		row.put("value", value);
-		return row;
 	}
 
 	private static int coloredPixels(BufferedImage image)

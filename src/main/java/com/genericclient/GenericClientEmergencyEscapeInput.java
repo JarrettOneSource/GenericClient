@@ -92,8 +92,8 @@ final class GenericClientEmergencyEscapeInput
 				}
 				reporter.accept("EMERGENCY_INVENTORY_ESCAPE_CHOICE choice=" +
 					visibleChoice);
-				return dialogueInput.chooseKeyboard(
-					visibleChoice,
+				return dialogueInput.choose(
+					visibleChoice, null, true,
 					GenericClientActivityContext.none(),
 					false).thenCompose(choiceReceipt ->
 				{

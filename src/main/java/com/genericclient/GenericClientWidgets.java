@@ -15,19 +15,93 @@ import net.runelite.api.WidgetNode;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.util.Text;
 
-/** Client-thread traversal of visible widget trees, including attached interfaces. */
+/** Client-thread traversal of loaded widget trees, including attached interfaces. */
 final class GenericClientWidgets
 {
-	private static final int MAX_WIDGETS = 1_024;
 	private static final int[][] MINIMAP_DRAW_AREAS = {{548, 22}, {164, 30}, {161, 30}};
 
 	private GenericClientWidgets() { }
 
+	static List<Widget> all(Client client)
+	{
+		ArrayDeque<Widget> queue = new ArrayDeque<>();
+		HashTable<WidgetNode> components = client.getComponentTable();
+		if (components != null)
+			for (WidgetNode node : components)
+				if (node != null)
+				{
+					Widget root = client.getWidget(node.getId(), 0);
+					if (root != null) queue.addLast(root);
+				}
+		add(queue, client.getWidgetRoots());
+		return all(queue, Integer.MAX_VALUE);
+	}
+
+	static List<Widget> visible(Client client) { return visible(all(client)); }
+
+	static List<Widget> visible(Widget root) { return visible(root, Integer.MAX_VALUE); }
+
+	static List<Widget> visible(Widget root, int limit) { return visible(descendants(root, limit)); }
+
 	static List<Widget> descendants(Widget root, int limit)
 	{
+		ArrayDeque<Widget> queue = new ArrayDeque<>();
+		if (root != null) queue.addLast(root);
+		return all(queue, limit);
+	}
+
+	private static List<Widget> visible(List<Widget> widgets)
+	{
+		return widgets.stream().filter(GenericClientWidgets::clickable).collect(java.util.stream.Collectors.toList());
+	}
+
+	static boolean clickable(Widget widget)
+	{
+		if (!isVisible(widget)) return false;
+		Rectangle bounds = widget.getBounds();
+		return bounds != null && bounds.width > 0 && bounds.height > 0;
+	}
+
+	private static List<Widget> all(ArrayDeque<Widget> queue, int limit)
+	{
+		Set<Widget> seen = Collections.newSetFromMap(new IdentityHashMap<>());
 		List<Widget> result = new ArrayList<>();
-		collect(root, limit, result);
+		while (!queue.isEmpty() && seen.size() < limit)
+		{
+			Widget widget = queue.removeFirst();
+			if (!seen.add(widget)) continue;
+			result.add(widget);
+			add(queue, widget.getChildren());
+			add(queue, widget.getDynamicChildren());
+			add(queue, widget.getStaticChildren());
+			add(queue, widget.getNestedChildren());
+		}
 		return result;
+	}
+
+	static boolean isVisible(Widget widget)
+	{
+		for (Widget current = widget; current != null; current = current.getParent())
+			if (current.isHidden() || current.isSelfHidden()) return false;
+		return widget != null;
+	}
+
+	static boolean matchesLabel(String label, String text, String name, List<String> actions)
+	{
+		String wanted = label.toLowerCase(Locale.ROOT);
+		return contains(text, wanted) || contains(name, wanted) || actions.stream().anyMatch(action -> contains(action, wanted));
+	}
+
+	private static boolean contains(String text, String wanted)
+	{
+		return text != null && Text.removeTags(text).toLowerCase(Locale.ROOT).contains(wanted);
+	}
+
+	private static void add(ArrayDeque<Widget> queue, Widget[] children)
+	{
+		if (children != null)
+			for (Widget child : children)
+				if (child != null) queue.addLast(child);
 	}
 
 	static Widget visibleMinimap(Client client)
@@ -57,91 +131,6 @@ final class GenericClientWidgets
 		return false;
 	}
 
-	static boolean clickable(Widget widget)
-	{
-		if (!isVisible(widget))
-		{
-			return false;
-		}
-		Rectangle bounds = widget.getBounds();
-		return bounds != null && bounds.width > 0 && bounds.height > 0;
-	}
-
-	private static void collect(Widget widget, int limit, List<Widget> result)
-	{
-		if (widget == null || result.size() >= limit)
-		{
-			return;
-		}
-		result.add(widget);
-		collect(widget.getStaticChildren(), limit, result);
-		collect(widget.getDynamicChildren(), limit, result);
-		collect(widget.getNestedChildren(), limit, result);
-	}
-
-	private static void collect(Widget[] children, int limit, List<Widget> result)
-	{
-		if (children == null)
-		{
-			return;
-		}
-		for (Widget child : children)
-		{
-			collect(child, limit, result);
-		}
-	}
-
-	static List<Widget> visible(Client client)
-	{
-		ArrayDeque<Widget> queue = new ArrayDeque<>();
-		HashTable<WidgetNode> components = client.getComponentTable();
-		if (components != null)
-			for (WidgetNode node : components)
-				if (node != null)
-				{
-					Widget root = client.getWidget(node.getId(), 0);
-					if (root != null) queue.addLast(root);
-				}
-		add(queue, client.getWidgetRoots());
-		return visible(queue, MAX_WIDGETS);
-	}
-
-	static List<Widget> visible(Widget root)
-	{
-		return visible(root, MAX_WIDGETS);
-	}
-
-	static List<Widget> visible(Widget root, int limit)
-	{
-		ArrayDeque<Widget> queue = new ArrayDeque<>();
-		if (root != null) queue.addLast(root);
-		return visible(queue, limit);
-	}
-
-	private static List<Widget> visible(ArrayDeque<Widget> queue, int limit)
-	{
-		Set<Widget> seen = Collections.newSetFromMap(new IdentityHashMap<>());
-		List<Widget> result = new ArrayList<>();
-		while (!queue.isEmpty() && seen.size() < limit)
-		{
-			Widget widget = queue.removeFirst();
-			if (!seen.add(widget)) continue;
-			if (clickable(widget)) result.add(widget);
-			add(queue, widget.getChildren());
-			add(queue, widget.getDynamicChildren());
-			add(queue, widget.getStaticChildren());
-			add(queue, widget.getNestedChildren());
-		}
-		return result;
-	}
-
-	static boolean isVisible(Widget widget)
-	{
-		for (Widget current = widget; current != null; current = current.getParent())
-			if (current.isHidden() || current.isSelfHidden()) return false;
-		return widget != null;
-	}
-
 	static boolean matchesWidget(MenuEntry entry, Widget target)
 	{
 		Widget widget = entry.getWidget();
@@ -151,23 +140,5 @@ final class GenericClientWidgets
 		}
 		return entry.getParam1() == target.getId() &&
 			(target.getIndex() < 0 || entry.getParam0() == target.getIndex());
-	}
-
-	static boolean matchesLabel(String label, String text, String name, List<String> actions)
-	{
-		String wanted = label.toLowerCase(Locale.ROOT);
-		return contains(text, wanted) || contains(name, wanted) || actions.stream().anyMatch(action -> contains(action, wanted));
-	}
-
-	private static boolean contains(String text, String wanted)
-	{
-		return text != null && Text.removeTags(text).toLowerCase(Locale.ROOT).contains(wanted);
-	}
-
-	private static void add(ArrayDeque<Widget> queue, Widget[] children)
-	{
-		if (children != null)
-			for (Widget child : children)
-				if (child != null) queue.addLast(child);
 	}
 }

@@ -159,7 +159,7 @@ public class GenericClientDamageTrackerTest
 		int[] varps = new int[VarPlayerID.POISON + 1];
 		varps[VarPlayerID.POISON] = poison;
 		return new GenericClientSnapshot(tick, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot(name, 3200, 3200, 0, worldView,
+			new GenericClientPlayerSnapshot(1L, name, 3200, 3200, 0, worldView,
 				-1, null, hp, 99, 10000, true, null), List.of(), GenericClientAccountSnapshot.empty(),
 			new GenericClientQuestSnapshot(true, varps, List.of(), GenericClientQuestSnapshot.DialogueSnapshot.closed()));
 	}

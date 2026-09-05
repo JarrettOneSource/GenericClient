@@ -157,7 +157,7 @@ final class GenericClientScriptCheckpointStore
 
 	private static void validateScript(String script)
 	{
-		if (script == null || !script.matches("[a-z0-9][a-z0-9_-]{0,63}"))
+		if (script == null || !script.matches("[A-Za-z0-9_$][A-Za-z0-9_.$-]*"))
 		{
 			throw new IllegalArgumentException("Checkpoint script id is invalid");
 		}

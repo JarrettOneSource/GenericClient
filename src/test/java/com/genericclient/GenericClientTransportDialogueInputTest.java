@@ -80,7 +80,7 @@ public class GenericClientTransportDialogueInputTest
 	private static GenericClientSnapshot snapshot(GenericClientNativeInputFixture scene)
 	{
 		return new GenericClientSnapshot(1, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("transport-test", 2649, 4518, 0, 0), List.of(),
+			new GenericClientPlayerSnapshot(1L,"transport-test", 2649, 4518, 0, 0), List.of(),
 			GenericClientAccountSnapshot.empty(), new GenericClientQuestSnapshot(true, new int[0], List.of(),
 				GenericClientQuestSnapshot.captureDialogue(scene.client)));
 	}

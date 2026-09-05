@@ -1,43 +1,96 @@
-# GenericClient
+# GenericClient automation
 
-GenericClient provides semantic game actions and observed state. Standalone scripts choose quest, training and recovery goals.
+GenericClient provides semantic game actions and observed state. Standalone
+scripts choose quest, training, and recovery goals.
 
 ## Language
 
-**Semantic action**: One client operation with an observed completion condition, such as selecting a prayer or loading bank supplies.
+**Run:** One execution of a selected automation, from start through cleanup.
 
-**Activity**: The kind of work a script declares, such as travel or combat. Its preset supplies discretionary behavior and safety expectations.
+**Owner:** The manual operator, schedule rule, or random event that currently
+holds the right to execute automation.
 
-**Behavior policy**: Independent choices for breaks, cursor release, mouse speed, expected damage, prayer ownership, walk refresh and fidgets. An await can override these choices for that action without changing the declared activity.
+**Snapshot:** The account and scene state observed at a game tick.
 
-**Damage grace**: A bounded period after ordinary hit evidence or unexplained HP loss. The policy resolver suppresses discretionary behavior during that period only when the declared policy does not expect damage. A supported poison/venom match does not start or refresh it.
+**Semantic action:** One client operation with an observed completion condition,
+such as selecting a prayer or loading bank supplies.
 
-**Intent**: A coroutine-owned sequence of semantic actions with one outer behavior boundary. Nested intents share that boundary; emergency recovery remains independent of the scope.
+**Intent:** A named group of operations sharing one outer discretionary behavior
+boundary. Nested operations retain their safety policy and the run's revocable
+input ownership.
 
-**Rest scope**: Discretionary cursor movement tied to the lifetime of an await, without replacing the await's active input child. Finishing or canceling the await closes its rest scopes.
+**Receipt:** The observed result of a requested input operation. A dispatched
+click and a completed game-state change are distinct results.
 
-**Journey**: Travel from the observed player position to an arrival condition, including required corridor points and interrupt conditions.
+**Activity:** The kind of work a script declares, such as travel or combat. Its
+preset supplies discretionary behavior and safety expectations.
 
-**Via point**: An ordered corridor requirement passed when the observed player comes within its handoff radius. Planning a path through it does not establish that it was passed.
+**Journey:** Travel from the observed position to an arrival condition, including
+required corridor points and interrupt conditions.
+_Avoid_: route leg, when referring to the entire requested trip.
 
-**Arrival tiles**: An optional allowed set inside the destination radius. Standing elsewhere inside that radius does not satisfy the journey.
+**Via point:** An ordered corridor requirement passed when the observed player
+comes within its handoff radius. Planning through it does not establish passage.
 
-**Edge memory**: Account-scoped observations of solid edges and door outcomes. Each observation has a reason and expiry. Failed door entries also clear when the captured quest stage changes. Cleared outcomes never override live collision.
+**Arrival tiles:** An optional allowed set inside the destination radius.
+Standing elsewhere inside that radius does not satisfy the journey.
 
-**Object footprint**: The tiles occupied by a captured scene object. Game objects can occupy several tiles around their reported centre; a door interaction keeps that centre as its input target while matching the blocked crossing against its footprint.
+**Continuation:** Permission to resume an interrupted journey with its observed
+corridor progress and original destination constraints. An attempted transport
+retains action progress, its remaining active-tick budget and failed service groups.
 
-**Transport**: A directed journey edge performed by an interaction. Its standing origin, destination and cost participate in planning; the selected action stays attached to the route so clicks and local rejoins cannot skip it.
+**Object footprint:** The tiles occupied by a captured scene object. A door
+interaction targets the object's reported centre while matching the blocked
+crossing against its full footprint.
 
-**Transport conversation**: Dialogue owned by an already selected service. Only the expected speaker or permitted choice can advance it, and a captured page is checked again before input. Foreign dialogue returns to the quest handler; safety interrupts keep their priority.
+**Manual takeover:** A temporary pause caused by physical mouse activity. It is
+independent of emergency recovery and unconditional stopping.
 
-**Continuation**: Permission to resume an interrupted journey with its observed corridor progress and original destination constraints. An attempted transport retains its action progress, remaining active-tick budget and failed service groups.
+**Event latch:** The unresolved random event that holds automation ownership
+even after its initiating NPC disappears.
 
-**Owned active time**: Logged-in time during which a standalone script owns automation. Idle and operator-only time do not accrue discretionary break pressure.
+**Owned active time:** Logged-in time during which a standalone script owns
+automation. Idle and operator-only time do not accrue discretionary break pressure.
 
-**Micro pressure**: Owned active time weighted by the account's micro rate and the standalone script's activity. A single persisted threshold becomes eligible at a completed action or phase. Starting a micro break consumes the pressure; phase bonuses add pressure without resampling the threshold.
+**Deferred long break:** A due long break ended early without satisfying its
+rest budget. The remaining obligation survives the interruption.
 
-**Deferred long break**: A due long break ended early without satisfying its rest budget. The remaining obligation survives the interruption.
+**Capture:** A quest-driven relocation into a prison area. Its recovery decisions
+belong to the quest script.
 
-**Capture**: A quest-driven relocation into a prison area. Its recovery decisions belong to the quest script.
+**Emergency recovery:** Forced healing or an approved escape when observed account
+state crosses the configured emergency threshold.
 
-**Emergency recovery**: Forced healing or an approved escape when observed account state crosses the configured emergency threshold.
+**Behavior policy:** Independent choices for breaks, cursor release, mouse speed,
+expected damage, prayer ownership, walk refresh and fidgets. Each operation can
+override these choices without changing the declared activity.
+
+**Damage grace:** A bounded period after ordinary hit evidence or unexplained HP
+loss. Unexpected damage suppresses discretionary behavior during that period. A
+supported poison or venom match does not start or refresh it.
+
+**Rest scope:** Discretionary cursor movement owned by an operation or sleep,
+without replacing its active input child. Finishing or canceling the owner closes
+its rest scopes.
+
+**Entity reference:** A handle to one native actor or object lifetime. Reusing an
+NPC or player index does not reuse that identity. State reads refresh the handle;
+menu input must still resolve its exact target.
+
+**Edge memory:** Account-scoped observations of solid edges and door outcomes,
+with a reason and expiry. Failed door entries also clear when the quest stage
+changes. Cleared outcomes never override live collision.
+
+**Transport:** A directed journey edge performed by an interaction. Its standing
+origin, destination and cost participate in planning; the selected action stays
+attached to the route so clicks and local rejoins cannot skip it.
+
+**Micro pressure:** Owned active time weighted by the account's micro rate and
+the script's declared activity. One persisted threshold becomes eligible at
+a completed action or phase. Starting a micro break consumes the pressure; phase
+bonuses add pressure without resampling the threshold.
+
+**Transport conversation:** Dialogue owned by an already selected service. Only
+the expected speaker or permitted choice can advance it; input rechecks the
+captured page. Foreign dialogue returns to the quest handler, and safety
+interrupts retain priority.

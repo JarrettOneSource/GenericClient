@@ -135,7 +135,7 @@ final class GenericClientWalkRequest
 
 	private static List<WorldPoint> points(Object value, String label)
 	{
-		if (value == null || value instanceof Map && ((Map<?, ?>) value).isEmpty()) return Collections.emptyList();
+		if (value == null) return Collections.emptyList();
 		if (!(value instanceof List)) throw new IllegalArgumentException("walk.to " + label + " must be an array of point tables");
 		List<?> values = (List<?>) value;
 		if (values.size() > MAX_POINTS) throw new IllegalArgumentException("walk.to " + label + " cannot contain more than " + MAX_POINTS + " points");

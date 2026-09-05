@@ -452,7 +452,7 @@ final class GenericClientCombatGuard
 	{
 		String playerName = snapshot.getPlayer().getName();
 		List<Threat> result = new ArrayList<>();
-		for (GenericClientWorldSnapshot.NpcSnapshot npc : snapshot.getNpcs())
+		for (GenericClientNpcSnapshot npc : snapshot.getNpcs())
 		{
 			if (npc == null || npc.isDead() || npc.getCombatLevel() <= 0 ||
 				!playerName.equals(npc.getInteracting()))
@@ -488,7 +488,7 @@ final class GenericClientCombatGuard
 		return selected;
 	}
 
-	private static Classification classify(GenericClientWorldSnapshot.NpcSnapshot npc)
+	private static Classification classify(GenericClientNpcSnapshot npc)
 	{
 		String name = npc.getName().toLowerCase(Locale.ROOT);
 		if (containsAny(name,

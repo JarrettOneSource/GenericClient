@@ -63,10 +63,10 @@ public class GenericClientControlServerTest
 
 	@Test
 	@SuppressWarnings("unchecked")
-	public void exposesStructuredLuaAndScriptOperationsOverLoopback() throws Exception
+	public void exposesJavaAndScriptOperationsOverLoopback() throws Exception
 	{
-		GenericClientLuaHost host =
-			GenericClientTestSupport.luaHost(temporaryFolder, "control").build();
+		GenericClientScriptHost host =
+			GenericClientTestSupport.scriptHost(temporaryFolder, "control").build();
 		AtomicReference<String> note = new AtomicReference<>("Account Goal");
 		Map<String, Object> screenshot = new LinkedHashMap<>();
 		screenshot.put("mime_type", "image/png");
@@ -118,7 +118,7 @@ public class GenericClientControlServerTest
 				behavior.put("state", "ready");
 				behavior.put("profile", profile);
 				status.put("behavior", behavior);
-				status.put("lua", host.controlState());
+				status.put("scripts", host.controlState());
 				return status;
 			},
 			note::get,
@@ -150,16 +150,15 @@ public class GenericClientControlServerTest
 			assertEquals(server.getUrl(), health.get("control_url"));
 
 			Map<String, Object> evalParameters = new LinkedHashMap<>();
-			evalParameters.put("code", "return gc.read('player')");
-			Map<String, Object> eval = post(server, "lua.eval", evalParameters);
+			evalParameters.put("code", "return ScriptScope.current().read(\"player\", Map.of());");
+			Map<String, Object> eval = post(server, "java.eval", evalParameters);
 			Map<String, Object> evalResult = (Map<String, Object>) eval.get("result");
 			assertEquals(true, eval.get("ok"));
-			assertEquals("completed", evalResult.get("status"));
 			assertEquals("Player", ((Map<String, Object>) evalResult.get("value")).get("name"));
 
 			Map<String, Object> statusResponse = post(server, "status", new LinkedHashMap<>());
 			Map<String, Object> statusResult = (Map<String, Object>) statusResponse.get("result");
-			assertTrue(((Map<String, Object>) statusResult.get("lua")).get("active_inputs") instanceof Map);
+			assertEquals("COMPLETED", ((Map<String, Object>) statusResult.get("scripts")).get("script_status"));
 			Map<String, Object> automationStatus = post(
 				server, "automation.status", new LinkedHashMap<>());
 			assertEquals("0123456789abcdef",
@@ -223,23 +222,9 @@ public class GenericClientControlServerTest
 				post(server, "account.note.set", noteParameters).get("result"));
 			assertEquals("Account Goal\n\nVerified audit", note.get());
 
-			Map<String, Object> saveParameters = new LinkedHashMap<>();
-			saveParameters.put("id", "hello-world");
-			saveParameters.put("name", "Hello world");
-			saveParameters.put("description", "Log one message and finish.");
-			saveParameters.put("source",
-				"return { inputs = {{ id = 'greeting', label = 'Greeting', type = 'choice', " +
-				"choices = {{ value = 'hello', label = 'Hello' }, " +
-				"{ value = 'goodbye', label = 'Goodbye' }} }}, " +
-				"actions = {{ id = 'refresh', label = 'Refresh' }}, " +
-				"run = function(input) gc.log('info', input.greeting); while true do " +
-				"gc.await { event = 'game.tick' }; local action = gc.next_action(); " +
-				"if action then gc.log('info', action); return action end end end }\n");
-			saveParameters.put("random_events", List.of(net.runelite.api.gameval.NpcID.MACRO_MILES));
-			Map<String, Object> saved = post(server, "scripts.save", saveParameters);
-			assertEquals("hello-world", ((Map<String, Object>) saved.get("result")).get("id"));
-			assertEquals(1,
-				((List<?>) ((Map<String, Object>) saved.get("result")).get("random_events")).size());
+			Map<String, Object> compilation = Map.of("class_name", "HelloWorld", "source",
+				GenericClientTestSupport.javaScript("HelloWorld", "@ScriptSettings(id=\"hello-world\", inputs=@ScriptSettings.Input(id=\"greeting\", label=\"Greeting\", choices={\"hello\", \"goodbye\"}, defaultValue=\"hello\"), actions=@ScriptSettings.Button(id=\"refresh\", label=\"Refresh\"), randomEvents={5436})", "public void onStart() { log(ScriptScope.current().inputs().get(\"greeting\")); } public int onLoop() { String action = ScriptScope.current().nextAction(); if (action != null) { log(action); return -1; } return 10; }"));
+			assertTrue(((String) post(server, "scripts.compile", compilation).get("result")).contains("SCRIPT_COMPILED"));
 
 			Map<String, Object> getParameters = new LinkedHashMap<>();
 			getParameters.put("id", "hello-world");
@@ -256,19 +241,19 @@ public class GenericClientControlServerTest
 			runParameters.put("id", "hello-world");
 			runParameters.put("inputs", Collections.singletonMap("greeting", "goodbye"));
 			assertTrue(((String) post(server, "scripts.run", runParameters).get("result"))
-				.contains("LUA_STARTED"));
-			assertTrue(host.getRecentLogs().contains("INFO goodbye"));
+				.contains("SCRIPT_STARTED"));
+			GenericClientScriptHostTest.await(() -> host.getRecentLogs().contains("hello-world: goodbye"));
 			Map<String, Object> actionParameters = new LinkedHashMap<>();
 			actionParameters.put("action", "refresh");
 			assertTrue(((String) post(server, "scripts.action", actionParameters).get("result"))
-				.contains("SCRIPT_ACTION_QUEUED"));
+				.contains("queued"));
 			host.publishGameTick(snapshot(10));
 			long actionDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
-			while (!host.getRecentLogs().contains("INFO refresh") && System.nanoTime() < actionDeadline)
+			while (!host.getRecentLogs().contains("hello-world: refresh") && System.nanoTime() < actionDeadline)
 			{
 				Thread.sleep(10);
 			}
-			assertTrue(host.getRecentLogs().contains("INFO refresh"));
+			assertTrue(host.getRecentLogs().contains("hello-world: refresh"));
 
 			Map<String, Object> listed = post(server, "scripts.list", new LinkedHashMap<>());
 			assertEquals(1, ((java.util.List<?>) listed.get("result")).size());
@@ -344,7 +329,7 @@ public class GenericClientControlServerTest
 			tick,
 			"LOGGED_IN",
 			240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
+			new GenericClientPlayerSnapshot(1L, "Player", 3200, 3200, 0, -1),
 			Collections.emptyList());
 	}
 }

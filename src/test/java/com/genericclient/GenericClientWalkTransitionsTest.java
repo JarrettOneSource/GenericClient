@@ -399,10 +399,10 @@ public class GenericClientWalkTransitionsTest
 	private static GenericClientSnapshot ladderSnapshot(long tick, WorldPoint player)
 	{
 		GenericClientQuestSnapshot quest = new GenericClientQuestSnapshot(true, new int[0],
-			List.of(new GenericClientQuestSnapshot.ObjectSnapshot(24718, "Ladder", "game",
+			List.of(new GenericClientQuestSnapshot.ObjectSnapshot(3L, 24718, "Ladder", "game",
 				2907, 3476, 0, 1, List.of("Climb-down"))), GenericClientQuestSnapshot.DialogueSnapshot.closed());
 		return new GenericClientSnapshot(tick, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("walker-test", player.getX(), player.getY(), player.getPlane(), 0),
+			new GenericClientPlayerSnapshot(1L,"walker-test", player.getX(), player.getY(), player.getPlane(), 0),
 			List.of(), GenericClientAccountSnapshot.empty(), quest);
 	}
 }

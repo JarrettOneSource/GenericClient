@@ -1,12 +1,7 @@
 package com.genericclient;
 
 import com.google.inject.Provides;
-import java.awt.Color;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
-import java.awt.image.BufferedImage;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -15,8 +10,6 @@ import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import javax.inject.Provider;
 import lombok.extern.slf4j.Slf4j;
@@ -39,19 +32,15 @@ import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.input.KeyManager;
-import net.runelite.client.input.MouseManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
-import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.DrawManager;
-import net.runelite.client.ui.NavigationButton;
-import net.runelite.client.ui.overlay.OverlayManager;
 
 @Slf4j
 @PluginDescriptor(
 	name = "GenericClient",
-	description = "Popout Lua automation dashboard with seeded behavior profiles and synthetic client input",
-	tags = {"genericclient", "diagnostics", "lua", "scripting", "mouse", "mcp", "behavior", "dashboard"},
+	description = "Popout Java automation dashboard with seeded behavior profiles and synthetic client input",
+	tags = {"genericclient", "diagnostics", "scripts", "scripting", "mouse", "mcp", "behavior", "dashboard"},
 	loadInSafeMode = false
 )
 public final class GenericClientPlugin extends Plugin
@@ -70,11 +59,6 @@ public final class GenericClientPlugin extends Plugin
 	@Inject
 	private GenericClientMouseEffectOverlay mouseEffectOverlay;
 
-	@Inject
-	private Provider<OverlayManager> overlayManagerProvider;
-
-	@Inject
-	private Provider<ClientToolbar> clientToolbarProvider;
 
 	@Inject
 	private DrawManager drawManager;
@@ -84,9 +68,6 @@ public final class GenericClientPlugin extends Plugin
 
 	@Inject
 	private ConfigManager configManager;
-
-	@Inject
-	private MouseManager mouseManager;
 
 	@Inject
 	private KeyManager keyManager;
@@ -101,27 +82,21 @@ public final class GenericClientPlugin extends Plugin
 	private volatile Instant startedAt;
 	private boolean loginMessageShown;
 
-	private GenericClientDashboard panel;
-	private GenericClientBreakOverlay breakOverlay;
-	private GenericClientScriptOverlay scriptOverlay;
-	private GenericClientSceneOverlay sceneOverlay;
+	@Inject private net.runelite.client.eventbus.EventBus eventBus;
+	private final GenericClientEntityIds entityIds = new GenericClientEntityIds();
+	private GenericClientMouseProfiles mouseProfiles;
+	private GenericClientDesktop desktop;
+	@Inject private Provider<GenericClientDesktop> desktopProvider;
 	private GenericClientSceneHighlights sceneHighlights;
 	private GenericClientControlServer controlServer;
-	private GenericClientMouseRecorder mouseRecorder;
 	private GenericClientScreenshot screenshot;
 	private GenericClientDeathForensics deathForensics;
 	private GenericClientRuntimeOptions runtimeOptions;
 	private GenericClientInstanceRegistration instanceRegistration;
-	private OverlayManager presentationOverlayManager;
-	private ClientToolbar presentationToolbar;
-	private NavigationButton navigationButton;
-	private Path mouseProfilesDirectory;
-	private volatile GenericClientMouseProfile mouseProfile;
 	private volatile GenericClientAutomationRuntime runtime;
 	private final GenericClientBankCache bankCache = new GenericClientBankCache();
 	private final GenericClientQuestCache questCache = new GenericClientQuestCache();
 	private final GenericClientGameMessageBuffer gameMessages = new GenericClientGameMessageBuffer();
-	private ScheduledFuture<?> panelRefreshFuture;
 
 	@Override
 	protected void startUp() throws Exception
@@ -136,11 +111,7 @@ public final class GenericClientPlugin extends Plugin
 		lastStatus = runtimeOptions.isDense()
 			? "PLUGIN_STARTED dense RuneLite loaded GenericClient"
 			: "PLUGIN_STARTED stock RuneLite loaded GenericClient";
-		mouseProfilesDirectory = net.runelite.client.RuneLite.RUNELITE_DIR.toPath()
-			.resolve("genericclient")
-			.resolve("mouse-profiles");
-		GenericClientMouseProfile.installDefault(mouseProfilesDirectory);
-		loadConfiguredMouseProfile();
+		mouseProfiles = new GenericClientMouseProfiles(config, configManager, executor, this::publishResult);
 		GenericClientCollisionMap collisionMap = GenericClientCollisionMap.loadBundled();
 		if (runtimeOptions.isDense())
 		{
@@ -148,18 +119,19 @@ public final class GenericClientPlugin extends Plugin
 			client.setUnlockedFps(true);
 			client.setUnlockedFpsTarget(1);
 		}
+		eventBus.register(entityIds);
 		runtime = new GenericClientAutomationRuntime(
 			client, clientThread, executor, keyManager,
 			net.runelite.client.RuneLite.RUNELITE_DIR.toPath().resolve("genericclient"),
-			collisionMap, () -> mouseProfile, mouseEffectOverlay,
+			collisionMap, mouseProfiles, mouseEffectOverlay,
 			message ->
 			{
 				if (runtimeOptions.isPresentationEnabled()) notifierProvider.get().notify(message);
 				postChat(message);
-			}, this::publishResult);
-		mouseRecorder = new GenericClientMouseRecorder(client.getCanvas(), runtime::activeClientInput);
+			}, this::publishResult, entityIds);
+		mouseProfiles.attachRecorder(client.getCanvas(), runtime::activeClientInput);
 		sceneHighlights = new GenericClientSceneHighlights(
-			runtime.luaHost::getSceneMarkers,
+			runtime.scriptHost::getSceneMarkers,
 			runtime.syntheticMouse::isMoving);
 		sceneHighlights.setShowMouseTile(config.showMouseTile());
 		screenshot = new GenericClientScreenshot(drawManager, executor);
@@ -171,7 +143,7 @@ public final class GenericClientPlugin extends Plugin
 			this::publishResult);
 		controlServer = new GenericClientControlServer(
 			runtimeOptions.getControlPort(),
-			runtime.luaHost,
+			runtime.scriptHost,
 			runtime.automationScheduler,
 			runtime.randomEventController,
 			runtime.sessionController::logout,
@@ -188,37 +160,9 @@ public final class GenericClientPlugin extends Plugin
 		publishInitialInstanceDescriptor();
 		if (runtimeOptions.isPresentationEnabled())
 		{
-			breakOverlay = new GenericClientBreakOverlay(
-				runtime.behaviorController::status,
-				runtime.behaviorController::endActiveBreak);
-			scriptOverlay = new GenericClientScriptOverlay(
-				runtime.luaHost::getActiveScriptView,
-				runtime.luaHost::getActivity,
-				runtime.luaHost::getScriptState);
-			panel = new GenericClientDashboard(
-				javax.swing.SwingUtilities.getWindowAncestor(client.getCanvas()),
-				dashboardActions(),
-				runtime.luaHost,
-				runtime.automationScheduler);
-			navigationButton = NavigationButton.builder()
-				.tooltip("GenericClient")
-				.icon(createIcon())
-				.priority(1)
-				.onClick(panel::open)
-				.build();
-
-			presentationOverlayManager = overlayManagerProvider.get();
-			presentationToolbar = clientToolbarProvider.get();
-			presentationOverlayManager.add(mouseEffectOverlay);
-			presentationOverlayManager.add(breakOverlay);
-			mouseManager.registerMouseListener(breakOverlay.getMouseListener());
-			presentationOverlayManager.add(scriptOverlay);
-			sceneOverlay = new GenericClientSceneOverlay(client, sceneHighlights::visibleMarkers);
-			presentationOverlayManager.add(sceneOverlay);
-			presentationToolbar.addNavigation(navigationButton);
-			refreshPanel();
-			panelRefreshFuture = executor.scheduleAtFixedRate(
-				this::refreshPanel, 1L, 1L, TimeUnit.SECONDS);
+			desktop = desktopProvider.get();
+			desktop.start(runtime.scriptHost, runtime.automationScheduler, runtime, mouseProfiles, sceneHighlights,
+				mouseEffectOverlay, dashboardActions(), () -> gameStateName, () -> lastStatus);
 		}
 
 		log.info("{} PLUGIN_STARTED runeliteVersion={} classLoader={} thread={}",
@@ -245,8 +189,8 @@ public final class GenericClientPlugin extends Plugin
 		log.info("{} MOUSE_PROFILE_LOADED file={} profile={} templates={}",
 			LOG_PREFIX,
 			config.mouseProfileFile(),
-			mouseProfile.getProfileId(),
-			mouseProfile.getTemplateCount());
+			mouseProfiles.get().getProfileId(),
+			mouseProfiles.get().getTemplateCount());
 		printDiagnostics();
 		runtime.behaviorController.setLoggedIn(client.getGameState() == GameState.LOGGED_IN);
 		if (client.getGameState() == GameState.LOGGED_IN) runtime.activateBehaviorProfile();
@@ -256,24 +200,18 @@ public final class GenericClientPlugin extends Plugin
 	protected void shutDown()
 	{
 		lifecycle = "STOPPING";
+		if (desktop != null) desktop.close();
+		desktop = null;
 		closeRuntimeServices();
-		removePluginUi();
+		sceneHighlights = null;
+		eventBus.unregister(entityIds);
+		entityIds.clear();
 		lifecycle = "STOPPED";
 		log.info("{} PLUGIN_STOPPED ticks={} uptime={}", LOG_PREFIX, tickCount, getUptimeText());
 	}
 
 	private void closeRuntimeServices()
 	{
-		if (panelRefreshFuture != null)
-		{
-			panelRefreshFuture.cancel(false);
-			panelRefreshFuture = null;
-		}
-		if (panel != null)
-		{
-			panel.close();
-			panel = null;
-		}
 		if (controlServer != null)
 		{
 			controlServer.close();
@@ -302,53 +240,9 @@ public final class GenericClientPlugin extends Plugin
 			runtime.close();
 			runtime = null;
 		}
-		if (mouseRecorder != null)
-		{
-			mouseRecorder.close();
-			mouseRecorder = null;
-		}
+		if (mouseProfiles != null) mouseProfiles.close();
 	}
 
-	private void removePluginUi()
-	{
-		if (presentationOverlayManager != null)
-		{
-			presentationOverlayManager.remove(mouseEffectOverlay);
-		}
-		if (breakOverlay != null)
-		{
-			mouseManager.unregisterMouseListener(breakOverlay.getMouseListener());
-			if (presentationOverlayManager != null)
-			{
-				presentationOverlayManager.remove(breakOverlay);
-			}
-			breakOverlay = null;
-		}
-		if (scriptOverlay != null)
-		{
-			if (presentationOverlayManager != null)
-			{
-				presentationOverlayManager.remove(scriptOverlay);
-			}
-			scriptOverlay = null;
-		}
-		if (sceneOverlay != null)
-		{
-			if (presentationOverlayManager != null) presentationOverlayManager.remove(sceneOverlay);
-			sceneOverlay = null;
-		}
-		sceneHighlights = null;
-		if (navigationButton != null)
-		{
-			if (presentationToolbar != null)
-			{
-				presentationToolbar.removeNavigation(navigationButton);
-			}
-			navigationButton = null;
-		}
-		presentationOverlayManager = null;
-		presentationToolbar = null;
-	}
 
 	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
@@ -390,7 +284,7 @@ public final class GenericClientPlugin extends Plugin
 		if (active == null) return;
 		tickCount++;
 		GenericClientSnapshot snapshot = GenericClientSnapshot.capture(
-			client, tickCount, bankCache, questCache, gameMessages.snapshot());
+			client, tickCount, bankCache, questCache, gameMessages.snapshot(), entityIds);
 		active.publishGameTick(snapshot);
 		GenericClientDeathForensics forensics = deathForensics;
 		if (forensics != null)
@@ -450,7 +344,7 @@ public final class GenericClientPlugin extends Plugin
 		if (GenericClientConfig.GROUP.equals(event.getGroup()) &&
 			"mouseProfileFile".equals(event.getKey()))
 		{
-			reloadMouseProfile();
+			mouseProfiles.reload();
 		}
 		if (GenericClientConfig.GROUP.equals(event.getGroup()) &&
 			"mouseEffect".equals(event.getKey()))
@@ -472,7 +366,7 @@ public final class GenericClientPlugin extends Plugin
 		clientThread.invoke(() ->
 		{
 			Player player = client.getLocalPlayer();
-			GenericClientMouseProfile profile = mouseProfile;
+			GenericClientMouseProfile profile = mouseProfiles.get();
 			String playerLocation = player == null ? "unavailable" : String.valueOf(player.getWorldLocation());
 			String codeSource = getClass().getProtectionDomain().getCodeSource() == null
 				? "unknown"
@@ -511,81 +405,10 @@ public final class GenericClientPlugin extends Plugin
 		}
 	}
 
-	private void reloadMouseProfile()
-	{
-		executor.execute(() ->
-		{
-			try
-			{
-				loadConfiguredMouseProfile();
-				publishResult("MOUSE_PROFILE_LOADED file=" + config.mouseProfileFile() +
-					" profile=" + mouseProfile.getProfileId() +
-					" templates=" + mouseProfile.getTemplateCount());
-			}
-			catch (IOException | RuntimeException exception)
-			{
-				publishResult("MOUSE_PROFILE_LOAD_FAILED file=" + config.mouseProfileFile() +
-					" message=" + exception.getMessage());
-			}
-		});
-	}
 
-	private void loadConfiguredMouseProfile() throws IOException
-	{
-		String configured = config.mouseProfileFile().trim();
-		Path name = Path.of(configured).getFileName();
-		if (configured.isEmpty() || !name.toString().equals(configured))
-		{
-			throw new IOException("Mouse profile must be a filename inside " + mouseProfilesDirectory);
-		}
-		mouseProfile = GenericClientMouseProfile.load(mouseProfilesDirectory.resolve(name));
-	}
 
-	private void startMouseRecording()
-	{
-		try
-		{
-			mouseRecorder.start();
-			publishResult("MOUSE_RECORDING_STARTED");
-		}
-		catch (RuntimeException exception)
-		{
-			publishResult("MOUSE_RECORDING_FAILED message=" + exception.getMessage());
-		}
-	}
 
-	private void stopMouseRecording()
-	{
-		final GenericClientMouseProfile recorded;
-		final String profileId = "recorded-" + Instant.now().toEpochMilli();
-		try
-		{
-			recorded = mouseRecorder.stop(profileId);
-			publishResult("MOUSE_RECORDING_STOPPED templates=" + recorded.getTemplateCount());
-		}
-		catch (RuntimeException exception)
-		{
-			publishResult("MOUSE_RECORDING_FAILED message=" + exception.getMessage());
-			return;
-		}
 
-		executor.execute(() ->
-		{
-			String fileName = profileId + ".json";
-			try
-			{
-				recorded.save(mouseProfilesDirectory.resolve(fileName));
-				mouseProfile = recorded;
-				configManager.setConfiguration(GenericClientConfig.GROUP, "mouseProfileFile", fileName);
-				publishResult("MOUSE_PROFILE_RECORDED file=" + fileName +
-					" templates=" + recorded.getTemplateCount());
-			}
-			catch (IOException exception)
-			{
-				publishResult("MOUSE_RECORDING_SAVE_FAILED message=" + exception.getMessage());
-			}
-		});
-	}
 
 	private void postChat(String message)
 	{
@@ -641,19 +464,19 @@ public final class GenericClientPlugin extends Plugin
 			@Override
 			public void reloadMouseProfile()
 			{
-				GenericClientPlugin.this.reloadMouseProfile();
+				mouseProfiles.reload();
 			}
 
 			@Override
 			public void startMouseRecording()
 			{
-				GenericClientPlugin.this.startMouseRecording();
+				mouseProfiles.startRecording();
 			}
 
 			@Override
 			public void stopMouseRecording()
 			{
-				GenericClientPlugin.this.stopMouseRecording();
+				mouseProfiles.stopRecording();
 			}
 
 			@Override
@@ -700,34 +523,13 @@ public final class GenericClientPlugin extends Plugin
 		};
 	}
 
-	private List<String> listMouseProfiles()
-	{
-		if (mouseProfilesDirectory == null)
-		{
-			return Collections.emptyList();
-		}
-		List<String> files = new ArrayList<>();
-		try (java.util.stream.Stream<Path> paths = java.nio.file.Files.list(mouseProfilesDirectory))
-		{
-			paths.filter(java.nio.file.Files::isRegularFile)
-				.map(path -> path.getFileName().toString())
-				.filter(name -> name.endsWith(".json"))
-				.sorted(String.CASE_INSENSITIVE_ORDER)
-				.forEach(files::add);
-		}
-		catch (IOException exception)
-		{
-			log.warn("Unable to list mouse profiles", exception);
-		}
-		return files;
-	}
 
 	private Map<String, Object> deathForensicContext()
 	{
 		GenericClientAutomationRuntime active = runtime;
 		Map<String, Object> value = new LinkedHashMap<>();
 		value.put("last_status", lastStatus);
-		GenericClientLuaHost host = active == null ? null : active.luaHost;
+		GenericClientScriptHost host = active == null ? null : active.scriptHost;
 		if (host != null)
 		{
 			GenericClientActiveScript script = host.getActiveScriptView();
@@ -783,7 +585,7 @@ public final class GenericClientPlugin extends Plugin
 			snapshot == null
 				? new ArrayList<>()
 				: snapshot.read("messages", Collections.singletonMap("limit", 20L)));
-		GenericClientMouseProfile profile = mouseProfile;
+		GenericClientMouseProfile profile = mouseProfiles.get();
 		if (profile != null)
 		{
 			Map<String, Object> mouse = new LinkedHashMap<>();
@@ -794,7 +596,7 @@ public final class GenericClientPlugin extends Plugin
 			mouse.put("manual_takeover", takeover != null && takeover.isActive());
 			value.put("mouse", mouse);
 		}
-		for (String subject : List.of("lua", "behavior", "automation", "safety", "combat_guard", "random_event"))
+		for (String subject : List.of("scripts", "behavior", "automation", "safety", "combat_guard", "random_event"))
 		{
 			value.put(subject, null);
 		}
@@ -899,54 +701,10 @@ public final class GenericClientPlugin extends Plugin
 
 	private void refreshPanel()
 	{
-		GenericClientAutomationRuntime active = runtime;
-		GenericClientDashboard currentPanel = panel;
-		if (currentPanel == null)
-		{
-			return;
-		}
-		GenericClientBehaviorController behaviors = active == null ? null : active.behaviorController;
-		currentPanel.updateBehaviorState(behaviors == null ? null : behaviors.status());
-		GenericClientAutomationScheduler automations = active == null ? null : active.automationScheduler;
-		currentPanel.updateAutomationState(automations == null ? null : automations.status());
-		GenericClientLuaHost scripts = active == null ? null : active.luaHost;
-		if (scripts != null)
-		{
-			currentPanel.updateLiveState(
-				gameStateName,
-				scripts.getActiveScript(),
-				scripts.getStatus(),
-				lastStatus);
-			currentPanel.updateLuaState(scripts.getActiveScript(), scripts.getStatus(), scripts.getRecentLogs());
-		}
-		GenericClientMouseRecorder recorder = mouseRecorder;
-		currentPanel.updateMouseState(
-			config.mouseProfileFile(),
-			listMouseProfiles(),
-			config.mouseEffect(),
-			recorder != null && recorder.isRecording(),
-			recorder == null ? 0 : recorder.getTemplateCount(),
-			config.showMouseTile());
+		GenericClientDesktop view = desktop;
+		if (view != null) view.refresh(gameStateName, lastStatus);
 	}
 
-	private static BufferedImage createIcon()
-	{
-		BufferedImage icon = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
-		Graphics2D graphics = icon.createGraphics();
-		try
-		{
-			graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-			graphics.setColor(new Color(68, 181, 126));
-			graphics.fillRoundRect(0, 0, 16, 16, 6, 6);
-			graphics.setColor(Color.BLACK);
-			graphics.drawString("G", 4, 12);
-		}
-		finally
-		{
-			graphics.dispose();
-		}
-		return icon;
-	}
 
 	private String getUptimeText()
 	{

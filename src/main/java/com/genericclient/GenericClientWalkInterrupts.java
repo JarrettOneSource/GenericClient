@@ -11,7 +11,7 @@ import java.util.TreeMap;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.VarPlayerID;
 
-/** Snapshot predicates declared by Lua; contains no quest zones or upkeep decisions. */
+/** Snapshot predicates declared by scripts; contains no quest zones or upkeep decisions. */
 final class GenericClientWalkInterrupts
 {
 	private static final Set<String> FIELDS = Set.of("area", "dialogue", "poisoned", "missing_item",
@@ -168,7 +168,7 @@ final class GenericClientWalkInterrupts
 
 	private static List<?> list(Object value, String label)
 	{
-		if (value == null || value instanceof Map && ((Map<?, ?>) value).isEmpty()) return Collections.emptyList();
+		if (value == null) return Collections.emptyList();
 		if (!(value instanceof List)) throw invalid(label + " must be an array");
 		if (((List<?>) value).size() > 512) throw invalid(label + " contains more than 512 entries");
 		return (List<?>) value;

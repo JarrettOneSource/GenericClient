@@ -24,25 +24,22 @@ public class GenericClientInputCallbacksTest
 	@Test
 	public void delayedCallbacksDoNotTouchTheReplacementOperation()
 	{
-		try (QueuedClient scene = new QueuedClient())
-		{
-			AtomicReference<CompletableFuture<?>> current = new AtomicReference<>(new CompletableFuture<>());
-			GenericClientInputCallbacks callbacks = new GenericClientInputCallbacks(this, current::get, scene.executor);
-			AtomicInteger effects = new AtomicInteger();
-			Runnable queued = callbacks.bind(() -> { effects.incrementAndGet(); });
-			BiConsumer<String, Throwable> finished = callbacks.bind((value, error) -> { effects.incrementAndGet(); });
-			Function<String, CompletableFuture<String>> nextClick = callbacks.bind(value -> {
-				effects.incrementAndGet();
-				return CompletableFuture.completedFuture(value);
-			});
-			current.set(new CompletableFuture<>());
-			queued.run();
-			finished.accept("old input", null);
-			assertTrue(nextClick.apply("old input").isCompletedExceptionally());
-			assertEquals(0, effects.get());
-			callbacks.bind(() -> { effects.incrementAndGet(); }).run();
-			assertEquals(1, effects.get());
-		}
+		AtomicReference<CompletableFuture<?>> current = new AtomicReference<>(new CompletableFuture<>());
+		GenericClientInputCallbacks callbacks = new GenericClientInputCallbacks(this, current::get, () -> fail("Unexpected cancellation"));
+		AtomicInteger effects = new AtomicInteger();
+		Runnable queued = callbacks.bind(() -> { effects.incrementAndGet(); });
+		BiConsumer<String, Throwable> finished = callbacks.bind((value, error) -> { effects.incrementAndGet(); });
+		Function<String, CompletableFuture<String>> nextClick = callbacks.bind(value -> {
+			effects.incrementAndGet();
+			return CompletableFuture.completedFuture(value);
+		});
+		current.set(new CompletableFuture<>());
+		queued.run();
+		finished.accept("old input", null);
+		assertTrue(nextClick.apply("old input").isCompletedExceptionally());
+		assertEquals(0, effects.get());
+		callbacks.bind(() -> { effects.incrementAndGet(); }).run();
+		assertEquals(1, effects.get());
 	}
 
 	@Test
@@ -105,5 +102,33 @@ public class GenericClientInputCallbacksTest
 			@Override public void invoke(Runnable action) { queue.addLast(action); }
 		};
 		@Override public void close() { executor.shutdownNow(); }
+	}
+
+	@Test public void queuedRevokedInputCompletesOnlyItsOwningResult()
+	{
+		AtomicReference<CompletableFuture<String>> current = new AtomicReference<>(new CompletableFuture<>());
+		AtomicReference<Runnable> queued = new AtomicReference<>();
+		AtomicInteger rejected = new AtomicInteger();
+		GenericClientInputCallbacks callbacks = new GenericClientInputCallbacks(this,current::get,() -> {
+			rejected.incrementAndGet();
+			current.get().complete("cancelled");
+		});
+		net.runelite.client.callback.ClientThread clientThread = new net.runelite.client.callback.ClientThread()
+		{
+			@Override public void invoke(Runnable action) { queued.set(action); }
+		};
+		GenericClientActivityContext context = GenericClientActivityContext.none().openInputScope();
+		callbacks.invoke(clientThread,context,() -> fail("Revoked input reached the client"));
+		context.cancelInput();
+		queued.get().run();
+		assertEquals("cancelled",current.get().join());
+		queued.get().run();
+		assertEquals(1,rejected.get());
+		current.set(new CompletableFuture<>());
+		callbacks.invoke(clientThread,context,() -> fail("Replaced input reached the client"));
+		current.set(new CompletableFuture<>());
+		queued.get().run();
+		assertFalse(current.get().isDone());
+		assertEquals(1,rejected.get());
 	}
 }

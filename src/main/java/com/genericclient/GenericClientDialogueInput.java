@@ -84,12 +84,14 @@ final class GenericClientDialogueInput
 				return GenericClientMenuInput.Resolution.rejected("client_not_logged_in");
 			if (!expected.samePage(GenericClientQuestSnapshot.captureDialogue(client)))
 				return GenericClientMenuInput.Resolution.rejected("dialogue_changed");
-			return choice == null ? resolveContinue() : resolveChoice(choice);
+			return choice == null ? resolveContinue() : resolveChoice(choice, null);
 		}, context, () -> pacing(choice == null ? expected.text : choice).toPreInteraction());
 	}
 
 	CompletableFuture<Map<String, Object>> choose(
 		String text,
+		Integer optionIndex,
+		boolean keyboardInput,
 		GenericClientActivityContext activityContext,
 		boolean reading)
 	{
@@ -98,30 +100,18 @@ final class GenericClientDialogueInput
 			throw new IllegalArgumentException("Dialogue choice text cannot be empty");
 		}
 		String exactText = text.trim();
-		if (behavior.dialogueInputMode() == GenericClientBehaviorProfile.DialogueInputMode.KEYBOARD)
+		if (keyboardInput || behavior.dialogueInputMode() == GenericClientBehaviorProfile.DialogueInputMode.KEYBOARD)
 		{
-			return keyboardChoice(exactText, activityContext, reading);
+			return keyboardChoice(exactText, optionIndex, activityContext, reading);
 		}
 		if (!reading)
 		{
-			return menuInput.interactDirect(() -> resolveChoice(exactText), activityContext);
+			return menuInput.interactDirect(() -> resolveChoice(exactText, optionIndex), activityContext);
 		}
 		return menuInput.interactDirect(
-			() -> resolveChoice(exactText),
+			() -> resolveChoice(exactText, optionIndex),
 			activityContext,
 			() -> pacing(visibleChoiceText()).toPreInteraction());
-	}
-
-	CompletableFuture<Map<String, Object>> chooseKeyboard(
-		String text,
-		GenericClientActivityContext activityContext,
-		boolean reading)
-	{
-		if (text == null || text.trim().isEmpty())
-		{
-			throw new IllegalArgumentException("Dialogue choice text cannot be empty");
-		}
-		return keyboardChoice(text.trim(), activityContext, reading);
 	}
 
 	private CompletableFuture<Map<String, Object>> keyboardContinue(
@@ -146,6 +136,7 @@ final class GenericClientDialogueInput
 
 	private CompletableFuture<Map<String, Object>> keyboardChoice(
 		String exactText,
+		Integer optionIndex,
 		GenericClientActivityContext activityContext,
 		boolean reading)
 	{
@@ -155,7 +146,7 @@ final class GenericClientDialogueInput
 			for (int index = 0; index < options.size() && index < 9; index++)
 			{
 				Widget option = options.get(index);
-				if (exactText.equals(cleanText(option.getText())))
+				if (exactText.equals(cleanText(option.getText())) && (optionIndex == null || option.getIndex() == optionIndex))
 				{
 					return KeyboardSelection.digit(
 						index + 1,
@@ -424,7 +415,7 @@ final class GenericClientDialogueInput
 			: null;
 	}
 
-	private GenericClientMenuInput.Resolution resolveChoice(String exactText)
+	private GenericClientMenuInput.Resolution resolveChoice(String exactText, Integer optionIndex)
 	{
 		if (client.getGameState() != GameState.LOGGED_IN)
 		{
@@ -433,7 +424,7 @@ final class GenericClientDialogueInput
 		for (Widget option : visibleOptions())
 		{
 			String optionText = cleanText(option.getText());
-			if (!exactText.equals(optionText))
+			if (!exactText.equals(optionText) || (optionIndex != null && option.getIndex() != optionIndex))
 			{
 				continue;
 			}

@@ -9,13 +9,34 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import java.util.function.LongSupplier;
 import org.junit.rules.TemporaryFolder;
 
 final class GenericClientTestSupport
 {
 	private GenericClientTestSupport()
 	{
+	}
+
+	static GenericClientScriptHost scriptHost(Path directory) throws Exception
+	{
+		return new GenericClientScriptHost(directory,
+			context -> { throw new AssertionError("Unexpected random walk"); },
+			(destination, context) -> { throw new AssertionError("Unexpected click"); },
+			(request, boundary) ->
+				{ throw new AssertionError("Unexpected route"); },
+			(id, index, identity, name, action, within, context) -> { throw new AssertionError("Unexpected NPC input"); },
+			(mode, context) -> { throw new AssertionError("Unexpected combat input"); },
+			(type, arguments, context) -> { throw new AssertionError("Unexpected action " + type); },
+			reason -> {}, behavior(directory.resolve("behavior")), System::nanoTime, message -> {});
+	}
+
+	static String javaScript(String className, String settings, String members)
+	{
+		return "import java.util.*;\n" +
+			"import org.dreambot.api.script.*;\n" +
+			"import com.genericclient.script.*;\n" +
+			"@ScriptManifest(name=\"" + className + "\",author=\"Test\",category=Category.MISC,version=1)\n" +
+			settings + "\npublic class " + className + " extends AbstractScript {\n" + members + "\n}\n";
 	}
 
 	static GenericClientBehaviorController behavior(Path directory) throws Exception
@@ -83,33 +104,6 @@ final class GenericClientTestSupport
 			Collections.singletonMap("status", "bypassed"));
 	}
 
-	static GenericClientSnapshot luaSnapshot(long tick)
-	{
-		return new GenericClientSnapshot(
-			tick,
-			"LOGGED_IN",
-			231,
-			new GenericClientWorldSnapshot.PlayerSnapshot("Player", 3200, 3200, 0, -1),
-			Collections.singletonList(new GenericClientWorldSnapshot.NpcSnapshot(
-				1,
-				100,
-				"Banker",
-				3201,
-				3200,
-				0,
-				1,
-				0,
-				-1,
-				null,
-				Collections.singletonList("Bank"))));
-	}
-
-
-	static String script(String body)
-	{
-		return "return { run = function(input)\n" + body + "\nend }\n";
-	}
-
 	static Map<String, Object> receipt(String status)
 	{
 		Map<String, Object> receipt = new LinkedHashMap<>();
@@ -118,7 +112,7 @@ final class GenericClientTestSupport
 		return receipt;
 	}
 
-	static void waitForStatus(GenericClientLuaHost host, String expected) throws InterruptedException
+	static void waitForStatus(GenericClientScriptHost host, String expected) throws InterruptedException
 	{
 		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
 		while (!expected.equals(host.getStatus()) && System.nanoTime() < deadline)
@@ -191,45 +185,45 @@ final class GenericClientTestSupport
 		}
 	}
 
-	static LuaHostBuilder luaHost(TemporaryFolder folders, String name) throws Exception
+	static ScriptHostBuilder scriptHost(TemporaryFolder folders, String name) throws Exception
 	{
 		Path root = folders.newFolder(name).toPath();
-		return new LuaHostBuilder(root.resolve("scripts"), behavior(root.resolve("behavior")));
+		return new ScriptHostBuilder(root.resolve("scripts"), behavior(root.resolve("behavior")));
 	}
 
-	static LuaHostBuilder luaHost(
+	static ScriptHostBuilder scriptHost(
 		Path scriptsDirectory,
 		GenericClientBehaviorController behavior)
 	{
-		return new LuaHostBuilder(scriptsDirectory, behavior);
+		return new ScriptHostBuilder(scriptsDirectory, behavior);
 	}
 
-	static final class LuaHostBuilder
+	static final class ScriptHostBuilder
 	{
 		private final Path scriptsDirectory;
-		private GenericClientLuaActions.WalkRandomAction walkRandom =
+		private GenericClientScriptActions.WalkRandomAction walkRandom =
 			context -> CompletableFuture.completedFuture(interaction("unused"));
-		private GenericClientLuaActions.WalkClickAction walkClick = (destination, context) ->
+		private GenericClientScriptActions.WalkClickAction walkClick = (destination, context) ->
 			CompletableFuture.completedFuture(new GenericClientInteractionResult(destination,
 				"WALK_TILE_CLICK_UNAVAILABLE", false, Collections.emptyMap(), Collections.emptyMap()));
 		private java.util.function.Consumer<String> cancel = reason -> { };
 		private java.util.function.Consumer<String> report = message -> { };
-		private GenericClientLuaActions.WalkToAction walkTo =
+		private java.util.function.LongSupplier nanoClock = System::nanoTime;
+		private GenericClientScriptActions.WalkToAction walkTo =
 			(request, clickBoundary) ->
 				CompletableFuture.completedFuture(Collections.emptyMap());
-		private GenericClientLuaActions.NpcInteractAction npcInteract =
-			(id, name, action, within, context) -> completedReceipt(
+		private GenericClientScriptActions.NpcInteractAction npcInteract =
+			(id, index, identity, name, action, within, context) -> completedReceipt(
 				"rejected", "npc.interact is unavailable in this host");
-		private GenericClientLuaActions.CombatModeAction combatMode =
+		private GenericClientScriptActions.CombatModeAction combatMode =
 			(style, context) -> completedReceipt(
 				"rejected", "combat.set_style is unavailable in this host");
-		private GenericClientLuaActions.QuestAction questAction =
+		private GenericClientScriptActions.QuestAction questAction =
 			(type, action, context) -> completedReceipt(
 				"rejected", type + " is unavailable in this host");
 		private final GenericClientBehaviorController behavior;
-		private LongSupplier clock = System::nanoTime;
 
-		private LuaHostBuilder(
+		private ScriptHostBuilder(
 			Path scriptsDirectory,
 			GenericClientBehaviorController behavior)
 		{
@@ -237,49 +231,44 @@ final class GenericClientTestSupport
 			this.behavior = behavior;
 		}
 
-		LuaHostBuilder walkRandom(GenericClientLuaActions.WalkRandomAction value)
+		ScriptHostBuilder walkRandom(GenericClientScriptActions.WalkRandomAction value)
 		{
 			walkRandom = value;
 			return this;
 		}
 
-		LuaHostBuilder walkClick(GenericClientLuaActions.WalkClickAction value) { walkClick = value; return this; }
-		LuaHostBuilder cancel(java.util.function.Consumer<String> value) { cancel = value; return this; }
-		LuaHostBuilder report(java.util.function.Consumer<String> value) { report = value; return this; }
+		ScriptHostBuilder walkClick(GenericClientScriptActions.WalkClickAction value) { walkClick = value; return this; }
+		ScriptHostBuilder cancel(java.util.function.Consumer<String> value) { cancel = value; return this; }
+		ScriptHostBuilder report(java.util.function.Consumer<String> value) { report = value; return this; }
+		ScriptHostBuilder nanoClock(java.util.function.LongSupplier value) { nanoClock = value; return this; }
 
-		LuaHostBuilder walkTo(GenericClientLuaActions.WalkToAction value)
+		ScriptHostBuilder walkTo(GenericClientScriptActions.WalkToAction value)
 		{
 			walkTo = value;
 			return this;
 		}
 
-		LuaHostBuilder npcInteract(GenericClientLuaActions.NpcInteractAction value)
+		ScriptHostBuilder npcInteract(GenericClientScriptActions.NpcInteractAction value)
 		{
 			npcInteract = value;
 			return this;
 		}
 
-		LuaHostBuilder combatMode(GenericClientLuaActions.CombatModeAction value)
+		ScriptHostBuilder combatMode(GenericClientScriptActions.CombatModeAction value)
 		{
 			combatMode = value;
 			return this;
 		}
 
-		LuaHostBuilder questAction(GenericClientLuaActions.QuestAction value)
+		ScriptHostBuilder questAction(GenericClientScriptActions.QuestAction value)
 		{
 			questAction = value;
 			return this;
 		}
 
-		LuaHostBuilder clock(LongSupplier value)
+		GenericClientScriptHost build() throws Exception
 		{
-			clock = value;
-			return this;
-		}
-
-		GenericClientLuaHost build() throws Exception
-		{
-			return new GenericClientLuaHost(
+			return new GenericClientScriptHost(
 				scriptsDirectory,
 				walkRandom,
 				walkClick,
@@ -289,8 +278,8 @@ final class GenericClientTestSupport
 				questAction,
 				cancel,
 				behavior,
-				report,
-				clock);
+				nanoClock,
+				report);
 		}
 
 		private static CompletableFuture<Map<String, Object>> completedReceipt(

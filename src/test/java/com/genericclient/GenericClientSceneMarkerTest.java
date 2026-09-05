@@ -1,6 +1,7 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.awt.Color;
@@ -12,6 +13,12 @@ import org.junit.Test;
 
 public class GenericClientSceneMarkerTest
 {
+	@Test public void emptyMarkersUseAnArrayAndRejectAnObject()
+	{
+		assertTrue(GenericClientSceneMarker.parse(List.of()).isEmpty());
+		assertThrows(IllegalArgumentException.class, () -> GenericClientSceneMarker.parse(Map.of()));
+	}
+
 	@Test
 	public void parsesNpcMarkerAndDirection()
 	{

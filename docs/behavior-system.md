@@ -1,10 +1,10 @@
 # Behavior system
 
-This is the implemented scripting API 3 contract. GenericClient owns behavior timing, policy resolution and input cancellation; Lua declares activity and short action sequences. The source and test acceptance state is tracked in [behavior-framework-implementation.md](behavior-framework-implementation.md). Fresh acceptance of the API 3 build in the live client remains pending.
+This is the implemented scripting API 3 contract. GenericClient owns behavior timing, policy resolution and input cancellation; Java scripts declare activity and short action sequences. The source and test acceptance state is tracked in [java-scripting-migration.md](java-scripting-migration.md). Fresh acceptance of the API 3 build in the live client remains pending.
 
 ## Policy and activity
 
-`gc.activity(name, policy)` declares the coroutine's activity and optional independent overrides. An await captures that declaration. Its optional `activity` selects another preset for that await, and its `policy` then overrides individual fields. When no activity has been declared, the action type selects the initial preset. `gc.state(name)` changes the script's displayed state without changing policy.
+`Automation.activity(name, policy)` declares the worker's activity and optional independent overrides. An operation captures that declaration. Its optional `activity` selects another preset for that operation, and its `policy` then overrides individual fields. When no activity has been declared, the action type selects the initial preset. `Automation.overlay(rows)` updates displayed progress without changing policy.
 
 | Activity | Breaks | Cursor release | Mouse | Expected damage | Prayer owner | Walk refresh | Fidgets |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -16,21 +16,19 @@ This is the implemented scripting API 3 contract. GenericClient owns behavior ti
 | `dialogue`, `banking`, `trading` | No | `none` | `natural` | No | `guard` | No | `none` |
 | `manual` | No | `none` | `natural` | No | `script` | No | `none` |
 
-The Lua policy fields are `breaks`, `cursor_release`, `mouse`, `damage_expected`, `prayer_owner`, `walk_refresh`, and `fidget`. The boolean fields require booleans; the other fields accept the names in the table. Unknown fields and values are rejected.
+The policy fields are `breaks`, `cursor_release`, `mouse`, `damage_expected`, `prayer_owner`, `walk_refresh`, and `fidget`. The boolean fields require booleans; the other fields accept the names in the table. Unknown fields and values are rejected.
 
 Repeatable combat can explicitly permit breaks while keeping combat's mouse, damage and prayer policy:
 
-```lua
-gc.activity("combat", { breaks = true })
+```java
+Automation.activity("combat", Map.of("breaks", true));
 ```
 
 A single urgent action can suppress every discretionary behavior:
 
-```lua
-return gc.await {
-  action = { type = "consumable.cure_poison" },
-  policy = { breaks = false, cursor_release = "none", fidget = "none" },
-}
+```java
+return ScriptScope.current().execute("consumable.cure_poison", Map.of(
+    "policy", Map.of("breaks", false, "cursor_release", "none", "fidget", "none")), 60_000);
 ```
 
 The fields are independent: disabling breaks alone does not disable an independent cursor release or fidgets. The retired per-await `breaks` field is rejected.
@@ -46,7 +44,7 @@ The activity label remains the declared activity. `declared_policy`, `effective_
 
 ## Semantic boundaries and intents
 
-The Lua host owns one boundary around each semantic action. Target resolution and native input occur after the entry check. Entry may wait for an already active, permitted break; it does not start a new break. Successful input completion permits the post-action evaluation. A verified action result survives an error in that post-action evaluation, with the error attached to its behavior receipt.
+The Java script host owns one boundary around each semantic action. Target resolution and native input occur after the entry check. Entry may wait for an already active, permitted break; it does not start a new break. Successful input completion permits the post-action evaluation. A verified action result survives an error in that post-action evaluation, with the error attached to its behavior receipt.
 
 An item-use operation, bank loadout, prayer change, or context-menu selection may contain several native clicks. Those clicks share the operation's boundary. Native input primitives do not make their own break decisions.
 
@@ -54,28 +52,19 @@ A journey performs the entry check once and gives each route click its own bound
 
 Use an intent for a short sequence whose steps belong together:
 
-```lua
--- Reach the bank before entering this scope.
-local banking = gc.require("shared_bank")
-return gc.intent("bank.withdraw", function()
-  local bank, failure = banking.open()
-  if not bank then return failure end
-  return gc.await {
-    action = {
-      type = "bank.loadout",
-      items = { { id = 526, quantity = 28 } },
-      minimum_free_slots = 0,
-      close = true,
-    },
-  }
-end)
+```java
+// Reach the bank before entering this scope.
+return Automation.intent("bank.withdraw", () -> {
+    if (!Bank.open()) throw new IllegalStateException("Bank did not open");
+    return Banking.loadout(Map.of(526, 28), 0, true);
+});
 ```
 
-`gc.intent(name, fn)` opens one outer boundary and runs `fn` with discretionary behavior suppressed. Nested intents share the outer boundary and receipt name. Normal returns preserve all values, including `nil`; errors unwind the scope and propagate. An awaited timeout is still a receipt that Lua may handle. Cancellation revokes the scope's input, and emergency pauses preserve its progress and verified results.
+`Automation.intent(name, supplier)` opens one outer boundary and runs the supplier with discretionary behavior suppressed. Nested intents share the outer boundary and receipt name. Normal returns preserve the supplier value, including `null`; errors unwind the scope and propagate. An awaited timeout is still a receipt that the script may handle. Cancellation revokes the scope's input, and emergency pauses preserve its progress and verified results.
 
 Scopes longer than 30 seconds produce one `INTENT_LONG` warning after entry. Long approaches, whole quests and training loops stay outside scopes. Urgent recovery actions retain explicit policy where waiting for an existing ordinary break would be inappropriate.
 
-Receipts inside the scope include `intent`. `gc.read("behavior")` adds `intent`, `intent_depth`, `intent_elapsed_millis` and `last_intent`. Logs include `INTENT_STARTED` and `INTENT_ENDED`.
+Receipts inside the scope include `intent`. `SnapshotData.read("behavior")` adds `intent`, `intent_depth`, `intent_elapsed_millis` and `last_intent`. Logs include `INTENT_STARTED` and `INTENT_ENDED`.
 
 ## Account profile
 
@@ -125,7 +114,7 @@ Completing a long break resets the long clock and budget, clears micro pressure,
 
 AFK and logout breaks use the same lifecycle. Logout mode waits for login and world readiness before releasing the suspended action. A running break persists across a client restart. The in-game countdown can end either break kind; the dashboard's long-break banner ends only that long break.
 
-`gc.phase(name, options)` records a major transition. `options.activity` updates the declaration before evaluation, while `options.policy` and `options.humanize` apply to that phase request. `gc.state` only updates the displayed script state.
+`Automation.phase(name, options)` records a major transition. `options.activity` updates the declaration before evaluation, while `options.policy` and `options.humanize` apply to that phase request. `Automation.overlay` only updates displayed progress.
 
 ## Cursor behavior and input ownership
 
@@ -154,8 +143,8 @@ Behavior state uses `genericclient_behavior_state.v3`. It persists the long cloc
 | `GenericClientBehaviorProfile` | Stable traits and duration/cadence sampling |
 | `GenericClientBehaviorPolicy`, `GenericClientPolicyResolver` | Independent fields and current effective policy |
 | `GenericClientBehaviorController`, `GenericClientBehaviorState`, `GenericClientBehaviorStore` | Owned time, pressure, break lifecycle and persistence |
-| `GenericClientActionBoundary`, `GenericClientLuaIntent` | Semantic boundaries, nested scopes and cancellation |
+| `GenericClientActionBoundary`, `GenericClientScriptRun` | Semantic boundaries, nested scopes and cancellation |
 | `GenericClientCursorBehavior` | Quiet-window cursor motion and rest ownership |
 | `GenericClientCombatGuard`, `GenericClientDamageTracker` | Threat/damage observations and guard-owned prayer |
 
-Use `./gradlew --offline qualityReport`, the native-input tests under Xvfb where required, and the catalog's `python3 tools/validate.py`. Tests cover dense/sparse boundary schedules, persistence, session grace, interrupted long breaks, policy precedence, native queued input, cursor cancellation and scope placement. Passing those checks is separate from packaging, installation and fresh live acceptance.
+Use `./gradlew --offline qualityReport`, the native-input tests under Xvfb where required, and the catalog's Gradle tests and PMD checks. Tests cover dense/sparse boundary schedules, persistence, session grace, interrupted long breaks, policy precedence, native queued input, cursor cancellation and scope placement. Passing those checks is separate from packaging, installation and fresh live acceptance.

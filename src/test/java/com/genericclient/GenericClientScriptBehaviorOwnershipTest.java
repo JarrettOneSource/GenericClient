@@ -128,7 +128,7 @@ public class GenericClientScriptBehaviorOwnershipTest
 			actions.execute("prayer.set", Map.of("prayer", "protect_from_melee"),
 				GenericClientActivityContext.none().withTicket(ticket)).get(3, TimeUnit.SECONDS);
 			assertTrue("The physical prayer action must be verified before cancellation", active.get());
-			return actions.releaseScriptPrayer().get(3, TimeUnit.SECONDS);
+			return actions.releaseScriptPrayer(GenericClientActivityContext.none()).get(3, TimeUnit.SECONDS);
 		}
 		finally
 		{
@@ -152,6 +152,7 @@ public class GenericClientScriptBehaviorOwnershipTest
 					case "getBounds": return new Rectangle(200, 100, 30, 30);
 					case "isHidden":
 					case "isSelfHidden": return false;
+					case "getChildren":
 					case "getStaticChildren":
 					case "getDynamicChildren":
 					case "getNestedChildren":

@@ -126,7 +126,7 @@ final class GenericClientSceneMarker
 
 	static List<GenericClientSceneMarker> parse(Object rawMarkers)
 	{
-		if (rawMarkers == null || rawMarkers instanceof Map && ((Map<?, ?>) rawMarkers).isEmpty())
+		if (rawMarkers == null)
 		{
 			return Collections.emptyList();
 		}

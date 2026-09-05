@@ -42,9 +42,10 @@ public final class GenericClientRouteAudit
 						(avoided.isEmpty() || !avoided.contains(new WorldPoint(x + dx, y + dy, plane))),
 					GenericClientTransportCatalog.available(account.snapshot(route.points.get(0)), avoided, Set.of(), Set.of()));
 				double elapsedMillis = (System.nanoTime() - start) / 1_000_000.0;
+				boolean forbidden = result.getPath().stream().anyMatch(route.forbiddenTiles::contains);
 				System.out.printf(java.util.Locale.ROOT, "%s\t%s\t%s\t%d\t%d\t%d\t%.3f%n", entry.getKey(), account,
-					result.getStatus(), result.getPath().size(), result.getExpandedNodes(), result.getTransports().size(), elapsedMillis);
-				if (result.getStatus() != GenericClientPathfinder.Status.FOUND) failures++;
+					forbidden ? "FORBIDDEN_AREA" : result.getStatus(), result.getPath().size(), result.getExpandedNodes(), result.getTransports().size(), elapsedMillis);
+				if (result.getStatus() != GenericClientPathfinder.Status.FOUND || forbidden) failures++;
 			}
 		}
 		failures += auditTransports(collisionMap, pathfinder);
@@ -95,17 +96,24 @@ public final class GenericClientRouteAudit
 				declaredPoints++;
 				continue;
 			}
-			if (!"route".equals(fields[6]) && !"arrival".equals(fields[6]) && !"avoid".equals(fields[6]))
-				throw new IllegalArgumentException("Unknown audit row kind: " + fields[6]);
 			Route route = routes.computeIfAbsent(fields[0], key -> new Route());
-			List<WorldPoint> target = "arrival".equals(fields[6]) ? route.arrivalTiles :
-				"avoid".equals(fields[6]) ? route.avoidTiles : route.points;
+			List<WorldPoint> target;
+			switch (fields[6])
+			{
+				case "route":
+					target = route.points;
+					route.within = Integer.parseInt(fields[5]);
+					route.accounts = "ALL".equals(fields[7]) ? List.of(GenericClientNavigationAccount.values()) :
+						List.of(GenericClientNavigationAccount.valueOf(fields[7]));
+					break;
+				case "arrival": target = route.arrivalTiles; break;
+				case "avoid": target = route.avoidTiles; break;
+				case "forbidden": target = route.forbiddenTiles; break;
+				default: throw new IllegalArgumentException("Unknown audit row kind: " + fields[6]);
+			}
 			if (Integer.parseInt(fields[1]) != target.size() + 1)
 				throw new IllegalArgumentException("Nonconsecutive " + fields[6] + " indices: " + fields[0]);
 			target.add(point);
-			route.within = Integer.parseInt(fields[5]);
-			route.accounts = "ALL".equals(fields[7]) ? List.of(GenericClientNavigationAccount.values()) :
-				List.of(GenericClientNavigationAccount.valueOf(fields[7]));
 		}
 		return declaredPoints;
 	}
@@ -115,6 +123,7 @@ public final class GenericClientRouteAudit
 		private final List<WorldPoint> points = new ArrayList<>();
 		private final List<WorldPoint> arrivalTiles = new ArrayList<>();
 		private final List<WorldPoint> avoidTiles = new ArrayList<>();
+		private final List<WorldPoint> forbiddenTiles = new ArrayList<>();
 		private int within;
 		private List<GenericClientNavigationAccount> accounts;
 	}

@@ -130,10 +130,10 @@ public class GenericClientTransportConversationTest
 
 	private static GenericClientSnapshot frame(long tick, WorldPoint player, GenericClientQuestSnapshot.DialogueSnapshot dialogue)
 	{
-		GenericClientWorldSnapshot.NpcSnapshot waydar = new GenericClientWorldSnapshot.NpcSnapshot(3, 1446, "Waydar",
+		GenericClientNpcSnapshot waydar = new GenericClientNpcSnapshot(2L,3,1446, "Waydar",
 			2649, 4519, 0, 1, 0, -1, null, List.of("Talk-to"));
 		return new GenericClientSnapshot(tick, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("transport-test", player.getX(), player.getY(), player.getPlane(), 0),
+			new GenericClientPlayerSnapshot(1L,"transport-test", player.getX(), player.getY(), player.getPlane(), 0),
 			List.of(waydar), GenericClientAccountSnapshot.empty(), new GenericClientQuestSnapshot(true, new int[0], Map.of(123, 7),
 				List.of(), dialogue));
 	}

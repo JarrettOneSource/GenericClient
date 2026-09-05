@@ -1,6 +1,7 @@
 package com.genericclient;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -41,12 +42,13 @@ public class GenericClientQuestActionsTest
 	}
 
 	@Test
-	public void acceptsLuaEmptyTableAsAnEmptyBankLoadout()
+	public void acceptsAnEmptyLoadoutArrayAndRejectsAnObjectInItsPlace()
 	{
 		Map<String, Object> action = new LinkedHashMap<>();
-		action.put("items", new LinkedHashMap<>());
-
+		action.put("items", List.of());
 		assertEquals(0, GenericClientQuestActions.bankRequirements(action).size());
+		action.put("items", Map.of());
+		assertThrows(IllegalArgumentException.class, () -> GenericClientQuestActions.bankRequirements(action));
 	}
 
 	@Test

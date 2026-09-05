@@ -27,7 +27,7 @@ public class GenericClientWalkInputOwnershipTest
 	@Rule public TemporaryFolder temporary = new TemporaryFolder();
 
 	@Test
-	public void interruptedWalkRevokesQueuedNativeClicksBeforeLuaCanConsumeItsReceipt() throws Exception
+	public void interruptedWalkRevokesQueuedNativeClicksBeforeTheScriptCanConsumeItsReceipt() throws Exception
 	{
 		assertEquals("Only independently owned guard input may dispatch", 1, exerciseQueuedInput(false));
 	}
@@ -54,8 +54,8 @@ public class GenericClientWalkInputOwnershipTest
 			message -> { }, point -> { });
 		CountDownLatch releaseSwing = new CountDownLatch(1);
 		CountDownLatch swingBlocked = new CountDownLatch(1);
-		CountDownLatch releaseLua = new CountDownLatch(1);
-		CountDownLatch luaBlocked = new CountDownLatch(1);
+		CountDownLatch releaseReceipt = new CountDownLatch(1);
+		CountDownLatch receiptBlocked = new CountDownLatch(1);
 		AtomicReference<CompletableFuture<Map<String, Object>>> journey = new AtomicReference<>();
 		QueuedInput input = new QueuedInput(mouse);
 		try (GenericClientWalker walker = GenericClientTestSupport.walker(input, new GenericClientWalker.ObstacleInput()
@@ -65,26 +65,24 @@ public class GenericClientWalkInputOwnershipTest
 			{ throw new AssertionError("This route has no traversal objects"); }
 			@Override public void cancel(String reason, GenericClientActivityContext context) { }
 		}, GenericClientCollisionMap.loadBundled(), message -> { });
-			GenericClientLuaHost host = GenericClientTestSupport.luaHost(temporary, "queued-walk")
+			GenericClientScriptHost host = GenericClientTestSupport.scriptHost(temporary, "queued-walk")
 				.walkTo((request, clicks) -> {
 					CompletableFuture<Map<String, Object>> result = walker.walkTo(request, clicks);
 					journey.set(result);
-					return result;
+					return result.thenApplyAsync(receipt -> { awaitGate(receiptBlocked,releaseReceipt); return receipt; });
 				})
-				.report(message -> {
-					if (message.startsWith("LUA_STARTED")) awaitGate(luaBlocked, releaseLua);
-				}).build())
+				.build())
 		{
 			try
 			{
 				GenericClientSnapshot initial = snapshot(0, false);
 				walker.publishGameTick(initial);
 				host.publishGameTick(initial);
-				host.catalog.saveScript("walk", "Walk", "Exercise native input ownership", GenericClientTestSupport.script(
-					"return gc.walk.to { destination={x=3210,y=3428,plane=0}, humanize=false, interrupt_on={dialogue=true} }"))
-					.get(2, TimeUnit.SECONDS);
+				host.compile("QueuedWalk", GenericClientTestSupport.javaScript("QueuedWalk", "@ScriptSettings(id=\"walk\")",
+					"public int onLoop(){Automation.activity(\"manual\");Automation.finish(Navigation.walk(" +
+					"new Navigation.Journey(new org.dreambot.api.methods.map.Tile(3210,3428),0),Map.of(\"dialogue\",true),null));return -1;}"))
+					.get(5, TimeUnit.SECONDS);
 				CompletableFuture<String> started = host.start("walk");
-				assertTrue(luaBlocked.await(2, TimeUnit.SECONDS));
 				SwingUtilities.invokeLater(() -> awaitGate(swingBlocked, releaseSwing));
 				assertTrue(swingBlocked.await(2, TimeUnit.SECONDS));
 				awaitNativeClicks(walker, input, 1);
@@ -105,23 +103,24 @@ public class GenericClientWalkInputOwnershipTest
 				if (pauseAndResume)
 				{
 					walker.publishGameTick(new GenericClientSnapshot(5, "LOGGED_IN", 240,
-						new GenericClientWorldSnapshot.PlayerSnapshot("queued-walk", 3210, 3428, 0, -1), List.of()));
+						new GenericClientPlayerSnapshot(1L, "queued-walk", 3210, 3428, 0, -1), List.of()));
 					assertEquals("arrived", journey.get().get(2, TimeUnit.SECONDS).get("status"));
 				}
-				releaseLua.countDown();
+				assertTrue(receiptBlocked.await(2,TimeUnit.SECONDS));
+				releaseReceipt.countDown();
 				started.get(2, TimeUnit.SECONDS);
 				return presses.get();
 			}
 			finally
 			{
 				releaseSwing.countDown();
-				releaseLua.countDown();
+				releaseReceipt.countDown();
 			}
 		}
 		finally
 		{
 			releaseSwing.countDown();
-			releaseLua.countDown();
+			releaseReceipt.countDown();
 			mouse.close();
 			timer.shutdownNow();
 		}
@@ -149,7 +148,7 @@ public class GenericClientWalkInputOwnershipTest
 	private static GenericClientSnapshot snapshot(long tick, boolean dialogue)
 	{
 		return new GenericClientSnapshot(tick, "LOGGED_IN", 240,
-			new GenericClientWorldSnapshot.PlayerSnapshot("queued-walk", 3202, 3428, 0, -1), List.of(),
+			new GenericClientPlayerSnapshot(1L, "queued-walk", 3202, 3428, 0, -1), List.of(),
 			GenericClientAccountSnapshot.empty(), new GenericClientQuestSnapshot(true, new int[0], List.of(), dialogue
 				? GenericClientQuestSnapshot.DialogueSnapshot.continueDialogue("Test", "Continue")
 				: GenericClientQuestSnapshot.DialogueSnapshot.closed()));
